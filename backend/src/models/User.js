@@ -8,55 +8,76 @@ export const USER_ROLES = {
   ADMIN: 'Admin'
 };
 
+export const TOW_TRUCK_TYPES = [
+  'Flatbed',
+  'Wheel-Lift',
+  'Hook and Chain',
+  'Heavy Duty Tow Truck',
+  'Pickup with tow hitch',
+  'Tow Dolly'
+];
+
+export const VEHICLE_TYPES = [
+  'Sedan',
+  'SUV',
+  'Pickup',
+  'Van',
+  'Small Truck',
+  'Heavy Truck',
+  'Motorcycle'
+];
+
+const providerProfileSchema = new mongoose.Schema(
+  {
+    isOnline: { type: Boolean, default: false },
+    lastSeenAt: { type: Date },
+
+    location: {
+      type: { type: String, enum: ['Point'], default: 'Point' },
+      coordinates: { type: [Number], default: [0, 0] } // [lng, lat]
+    },
+
+    towTruckTypes: [{ type: String, enum: TOW_TRUCK_TYPES }],
+    carTypesSupported: [{ type: String, enum: VEHICLE_TYPES }]
+  },
+  { _id: false }
+);
+
 const userSchema = new mongoose.Schema(
   {
-    name: {
-      type: String,
-      required: true,
-      trim: true
-    },
-    email: {
-      type: String,
-      required: true,
-      unique: true,
-      lowercase: true,
-      trim: true
-    },
-    password: {
-      type: String,
-      required: true
-    },
+    name: { type: String, required: true },
+
+    email: { type: String, required: true, unique: true },
+
+    password: { type: String, required: true },
+
     role: {
       type: String,
       enum: Object.values(USER_ROLES),
       default: USER_ROLES.CUSTOMER
     },
-    otpCode: {
-      type: String
-    },
-    otpExpiresAt: {
-      type: Date
-    }
+
+    otpCode: String,
+    otpExpiresAt: Date,
+
+    // Only used for TowTruck + Mechanic users
+    providerProfile: providerProfileSchema
   },
   { timestamps: true }
 );
 
-userSchema.pre('save', async function preSave(next) {
-  if (!this.isModified('password')) return next();
+// ✅ Geo Index for fast nearest provider queries
+userSchema.index({ 'providerProfile.location': '2dsphere' });
 
-  try {
-    const salt = await bcrypt.genSalt(10);
-    this.password = await bcrypt.hash(this.password, salt);
-    return next();
-  } catch (err) {
-    return next(err);
-  }
+userSchema.pre('save', async function (next) {
+  if (!this.isModified('password')) return next();
+  const salt = await bcrypt.genSalt(10);
+  this.password = await bcrypt.hash(this.password, salt);
+  next();
 });
 
-userSchema.methods.matchPassword = async function matchPassword(enteredPassword) {
+userSchema.methods.matchPassword = async function (enteredPassword) {
   return bcrypt.compare(enteredPassword, this.password);
 };
 
-const User = mongoose.model('User', userSchema);
-
-export default User;
+export default mongoose.model('User', userSchema);

@@ -1,8 +1,8 @@
 import mongoose from 'mongoose';
-import { USER_ROLES } from './User.js';
 
 export const JOB_STATUSES = {
   CREATED: 'CREATED',
+  BROADCASTED: 'BROADCASTED',
   ASSIGNED: 'ASSIGNED',
   IN_PROGRESS: 'IN_PROGRESS',
   COMPLETED: 'COMPLETED',
@@ -11,46 +11,46 @@ export const JOB_STATUSES = {
 
 const jobSchema = new mongoose.Schema(
   {
-    title: {
-      type: String,
-      required: true,
-      trim: true
+    title: { type: String, required: true },
+    description: { type: String },
+    roleNeeded: { type: String, required: true }, // TowTruck or Mechanic
+
+    pickupLocation: {
+      type: { type: String, enum: ['Point'], default: 'Point' },
+      coordinates: { type: [Number], required: true } // [lng, lat]
     },
-    description: {
-      type: String,
-      trim: true
-    },
-    location: {
-      type: String,
-      trim: true
-    },
-    vehicle: {
-      type: String,
-      trim: true
-    },
+
+    pickupAddressText: { type: String },
+
+    towTruckTypeNeeded: { type: String }, // Flatbed etc
+    vehicleType: { type: String }, // Sedan etc
+
+    customer: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+
+    // Broadcast mode (Bolt style)
+    broadcastedTo: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+
+    assignedTo: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+
+    lockedAt: { type: Date, default: null },
+
     status: {
       type: String,
       enum: Object.values(JOB_STATUSES),
       default: JOB_STATUSES.CREATED
     },
-    customer: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'User',
-      required: true
-    },
-    assignedTo: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'User'
-    },
-    roleNeeded: {
-      type: String,
-      enum: [USER_ROLES.MECHANIC, USER_ROLES.TOW_TRUCK],
-      required: true
-    }
+
+    dispatchAttempts: [
+      {
+        providerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+        attemptedAt: { type: Date, default: Date.now }
+      }
+    ]
   },
   { timestamps: true }
 );
 
-const Job = mongoose.model('Job', jobSchema);
+// ✅ Geo index on pickup location
+jobSchema.index({ pickupLocation: '2dsphere' });
 
-export default Job;
+export default mongoose.model('Job', jobSchema);

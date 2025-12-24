@@ -1,115 +1,187 @@
 import express from 'express';
 import Job, { JOB_STATUSES } from '../models/Job.js';
-import { USER_ROLES } from '../models/User.js';
+import User, { USER_ROLES } from '../models/User.js';
 import auth from '../middleware/auth.js';
 import authorizeRoles from '../middleware/role.js';
 
 const router = express.Router();
 
-const isValidTransition = (current, next) => {
-  switch (current) {
-    case JOB_STATUSES.CREATED:
-      return [JOB_STATUSES.ASSIGNED, JOB_STATUSES.CANCELLED].includes(next);
-    case JOB_STATUSES.ASSIGNED:
-      return [JOB_STATUSES.IN_PROGRESS, JOB_STATUSES.CANCELLED].includes(next);
-    case JOB_STATUSES.IN_PROGRESS:
-      return [JOB_STATUSES.COMPLETED, JOB_STATUSES.CANCELLED].includes(next);
-    default:
-      return false;
+/**
+ * ✅ Broadcast job to nearest 10 matching providers
+ */
+const broadcastJobToProviders = async (job) => {
+  const [lng, lat] = job.pickupLocation.coordinates;
+
+  const role = job.roleNeeded;
+
+  const providerQuery = {
+    role,
+    'providerProfile.isOnline': true
+  };
+
+  // TowTruck additional filters
+  if (role === USER_ROLES.TOW_TRUCK) {
+    if (job.towTruckTypeNeeded) {
+      providerQuery['providerProfile.towTruckTypes'] = job.towTruckTypeNeeded;
+    }
+    if (job.vehicleType) {
+      providerQuery['providerProfile.carTypesSupported'] = job.vehicleType;
+    }
   }
+
+  const providers = await User.find(providerQuery)
+    .where('providerProfile.location')
+    .near({
+      center: { type: 'Point', coordinates: [lng, lat] },
+      maxDistance: 20000, // 20km radius
+      spherical: true
+    })
+    .limit(10);
+
+  job.broadcastedTo = providers.map((p) => p._id);
+  job.status = JOB_STATUSES.BROADCASTED;
+
+  job.dispatchAttempts = providers.map((p) => ({
+    providerId: p._id,
+    attemptedAt: new Date()
+  }));
+
+  await job.save();
+
+  return providers;
 };
 
+/**
+ * ✅ CUSTOMER creates job → system broadcasts to nearest 10 providers
+ * POST /api/jobs
+ */
 router.post('/', auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => {
   try {
-    const { title, description, location, vehicle, roleNeeded } = req.body;
+    const {
+      title,
+      description,
+      roleNeeded,
+      pickupLat,
+      pickupLng,
+      pickupAddressText,
+      towTruckTypeNeeded,
+      vehicleType
+    } = req.body;
 
-    if (!title || !roleNeeded) {
-      return res.status(400).json({ message: 'Title and roleNeeded are required' });
+    if (!title || !roleNeeded || pickupLat === undefined || pickupLng === undefined) {
+      return res.status(400).json({ message: 'title, roleNeeded, pickupLat, pickupLng are required' });
     }
 
     const job = await Job.create({
       title,
       description,
-      location,
-      vehicle,
       roleNeeded,
-      customer: req.user._id
+      pickupLocation: {
+        type: 'Point',
+        coordinates: [pickupLng, pickupLat]
+      },
+      pickupAddressText,
+      towTruckTypeNeeded,
+      vehicleType,
+      customer: req.user._id,
+      status: JOB_STATUSES.CREATED
     });
 
-    return res.status(201).json({ message: 'Job created', job });
+    await broadcastJobToProviders(job);
+
+    return res.status(201).json({ message: 'Job created and broadcasted', job });
   } catch (err) {
     return res.status(500).json({ message: 'Could not create job', error: err.message });
   }
 });
 
-router.get('/', auth, async (req, res) => {
+/**
+ * ✅ Provider sees jobs broadcasted to them
+ * GET /api/jobs/available
+ */
+router.get('/available', auth, async (req, res) => {
   try {
-    const filter = req.user.role === USER_ROLES.CUSTOMER ? { customer: req.user._id } : {};
-    const jobs = await Job.find(filter)
-      .populate('customer', 'name email role')
-      .populate('assignedTo', 'name email role')
-      .sort({ createdAt: -1 });
+    const providerRoles = [USER_ROLES.MECHANIC, USER_ROLES.TOW_TRUCK];
+    if (!providerRoles.includes(req.user.role)) {
+      return res.status(403).json({ message: 'Only service providers can view available jobs' });
+    }
+
+    const jobs = await Job.find({
+      status: JOB_STATUSES.BROADCASTED,
+      assignedTo: null,
+      broadcastedTo: req.user._id
+    }).sort({ createdAt: -1 });
+
     return res.status(200).json(jobs);
   } catch (err) {
-    return res.status(500).json({ message: 'Could not fetch jobs', error: err.message });
+    return res.status(500).json({ message: 'Could not fetch available jobs', error: err.message });
   }
 });
 
-router.get('/:id', auth, async (req, res) => {
+/**
+ * ✅ Provider accepts a broadcasted job (first accept wins)
+ * PATCH /api/jobs/:id/accept
+ */
+router.patch('/:id/accept', auth, async (req, res) => {
   try {
-    const job = await Job.findById(req.params.id)
-      .populate('customer', 'name email role')
-      .populate('assignedTo', 'name email role');
+    const providerRoles = [USER_ROLES.MECHANIC, USER_ROLES.TOW_TRUCK];
+    if (!providerRoles.includes(req.user.role)) {
+      return res.status(403).json({ message: 'Only service providers can accept jobs' });
+    }
+
+    const job = await Job.findOneAndUpdate(
+      {
+        _id: req.params.id,
+        status: JOB_STATUSES.BROADCASTED,
+        assignedTo: null,
+        broadcastedTo: req.user._id
+      },
+      {
+        assignedTo: req.user._id,
+        lockedAt: new Date(),
+        status: JOB_STATUSES.ASSIGNED
+      },
+      { new: true }
+    );
 
     if (!job) {
-      return res.status(404).json({ message: 'Job not found' });
+      return res.status(409).json({ message: 'Job already accepted by another provider or not available to you' });
     }
 
-    if (
-      req.user.role === USER_ROLES.CUSTOMER &&
-      job.customer.toString() !== req.user._id.toString()
-    ) {
-      return res.status(403).json({ message: 'Not authorized to view this job' });
-    }
-
-    return res.status(200).json(job);
+    return res.status(200).json({ message: 'Job accepted', job });
   } catch (err) {
-    return res.status(500).json({ message: 'Could not fetch job', error: err.message });
+    return res.status(500).json({ message: 'Could not accept job', error: err.message });
   }
 });
 
-router.patch(
-  '/:id/assign',
-  auth,
-  authorizeRoles(USER_ROLES.ADMIN),
-  async (req, res) => {
-    try {
-      const { assignedTo } = req.body;
-
-      if (!assignedTo) {
-        return res.status(400).json({ message: 'assignedTo user id is required' });
-      }
-
-      const job = await Job.findById(req.params.id);
-      if (!job) {
-        return res.status(404).json({ message: 'Job not found' });
-      }
-
-      if (job.status !== JOB_STATUSES.CREATED) {
-        return res.status(400).json({ message: 'Only newly created jobs can be assigned' });
-      }
-
-      job.assignedTo = assignedTo;
-      job.status = JOB_STATUSES.ASSIGNED;
-      await job.save();
-
-      return res.status(200).json({ message: 'Job assigned', job });
-    } catch (err) {
-      return res.status(500).json({ message: 'Could not assign job', error: err.message });
+/**
+ * ✅ Provider rejects job → removes them from broadcast list
+ * PATCH /api/jobs/:id/reject
+ */
+router.patch('/:id/reject', auth, async (req, res) => {
+  try {
+    const providerRoles = [USER_ROLES.MECHANIC, USER_ROLES.TOW_TRUCK];
+    if (!providerRoles.includes(req.user.role)) {
+      return res.status(403).json({ message: 'Only service providers can reject jobs' });
     }
-  }
-);
 
+    const job = await Job.findById(req.params.id);
+    if (!job) return res.status(404).json({ message: 'Job not found' });
+
+    // Remove provider from broadcast list
+    job.broadcastedTo = job.broadcastedTo.filter((id) => id.toString() !== req.user._id.toString());
+    await job.save();
+
+    return res.status(200).json({ message: 'Job rejected', job });
+  } catch (err) {
+    return res.status(500).json({ message: 'Could not reject job', error: err.message });
+  }
+});
+
+/**
+ * ✅ Update job status (Assigned provider only)
+ * PATCH /api/jobs/:id/status
+ */
 router.patch('/:id/status', auth, async (req, res) => {
   try {
     const { status } = req.body;
@@ -119,26 +191,15 @@ router.patch('/:id/status', auth, async (req, res) => {
     }
 
     const job = await Job.findById(req.params.id);
-    if (!job) {
-      return res.status(404).json({ message: 'Job not found' });
-    }
+    if (!job) return res.status(404).json({ message: 'Job not found' });
 
-    const isCustomerOwner =
-      req.user.role === USER_ROLES.CUSTOMER && job.customer.toString() === req.user._id.toString();
     const isAssignedProvider =
-      [USER_ROLES.MECHANIC, USER_ROLES.TOW_TRUCK].includes(req.user.role) &&
-      job.assignedTo &&
-      job.assignedTo.toString() === req.user._id.toString();
+      job.assignedTo && job.assignedTo.toString() === req.user._id.toString();
+
     const isAdmin = req.user.role === USER_ROLES.ADMIN;
 
-    if (!isCustomerOwner && !isAssignedProvider && !isAdmin) {
-      return res.status(403).json({ message: 'Not authorized to update this job' });
-    }
-
-    if (!isValidTransition(job.status, status)) {
-      return res
-        .status(400)
-        .json({ message: `Invalid status transition from ${job.status} to ${status}` });
+    if (!isAssignedProvider && !isAdmin) {
+      return res.status(403).json({ message: 'Only assigned provider or admin can update job status' });
     }
 
     job.status = status;
@@ -146,7 +207,7 @@ router.patch('/:id/status', auth, async (req, res) => {
 
     return res.status(200).json({ message: 'Job status updated', job });
   } catch (err) {
-    return res.status(500).json({ message: 'Could not update job', error: err.message });
+    return res.status(500).json({ message: 'Could not update job status', error: err.message });
   }
 });
 
