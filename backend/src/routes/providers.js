@@ -2,6 +2,7 @@ import express from 'express';
 import auth from '../middleware/auth.js';
 import User, { USER_ROLES } from '../models/User.js';
 import Job from '../models/Job.js';
+import Job, { JOB_STATUSES } from '../models/Job.js';
 
 const router = express.Router();
 
