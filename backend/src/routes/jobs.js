@@ -65,14 +65,31 @@ router.post('/', auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
       pickupLat,
       pickupLng,
       pickupAddressText,
+
+      // ✅ NEW Tow Destination Fields
+      dropoffLat,
+      dropoffLng,
+      dropoffAddressText,
+
       towTruckTypeNeeded,
       vehicleType
     } = req.body;
 
+    // ✅ Basic Required fields
     if (!title || !roleNeeded || pickupLat === undefined || pickupLng === undefined) {
-      return res
-        .status(400)
-        .json({ message: 'title, roleNeeded, pickupLat, pickupLng are required' });
+      return res.status(400).json({
+        message: 'title, roleNeeded, pickupLat, pickupLng are required'
+      });
+    }
+
+    // ✅ TowTruck jobs require dropoff location (tow destination)
+    if (
+      roleNeeded === USER_ROLES.TOW_TRUCK &&
+      (dropoffLat === undefined || dropoffLng === undefined)
+    ) {
+      return res.status(400).json({
+        message: 'TowTruck jobs require dropoffLat and dropoffLng'
+      });
     }
 
     // ✅ Load pricing config (Admin controlled)
@@ -82,8 +99,10 @@ router.post('/', auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
     const baseFee = pricingConfig.baseFee || 0;
     const perKmFee = pricingConfig.perKmFee || 0;
 
-    // ✅ Placeholder distance estimation (later plug Google Maps / Mapbox)
-    const estimatedDistanceKm = 10;
+    // ✅ Placeholder distance (later use Google Maps API)
+    // TowTruck jobs usually longer distance
+    const estimatedDistanceKm =
+      roleNeeded === USER_ROLES.TOW_TRUCK && dropoffLat !== undefined ? 25 : 10;
 
     const towMult = towTruckTypeNeeded
       ? pricingConfig.towTruckTypeMultipliers?.[towTruckTypeNeeded] || 1
@@ -106,6 +125,18 @@ router.post('/', auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
       },
 
       pickupAddressText,
+
+      // ✅ Save tow destination only when provided
+      dropoffLocation:
+        dropoffLat !== undefined && dropoffLng !== undefined
+          ? {
+              type: 'Point',
+              coordinates: [dropoffLng, dropoffLat]
+            }
+          : undefined,
+
+      dropoffAddressText,
+
       towTruckTypeNeeded,
       vehicleType,
 
@@ -231,7 +262,9 @@ router.patch('/:id/status', auth, async (req, res) => {
     const job = await Job.findById(req.params.id);
     if (!job) return res.status(404).json({ message: 'Job not found' });
 
-    const isAssignedProvider = job.assignedTo && job.assignedTo.toString() === req.user._id.toString();
+    const isAssignedProvider =
+      job.assignedTo && job.assignedTo.toString() === req.user._id.toString();
+
     const isAdmin = req.user.role === USER_ROLES.ADMIN;
 
     if (!isAssignedProvider && !isAdmin) {
@@ -264,7 +297,10 @@ router.get('/:id', auth, async (req, res) => {
       job.customer &&
       job.customer._id.toString() === req.user._id.toString();
 
-    const isAssignedProvider = job.assignedTo && job.assignedTo._id.toString() === req.user._id.toString();
+    const isAssignedProvider =
+      job.assignedTo &&
+      job.assignedTo._id.toString() === req.user._id.toString();
+
     const isAdmin = req.user.role === USER_ROLES.ADMIN;
 
     if (!isCustomerOwner && !isAssignedProvider && !isAdmin) {
@@ -316,7 +352,12 @@ router.get('/my/active', auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, 
     const jobs = await Job.find({
       customer: req.user._id,
       status: {
-        $in: [JOB_STATUSES.CREATED, JOB_STATUSES.BROADCASTED, JOB_STATUSES.ASSIGNED, JOB_STATUSES.IN_PROGRESS]
+        $in: [
+          JOB_STATUSES.CREATED,
+          JOB_STATUSES.BROADCASTED,
+          JOB_STATUSES.ASSIGNED,
+          JOB_STATUSES.IN_PROGRESS
+        ]
       }
     })
       .populate('assignedTo', 'name email role providerProfile')
