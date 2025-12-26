@@ -3,6 +3,7 @@ import cors from 'cors';
 import authRoutes from './routes/auth.js';
 import jobRoutes from './routes/jobs.js';
 import providerRoutes from './routes/providers.js';
+import adminPricingRoutes from './routes/adminPricing.js';
 
 const app = express();
 
@@ -16,6 +17,7 @@ app.get('/health', (req, res) => res.status(200).json({ status: 'ok' }));
 app.use('/api/auth', authRoutes);
 app.use('/api/jobs', jobRoutes);
 app.use('/api/providers', providerRoutes);
+app.use('/api/admin', adminPricingRoutes);
 
 // ✅ Error Handler
 app.use((err, req, res, next) => {
