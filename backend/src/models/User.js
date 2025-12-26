@@ -27,6 +27,7 @@ export const VEHICLE_TYPES = [
   'Motorcycle'
 ];
 
+// ✅ Provider profile (TowTruck & Mechanic only)
 const providerProfileSchema = new mongoose.Schema(
   {
     isOnline: { type: Boolean, default: false },
@@ -38,7 +39,24 @@ const providerProfileSchema = new mongoose.Schema(
     },
 
     towTruckTypes: [{ type: String, enum: TOW_TRUCK_TYPES }],
-    carTypesSupported: [{ type: String, enum: VEHICLE_TYPES }]
+    carTypesSupported: [{ type: String, enum: VEHICLE_TYPES }],
+
+    // ✅ Verification (admin approval)
+    verificationStatus: {
+      type: String,
+      enum: ['PENDING', 'APPROVED', 'REJECTED'],
+      default: 'PENDING'
+    },
+
+    verificationDocs: {
+      idDocumentUrl: { type: String, default: null },
+      licenseUrl: { type: String, default: null },
+      vehicleProofUrl: { type: String, default: null },
+      workshopProofUrl: { type: String, default: null }
+    },
+
+    verifiedAt: { type: Date, default: null },
+    verifiedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null }
   },
   { _id: false }
 );
