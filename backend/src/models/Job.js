@@ -27,8 +27,11 @@ const jobSchema = new mongoose.Schema(
 
     customer: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
 
-    // Broadcast mode (Bolt style)
+    // ✅ Broadcast mode (Bolt style)
     broadcastedTo: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+
+    // ✅ Providers excluded from rebroadcast (rejected/cancelled)
+    excludedProviders: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User', default: [] }],
 
     assignedTo: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
 
@@ -39,6 +42,11 @@ const jobSchema = new mongoose.Schema(
       enum: Object.values(JOB_STATUSES),
       default: JOB_STATUSES.CREATED
     },
+
+    // ✅ Cancellation tracking
+    cancelledBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+    cancelReason: { type: String, default: null },
+    cancelledAt: { type: Date, default: null },
 
     dispatchAttempts: [
       {
