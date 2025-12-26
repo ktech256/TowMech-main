@@ -1,7 +1,6 @@
 import express from 'express';
 import auth from '../middleware/auth.js';
 import User, { USER_ROLES } from '../models/User.js';
-import Job from '../models/Job.js';
 import Job, { JOB_STATUSES } from '../models/Job.js';
 
 const router = express.Router();
@@ -61,7 +60,7 @@ router.get('/jobs/broadcasted', auth, async (req, res) => {
     }
 
     const jobs = await Job.find({
-      status: 'BROADCASTED',
+      status: JOB_STATUSES.BROADCASTED,
       assignedTo: null,
       broadcastedTo: req.user._id
     })
@@ -88,13 +87,13 @@ router.patch('/jobs/:jobId/accept', auth, async (req, res) => {
     const job = await Job.findOneAndUpdate(
       {
         _id: req.params.jobId,
-        status: 'BROADCASTED',
+        status: JOB_STATUSES.BROADCASTED,
         assignedTo: null,
         broadcastedTo: req.user._id
       },
       {
         assignedTo: req.user._id,
-        status: 'ASSIGNED',
+        status: JOB_STATUSES.ASSIGNED,
         lockedAt: new Date()
       },
       { new: true }
@@ -123,7 +122,7 @@ router.patch('/jobs/:jobId/reject', auth, async (req, res) => {
 
     const job = await Job.findOne({
       _id: req.params.jobId,
-      status: 'BROADCASTED',
+      status: JOB_STATUSES.BROADCASTED,
       assignedTo: null,
       broadcastedTo: req.user._id
     });
@@ -136,6 +135,12 @@ router.patch('/jobs/:jobId/reject', auth, async (req, res) => {
     job.broadcastedTo = job.broadcastedTo.filter(
       (id) => id.toString() !== req.user._id.toString()
     );
+
+    // add provider to excluded list (so it doesn't rebroadcast to same provider)
+    if (!job.excludedProviders) job.excludedProviders = [];
+    if (!job.excludedProviders.map(String).includes(req.user._id.toString())) {
+      job.excludedProviders.push(req.user._id);
+    }
 
     await job.save();
 
@@ -175,7 +180,7 @@ router.patch('/jobs/:jobId/cancel', auth, async (req, res) => {
 
     // ✅ Add provider to excluded list so they won't receive this job again
     if (!job.excludedProviders) job.excludedProviders = [];
-    if (!job.excludedProviders.includes(req.user._id)) {
+    if (!job.excludedProviders.map(String).includes(req.user._id.toString())) {
       job.excludedProviders.push(req.user._id);
     }
 
@@ -224,6 +229,5 @@ router.patch('/jobs/:jobId/cancel', auth, async (req, res) => {
     });
   }
 });
-
 
 export default router;
