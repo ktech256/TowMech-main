@@ -13,6 +13,7 @@ const jobSchema = new mongoose.Schema(
   {
     title: { type: String, required: true },
     description: { type: String },
+
     roleNeeded: { type: String, required: true }, // TowTruck or Mechanic
 
     pickupLocation: {
@@ -24,6 +25,24 @@ const jobSchema = new mongoose.Schema(
 
     towTruckTypeNeeded: { type: String }, // Flatbed etc
     vehicleType: { type: String }, // Sedan etc
+
+    /**
+     * ✅ Pricing (Auto-calculated when job created)
+     * Admin controls baseFee and perKmFee via PricingConfig
+     */
+    pricing: {
+      currency: { type: String, default: 'ZAR' },
+
+      baseFee: { type: Number, default: 0 },
+      perKmFee: { type: Number, default: 0 },
+
+      estimatedDistanceKm: { type: Number, default: 0 },
+
+      towTruckTypeMultiplier: { type: Number, default: 1 },
+      vehicleTypeMultiplier: { type: Number, default: 1 },
+
+      estimatedTotal: { type: Number, default: 0 }
+    },
 
     customer: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
 
@@ -48,6 +67,7 @@ const jobSchema = new mongoose.Schema(
     cancelReason: { type: String, default: null },
     cancelledAt: { type: Date, default: null },
 
+    // ✅ Dispatch tracking (who was attempted)
     dispatchAttempts: [
       {
         providerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
