@@ -23,6 +23,18 @@ router.patch('/me/status', auth, async (req, res) => {
 
     if (!user.providerProfile) user.providerProfile = {};
 
+/**
+ * ✅ ENFORCEMENT: Providers cannot go online unless APPROVED
+ */
+if (isOnline === true) {
+  if (user.providerProfile.verificationStatus !== 'APPROVED') {
+    return res.status(403).json({
+      message: 'Provider must be verified by admin before going online',
+      verificationStatus: user.providerProfile.verificationStatus || 'PENDING'
+    });
+  }
+}
+
     if (typeof isOnline === 'boolean') user.providerProfile.isOnline = isOnline;
 
     if (lat !== undefined && lng !== undefined) {
