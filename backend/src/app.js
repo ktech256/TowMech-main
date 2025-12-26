@@ -4,6 +4,7 @@ import authRoutes from './routes/auth.js';
 import jobRoutes from './routes/jobs.js';
 import providerRoutes from './routes/providers.js';
 import adminPricingRoutes from './routes/adminPricing.js';
+import paymentRoutes from './routes/payments.js';
 
 const app = express();
 
@@ -18,6 +19,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/jobs', jobRoutes);
 app.use('/api/providers', providerRoutes);
 app.use('/api/admin', adminPricingRoutes);
+app.use('/api/payments', paymentRoutes);
 
 // ✅ Error Handler
 app.use((err, req, res, next) => {
