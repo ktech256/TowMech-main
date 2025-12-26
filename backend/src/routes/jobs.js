@@ -1,3 +1,4 @@
+import Payment from '../models/Payment.js';
 import express from 'express';
 import Job, { JOB_STATUSES } from '../models/Job.js';
 import User, { USER_ROLES } from '../models/User.js';
@@ -269,6 +270,22 @@ router.patch('/:id/status', auth, async (req, res) => {
 
     if (!isAssignedProvider && !isAdmin) {
       return res.status(403).json({ message: 'Only assigned provider or admin can update job status' });
+    }
+
+    // ✅ PAYMENT RULE: Providers cannot start/complete unless job is PAID
+    if (
+      [JOB_STATUSES.IN_PROGRESS, JOB_STATUSES.COMPLETED].includes(status) &&
+      req.user.role !== USER_ROLES.ADMIN
+    ) {
+      const payment = await Payment.findOne({ job: job._id });
+
+      if (!payment) {
+        return res.status(400).json({ message: 'Payment required before starting job' });
+      }
+
+      if (payment.status !== 'PAID') {
+        return res.status(400).json({ message: 'Payment must be PAID before starting job' });
+      }
     }
 
     job.status = status;
