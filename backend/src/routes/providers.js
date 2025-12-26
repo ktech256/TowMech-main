@@ -229,5 +229,53 @@ router.patch('/jobs/:jobId/cancel', auth, async (req, res) => {
     });
   }
 });
+/**
+ * ✅ Provider fetches assigned (active) jobs
+ * GET /api/providers/jobs/assigned
+ */
+router.get('/jobs/assigned', auth, async (req, res) => {
+  try {
+    const providerRoles = [USER_ROLES.MECHANIC, USER_ROLES.TOW_TRUCK];
+    if (!providerRoles.includes(req.user.role)) {
+      return res.status(403).json({ message: 'Only providers can view assigned jobs' });
+    }
+
+    const jobs = await Job.find({
+      assignedTo: req.user._id,
+      status: { $in: [JOB_STATUSES.ASSIGNED, JOB_STATUSES.IN_PROGRESS] }
+    })
+      .populate('customer', 'name email role')
+      .sort({ updatedAt: -1 });
+
+    return res.status(200).json({ jobs });
+  } catch (err) {
+    return res.status(500).json({ message: 'Could not fetch assigned jobs', error: err.message });
+  }
+});
+/**
+ * ✅ Provider job history
+ * GET /api/providers/jobs/history
+ */
+router.get('/jobs/history', auth, async (req, res) => {
+  try {
+    const providerRoles = [USER_ROLES.MECHANIC, USER_ROLES.TOW_TRUCK];
+    if (!providerRoles.includes(req.user.role)) {
+      return res.status(403).json({ message: 'Only providers can view job history' });
+    }
+
+    const jobs = await Job.find({
+      assignedTo: req.user._id,
+      status: { $in: [JOB_STATUSES.COMPLETED, JOB_STATUSES.CANCELLED] }
+    })
+      .populate('customer', 'name email role')
+      .sort({ updatedAt: -1 })
+      .limit(50);
+
+    return res.status(200).json({ jobs });
+  } catch (err) {
+    return res.status(500).json({ message: 'Could not fetch job history', error: err.message });
+  }
+});
+
 
 export default router;
