@@ -283,6 +283,52 @@ router.patch('/:id/cancel', auth, authorizeRoles(USER_ROLES.CUSTOMER, USER_ROLES
     return res.status(500).json({ message: 'Could not cancel job', error: err.message });
   }
 });
+/**
+ * ✅ Customer gets active jobs
+ * GET /api/jobs/my/active
+ */
+router.get('/my/active', auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => {
+  try {
+    const jobs = await Job.find({
+      customer: req.user._id,
+      status: {
+        $in: [
+          JOB_STATUSES.CREATED,
+          JOB_STATUSES.BROADCASTED,
+          JOB_STATUSES.ASSIGNED,
+          JOB_STATUSES.IN_PROGRESS
+        ]
+      }
+    })
+      .populate('assignedTo', 'name email role providerProfile')
+      .sort({ updatedAt: -1 });
+
+    return res.status(200).json({ jobs });
+  } catch (err) {
+    return res.status(500).json({ message: 'Could not fetch active jobs', error: err.message });
+  }
+});
+/**
+ * ✅ Customer gets job history
+ * GET /api/jobs/my/history
+ */
+router.get('/my/history', auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => {
+  try {
+    const jobs = await Job.find({
+      customer: req.user._id,
+      status: {
+        $in: [JOB_STATUSES.COMPLETED, JOB_STATUSES.CANCELLED]
+      }
+    })
+      .populate('assignedTo', 'name email role providerProfile')
+      .sort({ updatedAt: -1 })
+      .limit(50);
+
+    return res.status(200).json({ jobs });
+  } catch (err) {
+    return res.status(500).json({ message: 'Could not fetch job history', error: err.message });
+  }
+});
 
 
 
