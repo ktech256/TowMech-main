@@ -211,4 +211,40 @@ router.patch('/:id/status', auth, async (req, res) => {
   }
 });
 
+/**
+ * ✅ Get job by ID (Customer can view their job, Provider can view assigned job, Admin can view all)
+ * GET /api/jobs/:id
+ */
+router.get('/:id', auth, async (req, res) => {
+  try {
+    const job = await Job.findById(req.params.id)
+      .populate('customer', 'name email role')
+      .populate('assignedTo', 'name email role');
+
+    if (!job) {
+      return res.status(404).json({ message: 'Job not found' });
+    }
+
+    const isCustomerOwner =
+      req.user.role === USER_ROLES.CUSTOMER &&
+      job.customer &&
+      job.customer._id.toString() === req.user._id.toString();
+
+    const isAssignedProvider =
+      job.assignedTo &&
+      job.assignedTo._id.toString() === req.user._id.toString();
+
+    const isAdmin = req.user.role === USER_ROLES.ADMIN;
+
+    if (!isCustomerOwner && !isAssignedProvider && !isAdmin) {
+      return res.status(403).json({ message: 'Not authorized to view this job' });
+    }
+
+    return res.status(200).json(job);
+  } catch (err) {
+    return res.status(500).json({ message: 'Could not fetch job', error: err.message });
+  }
+});
+
+
 export default router;
