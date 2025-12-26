@@ -246,5 +246,44 @@ router.get('/:id', auth, async (req, res) => {
   }
 });
 
+/**
+ * ✅ Customer cancels a job
+ * PATCH /api/jobs/:id/cancel
+ */
+router.patch('/:id/cancel', auth, authorizeRoles(USER_ROLES.CUSTOMER, USER_ROLES.ADMIN), async (req, res) => {
+  try {
+    const job = await Job.findById(req.params.id);
+
+    if (!job) {
+      return res.status(404).json({ message: 'Job not found' });
+    }
+
+    // ✅ Customers can cancel only their own jobs
+    if (
+      req.user.role === USER_ROLES.CUSTOMER &&
+      job.customer.toString() !== req.user._id.toString()
+    ) {
+      return res.status(403).json({ message: 'Not authorized to cancel this job' });
+    }
+
+    // ✅ Cannot cancel if already completed
+    if (job.status === JOB_STATUSES.COMPLETED) {
+      return res.status(400).json({ message: 'Cannot cancel a completed job' });
+    }
+
+    job.status = JOB_STATUSES.CANCELLED;
+    job.cancelledBy = req.user._id;
+    job.cancelReason = req.body.reason || 'Cancelled by customer';
+    job.cancelledAt = new Date();
+
+    await job.save();
+
+    return res.status(200).json({ message: 'Job cancelled successfully', job });
+  } catch (err) {
+    return res.status(500).json({ message: 'Could not cancel job', error: err.message });
+  }
+});
+
+
 
 export default router;
