@@ -1,24 +1,29 @@
-import Payment from '../models/Payment.js';
 import express from 'express';
 import Job, { JOB_STATUSES } from '../models/Job.js';
 import User, { USER_ROLES } from '../models/User.js';
 import PricingConfig from '../models/PricingConfig.js';
+import Payment from '../models/Payment.js';
 import auth from '../middleware/auth.js';
 import authorizeRoles from '../middleware/role.js';
+
+// ✅ Push helper
+import { sendPushToManyUsers } from '../utils/sendPush.js';
 
 const router = express.Router();
 
 /**
  * ✅ Broadcast job to nearest 10 matching providers
+ * ✅ ALSO sends push notifications (Bolt style)
  */
 const broadcastJobToProviders = async (job) => {
   const [lng, lat] = job.pickupLocation.coordinates;
-
   const role = job.roleNeeded;
 
   const providerQuery = {
     role,
-    'providerProfile.isOnline': true
+    'providerProfile.isOnline': true,
+    'providerProfile.verificationStatus': 'APPROVED',
+    _id: { $nin: job.excludedProviders || [] }
   };
 
   // TowTruck additional filters
@@ -35,14 +40,16 @@ const broadcastJobToProviders = async (job) => {
     .where('providerProfile.location')
     .near({
       center: { type: 'Point', coordinates: [lng, lat] },
-      maxDistance: 20000, // 20km radius
+      maxDistance: 20000,
       spherical: true
     })
     .limit(10);
 
+  // ✅ Save broadcast list
   job.broadcastedTo = providers.map((p) => p._id);
   job.status = JOB_STATUSES.BROADCASTED;
 
+  // ✅ Track dispatch attempts
   job.dispatchAttempts = providers.map((p) => ({
     providerId: p._id,
     attemptedAt: new Date()
@@ -50,11 +57,42 @@ const broadcastJobToProviders = async (job) => {
 
   await job.save();
 
+  /**
+   * ✅ SEND PUSH NOTIFICATIONS (Bolt style)
+   */
+  try {
+    const providersWithTokens = providers.filter((p) => p.providerProfile?.fcmToken);
+
+    if (providersWithTokens.length > 0) {
+      const pushTitle = '🚨 New Job Request Near You';
+
+      const towType = job.towTruckTypeNeeded ? `Tow Type: ${job.towTruckTypeNeeded}` : '';
+      const vehicle = job.vehicleType ? `Vehicle: ${job.vehicleType}` : '';
+      const pickup = job.pickupAddressText ? `Pickup: ${job.pickupAddressText}` : '';
+
+      const pushBody =
+        `${job.title}\n` +
+        [towType, vehicle, pickup].filter(Boolean).join(' | ');
+
+      await sendPushToManyUsers({
+        userIds: providersWithTokens.map((p) => p._id),
+        title: pushTitle,
+        body: pushBody,
+        data: {
+          jobId: job._id.toString(),
+          roleNeeded: job.roleNeeded
+        }
+      });
+    }
+  } catch (err) {
+    console.error('⚠️ Push notification failed:', err.message);
+  }
+
   return providers;
 };
 
 /**
- * ✅ CUSTOMER creates job → system broadcasts to nearest 10 providers
+ * ✅ CUSTOMER creates job → system broadcasts to providers
  * POST /api/jobs
  */
 router.post('/', auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => {
@@ -67,7 +105,6 @@ router.post('/', auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
       pickupLng,
       pickupAddressText,
 
-      // ✅ NEW Tow Destination Fields
       dropoffLat,
       dropoffLng,
       dropoffAddressText,
@@ -76,14 +113,13 @@ router.post('/', auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
       vehicleType
     } = req.body;
 
-    // ✅ Basic Required fields
     if (!title || !roleNeeded || pickupLat === undefined || pickupLng === undefined) {
       return res.status(400).json({
         message: 'title, roleNeeded, pickupLat, pickupLng are required'
       });
     }
 
-    // ✅ TowTruck jobs require dropoff location (tow destination)
+    // ✅ TowTruck jobs require dropoff location
     if (
       roleNeeded === USER_ROLES.TOW_TRUCK &&
       (dropoffLat === undefined || dropoffLng === undefined)
@@ -93,15 +129,13 @@ router.post('/', auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
       });
     }
 
-    // ✅ Load pricing config (Admin controlled)
+    // ✅ Load pricing config
     let pricingConfig = await PricingConfig.findOne();
     if (!pricingConfig) pricingConfig = await PricingConfig.create({});
 
     const baseFee = pricingConfig.baseFee || 0;
     const perKmFee = pricingConfig.perKmFee || 0;
 
-    // ✅ Placeholder distance (later use Google Maps API)
-    // TowTruck jobs usually longer distance
     const estimatedDistanceKm =
       roleNeeded === USER_ROLES.TOW_TRUCK && dropoffLat !== undefined ? 25 : 10;
 
@@ -115,6 +149,10 @@ router.post('/', auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
 
     const estimatedTotal = (baseFee + perKmFee * estimatedDistanceKm) * towMult * vehicleMult;
 
+    const hasDropoff =
+      dropoffLat !== undefined &&
+      dropoffLng !== undefined;
+
     const job = await Job.create({
       title,
       description,
@@ -127,16 +165,12 @@ router.post('/', auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
 
       pickupAddressText,
 
-      // ✅ Save tow destination only when provided
-      dropoffLocation:
-        dropoffLat !== undefined && dropoffLng !== undefined
-          ? {
-              type: 'Point',
-              coordinates: [dropoffLng, dropoffLat]
-            }
-          : undefined,
+      // ✅ Only store dropoff if provided
+      dropoffLocation: hasDropoff
+        ? { type: 'Point', coordinates: [dropoffLng, dropoffLat] }
+        : undefined,
 
-      dropoffAddressText,
+      dropoffAddressText: hasDropoff ? dropoffAddressText : undefined,
 
       towTruckTypeNeeded,
       vehicleType,
@@ -188,7 +222,7 @@ router.get('/available', auth, async (req, res) => {
 });
 
 /**
- * ✅ Provider accepts a broadcasted job (first accept wins)
+ * ✅ Provider accepts broadcasted job
  * PATCH /api/jobs/:id/accept
  */
 router.patch('/:id/accept', auth, async (req, res) => {
@@ -214,9 +248,9 @@ router.patch('/:id/accept', auth, async (req, res) => {
     );
 
     if (!job) {
-      return res
-        .status(409)
-        .json({ message: 'Job already accepted by another provider or not available to you' });
+      return res.status(409).json({
+        message: 'Job already accepted by another provider or not available to you'
+      });
     }
 
     return res.status(200).json({ message: 'Job accepted', job });
@@ -226,7 +260,7 @@ router.patch('/:id/accept', auth, async (req, res) => {
 });
 
 /**
- * ✅ Provider rejects job → removes them from broadcast list
+ * ✅ Provider rejects job
  * PATCH /api/jobs/:id/reject
  */
 router.patch('/:id/reject', auth, async (req, res) => {
@@ -239,7 +273,17 @@ router.patch('/:id/reject', auth, async (req, res) => {
     const job = await Job.findById(req.params.id);
     if (!job) return res.status(404).json({ message: 'Job not found' });
 
-    job.broadcastedTo = job.broadcastedTo.filter((id) => id.toString() !== req.user._id.toString());
+    // ✅ Remove provider from broadcast list
+    job.broadcastedTo = job.broadcastedTo.filter(
+      (id) => id.toString() !== req.user._id.toString()
+    );
+
+    // ✅ Add provider to excludedProviders
+    job.excludedProviders = job.excludedProviders || [];
+    if (!job.excludedProviders.map(String).includes(req.user._id.toString())) {
+      job.excludedProviders.push(req.user._id);
+    }
+
     await job.save();
 
     return res.status(200).json({ message: 'Job rejected', job });
@@ -249,7 +293,7 @@ router.patch('/:id/reject', auth, async (req, res) => {
 });
 
 /**
- * ✅ Update job status (Assigned provider only)
+ * ✅ Update job status
  * PATCH /api/jobs/:id/status
  */
 router.patch('/:id/status', auth, async (req, res) => {
@@ -269,10 +313,12 @@ router.patch('/:id/status', auth, async (req, res) => {
     const isAdmin = req.user.role === USER_ROLES.ADMIN;
 
     if (!isAssignedProvider && !isAdmin) {
-      return res.status(403).json({ message: 'Only assigned provider or admin can update job status' });
+      return res.status(403).json({
+        message: 'Only assigned provider or admin can update job status'
+      });
     }
 
-    // ✅ PAYMENT RULE: Providers cannot start/complete unless job is PAID
+    // ✅ Payment enforcement
     if (
       [JOB_STATUSES.IN_PROGRESS, JOB_STATUSES.COMPLETED].includes(status) &&
       req.user.role !== USER_ROLES.ADMIN
@@ -331,7 +377,7 @@ router.get('/:id', auth, async (req, res) => {
 });
 
 /**
- * ✅ Customer cancels a job
+ * ✅ Customer cancels job
  * PATCH /api/jobs/:id/cancel
  */
 router.patch('/:id/cancel', auth, authorizeRoles(USER_ROLES.CUSTOMER, USER_ROLES.ADMIN), async (req, res) => {
@@ -339,7 +385,10 @@ router.patch('/:id/cancel', auth, authorizeRoles(USER_ROLES.CUSTOMER, USER_ROLES
     const job = await Job.findById(req.params.id);
     if (!job) return res.status(404).json({ message: 'Job not found' });
 
-    if (req.user.role === USER_ROLES.CUSTOMER && job.customer.toString() !== req.user._id.toString()) {
+    if (
+      req.user.role === USER_ROLES.CUSTOMER &&
+      job.customer.toString() !== req.user._id.toString()
+    ) {
       return res.status(403).json({ message: 'Not authorized to cancel this job' });
     }
 
@@ -361,7 +410,7 @@ router.patch('/:id/cancel', auth, authorizeRoles(USER_ROLES.CUSTOMER, USER_ROLES
 });
 
 /**
- * ✅ Customer gets active jobs
+ * ✅ Customer active jobs
  * GET /api/jobs/my/active
  */
 router.get('/my/active', auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => {
@@ -387,7 +436,7 @@ router.get('/my/active', auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, 
 });
 
 /**
- * ✅ Customer gets job history
+ * ✅ Customer job history
  * GET /api/jobs/my/history
  */
 router.get('/my/history', auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => {
