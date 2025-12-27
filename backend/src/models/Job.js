@@ -21,17 +21,25 @@ const jobSchema = new mongoose.Schema(
       coordinates: { type: [Number], required: true } // [lng, lat]
     },
 
+    // ✅ OPTIONAL (Only TowTruck jobs should have this)
     dropoffLocation: {
-      type: { type: String, enum: ['Point'], default: 'Point' },
-      coordinates: { type: [Number], required: false } // [lng, lat]
+      type: {
+        type: String,
+        enum: ['Point'],
+        default: undefined // ✅ prevents {type:"Point"} from being saved alone
+      },
+      coordinates: {
+        type: [Number],
+        default: undefined // ✅ NOT required
+      }
     },
 
-    dropoffAddressText: { type: String },
+    dropoffAddressText: { type: String, default: null },
 
-    pickupAddressText: { type: String },
+    pickupAddressText: { type: String, default: null },
 
-    towTruckTypeNeeded: { type: String }, // Flatbed etc
-    vehicleType: { type: String }, // Sedan etc
+    towTruckTypeNeeded: { type: String, default: null }, // Flatbed etc
+    vehicleType: { type: String, default: null }, // Sedan etc
 
     /**
      * ✅ Pricing (Auto-calculated when job created)
@@ -87,6 +95,8 @@ const jobSchema = new mongoose.Schema(
 
 // ✅ Geo index on pickup location
 jobSchema.index({ pickupLocation: '2dsphere' });
+
+// ✅ Geo index on dropoff location (safe even when missing)
 jobSchema.index({ dropoffLocation: '2dsphere' });
 
 export default mongoose.model('Job', jobSchema);
