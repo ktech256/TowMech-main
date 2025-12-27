@@ -292,5 +292,54 @@ router.get('/jobs/history', auth, async (req, res) => {
   }
 });
 
+/**
+ * ✅ Provider submits verification documents (placeholder)
+ * POST /api/providers/me/verification
+ */
+router.post('/me/verification', auth, async (req, res) => {
+  try {
+    const providerRoles = [USER_ROLES.MECHANIC, USER_ROLES.TOW_TRUCK];
+    if (!providerRoles.includes(req.user.role)) {
+      return res.status(403).json({ message: 'Only providers can submit verification docs' });
+    }
+
+    const {
+      idNumber,
+      licenseNumber,
+      vehicleRegistration,
+      idDocumentUrl,
+      licenseDocumentUrl,
+      vehicleRegistrationUrl
+    } = req.body;
+
+    const user = await User.findById(req.user._id);
+    if (!user) return res.status(404).json({ message: 'Provider not found' });
+
+    if (!user.providerProfile) user.providerProfile = {};
+    if (!user.providerProfile.verificationDocs) user.providerProfile.verificationDocs = {};
+
+    // ✅ Save docs
+    user.providerProfile.verificationDocs.idNumber = idNumber || user.providerProfile.verificationDocs.idNumber;
+    user.providerProfile.verificationDocs.licenseNumber = licenseNumber || user.providerProfile.verificationDocs.licenseNumber;
+    user.providerProfile.verificationDocs.vehicleRegistration = vehicleRegistration || user.providerProfile.verificationDocs.vehicleRegistration;
+
+    user.providerProfile.verificationDocs.idDocumentUrl = idDocumentUrl || user.providerProfile.verificationDocs.idDocumentUrl;
+    user.providerProfile.verificationDocs.licenseDocumentUrl = licenseDocumentUrl || user.providerProfile.verificationDocs.licenseDocumentUrl;
+    user.providerProfile.verificationDocs.vehicleRegistrationUrl = vehicleRegistrationUrl || user.providerProfile.verificationDocs.vehicleRegistrationUrl;
+
+    // ✅ After submission mark status PENDING again
+    user.providerProfile.verificationStatus = 'PENDING';
+
+    await user.save();
+
+    return res.status(200).json({
+      message: 'Verification docs submitted (placeholder)',
+      verificationDocs: user.providerProfile.verificationDocs,
+      verificationStatus: user.providerProfile.verificationStatus
+    });
+  } catch (err) {
+    return res.status(500).json({ message: 'Could not submit verification docs', error: err.message });
+  }
+});
 
 export default router;

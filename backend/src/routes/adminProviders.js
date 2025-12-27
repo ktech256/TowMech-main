@@ -30,6 +30,38 @@ router.get(
 );
 
 /**
+ * ✅ Admin views a provider's verification documents
+ * GET /api/admin/providers/:id/verification
+ */
+router.get(
+  '/providers/:id/verification',
+  auth,
+  authorizeRoles(USER_ROLES.ADMIN),
+  async (req, res) => {
+    try {
+      const provider = await User.findById(req.params.id).select(
+        'name email role providerProfile.verificationDocs providerProfile.verificationStatus'
+      );
+
+      if (!provider) return res.status(404).json({ message: 'Provider not found' });
+
+      return res.status(200).json({
+        provider: {
+          id: provider._id,
+          name: provider.name,
+          email: provider.email,
+          role: provider.role
+        },
+        verificationStatus: provider.providerProfile?.verificationStatus,
+        verificationDocs: provider.providerProfile?.verificationDocs || {}
+      });
+    } catch (err) {
+      return res.status(500).json({ message: 'Could not fetch verification docs', error: err.message });
+    }
+  }
+);
+
+/**
  * ✅ Admin approves provider
  * PATCH /api/admin/providers/:id/approve
  */

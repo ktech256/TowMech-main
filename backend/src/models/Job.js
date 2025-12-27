@@ -21,6 +21,13 @@ const jobSchema = new mongoose.Schema(
       coordinates: { type: [Number], required: true } // [lng, lat]
     },
 
+    dropoffLocation: {
+      type: { type: String, enum: ['Point'], default: 'Point' },
+      coordinates: { type: [Number], required: false } // [lng, lat]
+    },
+
+    dropoffAddressText: { type: String },
+
     pickupAddressText: { type: String },
 
     towTruckTypeNeeded: { type: String }, // Flatbed etc
@@ -80,5 +87,6 @@ const jobSchema = new mongoose.Schema(
 
 // ✅ Geo index on pickup location
 jobSchema.index({ pickupLocation: '2dsphere' });
+jobSchema.index({ dropoffLocation: '2dsphere' });
 
 export default mongoose.model('Job', jobSchema);
