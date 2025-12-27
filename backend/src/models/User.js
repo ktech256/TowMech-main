@@ -65,7 +65,7 @@ const userSchema = new mongoose.Schema(
   {
     name: { type: String, required: true },
 
-    email: { type: String, required: true, unique: true },
+    email: { type: String, required: true, unique: true, lowercase: true },
 
     password: { type: String, required: true },
 
@@ -75,11 +75,11 @@ const userSchema = new mongoose.Schema(
       default: USER_ROLES.CUSTOMER
     },
 
-    otpCode: String,
-    otpExpiresAt: Date,
+    otpCode: { type: String, default: null },
+    otpExpiresAt: { type: Date, default: null },
 
-    // Only used for TowTruck + Mechanic users
-    providerProfile: providerProfileSchema
+    // ✅ Only for TowTruck + Mechanic users
+    providerProfile: { type: providerProfileSchema, default: null }
   },
   { timestamps: true }
 );
@@ -87,6 +87,7 @@ const userSchema = new mongoose.Schema(
 // ✅ Geo Index for fast nearest provider queries
 userSchema.index({ 'providerProfile.location': '2dsphere' });
 
+// ✅ Hash password before saving
 userSchema.pre('save', async function (next) {
   if (!this.isModified('password')) return next();
   const salt = await bcrypt.genSalt(10);
@@ -94,6 +95,7 @@ userSchema.pre('save', async function (next) {
   next();
 });
 
+// ✅ Compare password
 userSchema.methods.matchPassword = async function (enteredPassword) {
   return bcrypt.compare(enteredPassword, this.password);
 };
