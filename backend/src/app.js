@@ -1,3 +1,4 @@
+import notificationRoutes from './routes/notifications.js';
 import express from 'express';
 import cors from 'cors';
 import authRoutes from './routes/auth.js';
@@ -22,6 +23,7 @@ app.use('/api/providers', providerRoutes);
 app.use('/api/admin', adminPricingRoutes);
 app.use('/api/payments', paymentRoutes);
 app.use('/api/admin', adminProviderRoutes);
+app.use('/api/notifications', notificationRoutes);
 
 // ✅ Error Handler
 app.use((err, req, res, next) => {
