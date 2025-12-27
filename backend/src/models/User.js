@@ -31,7 +31,7 @@ export const VEHICLE_TYPES = [
 const providerProfileSchema = new mongoose.Schema(
   {
     isOnline: { type: Boolean, default: false },
-    lastSeenAt: { type: Date },
+    lastSeenAt: { type: Date, default: null },
 
     location: {
       type: { type: String, enum: ['Point'], default: 'Point' },
@@ -40,6 +40,9 @@ const providerProfileSchema = new mongoose.Schema(
 
     towTruckTypes: [{ type: String, enum: TOW_TRUCK_TYPES }],
     carTypesSupported: [{ type: String, enum: VEHICLE_TYPES }],
+
+    // ✅ Firebase Cloud Messaging token
+    fcmToken: { type: String, default: null },
 
     // ✅ Verification (admin approval)
     verificationStatus: {
