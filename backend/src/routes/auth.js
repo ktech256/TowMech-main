@@ -1,6 +1,7 @@
 import express from 'express';
 import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
+import auth from '../middleware/auth.js';
 import User, { USER_ROLES } from '../models/User.js';
 
 const router = express.Router();
@@ -97,6 +98,24 @@ router.post('/verify-otp', async (req, res) => {
     });
   } catch (err) {
     return res.status(500).json({ message: 'OTP verification failed', error: err.message });
+  }
+});
+
+/**
+ * ✅ Get logged-in user profile
+ * GET /api/auth/me
+ */
+router.get('/me', auth, async (req, res) => {
+  try {
+    const user = await User.findById(req.user._id).select('-password -otpCode -otpExpiresAt');
+
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    return res.status(200).json({ user });
+  } catch (err) {
+    return res.status(500).json({ message: 'Could not fetch profile', error: err.message });
   }
 });
 
