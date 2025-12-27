@@ -6,9 +6,14 @@ import User, { USER_ROLES } from '../models/User.js';
 
 const router = express.Router();
 
+// ✅ Helper: Generate JWT token
 const generateToken = (userId, role) =>
   jwt.sign({ id: userId, role }, process.env.JWT_SECRET, { expiresIn: '7d' });
 
+/**
+ * ✅ Register user
+ * POST /api/auth/register
+ */
 router.post('/register', async (req, res) => {
   try {
     const { name, email, password, role = USER_ROLES.CUSTOMER } = req.body;
@@ -27,15 +32,25 @@ router.post('/register', async (req, res) => {
     }
 
     const user = await User.create({ name, email, password, role });
+
     return res.status(201).json({
-      message: 'User registered successfully',
-      user: { id: user._id, name: user.name, email: user.email, role: user.role }
+      message: 'User registered successfully ✅',
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role
+      }
     });
   } catch (err) {
     return res.status(500).json({ message: 'Registration failed', error: err.message });
   }
 });
 
+/**
+ * ✅ Login user → generates OTP
+ * POST /api/auth/login
+ */
 router.post('/login', async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -60,7 +75,7 @@ router.post('/login', async (req, res) => {
     await user.save();
 
     return res.status(200).json({
-      message: 'OTP generated (placeholder - no SMS integration)',
+      message: 'OTP generated ✅ (placeholder - no SMS integration)',
       otp: process.env.ENABLE_OTP_DEBUG === 'true' ? otpCode : undefined
     });
   } catch (err) {
@@ -68,6 +83,10 @@ router.post('/login', async (req, res) => {
   }
 });
 
+/**
+ * ✅ Verify OTP → returns token
+ * POST /api/auth/verify-otp
+ */
 router.post('/verify-otp', async (req, res) => {
   try {
     const { email, otp } = req.body;
@@ -86,15 +105,22 @@ router.post('/verify-otp', async (req, res) => {
       return res.status(401).json({ message: 'Invalid or expired OTP' });
     }
 
-    user.otpCode = undefined;
-    user.otpExpiresAt = undefined;
+    // ✅ clear OTP
+    user.otpCode = null;
+    user.otpExpiresAt = null;
     await user.save();
 
     const token = generateToken(user._id, user.role);
+
     return res.status(200).json({
-      message: 'OTP verified',
+      message: 'OTP verified ✅',
       token,
-      user: { id: user._id, name: user.name, email: user.email, role: user.role }
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role
+      }
     });
   } catch (err) {
     return res.status(500).json({ message: 'OTP verification failed', error: err.message });
@@ -107,13 +133,20 @@ router.post('/verify-otp', async (req, res) => {
  */
 router.get('/me', auth, async (req, res) => {
   try {
+    // ✅ exclude sensitive fields
     const user = await User.findById(req.user._id).select('-password -otpCode -otpExpiresAt');
 
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
     }
 
-    return res.status(200).json({ user });
+    // ✅ Ensure providerProfile always exists (for frontend safety)
+    const safeUser = {
+      ...user.toObject(),
+      providerProfile: user.providerProfile || null
+    };
+
+    return res.status(200).json({ user: safeUser });
   } catch (err) {
     return res.status(500).json({ message: 'Could not fetch profile', error: err.message });
   }
