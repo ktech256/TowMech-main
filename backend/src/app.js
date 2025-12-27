@@ -1,12 +1,13 @@
-import notificationRoutes from './routes/notifications.js';
 import express from 'express';
 import cors from 'cors';
+
 import authRoutes from './routes/auth.js';
 import jobRoutes from './routes/jobs.js';
 import providerRoutes from './routes/providers.js';
 import adminPricingRoutes from './routes/adminPricing.js';
 import paymentRoutes from './routes/payments.js';
 import adminProviderRoutes from './routes/adminProviders.js';
+import notificationRoutes from './routes/notifications.js';
 
 const app = express();
 
@@ -20,9 +21,13 @@ app.get('/health', (req, res) => res.status(200).json({ status: 'ok' }));
 app.use('/api/auth', authRoutes);
 app.use('/api/jobs', jobRoutes);
 app.use('/api/providers', providerRoutes);
-app.use('/api/admin', adminPricingRoutes);
 app.use('/api/payments', paymentRoutes);
+
+// ✅ Admin routes
+app.use('/api/admin', adminPricingRoutes);
 app.use('/api/admin', adminProviderRoutes);
+
+// ✅ Notifications route
 app.use('/api/notifications', notificationRoutes);
 
 // ✅ Error Handler
