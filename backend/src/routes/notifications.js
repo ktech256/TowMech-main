@@ -29,16 +29,23 @@ router.post('/register-token', auth, async (req, res) => {
     const user = await User.findById(req.user._id);
     if (!user) return res.status(404).json({ message: 'User not found' });
 
-    // ✅ Save token in root (works for everyone)
+    // ✅ Save token in root for all users
     user.fcmToken = fcmToken;
 
-    // ✅ Also store inside providerProfile if provider
-    if (!user.providerProfile) user.providerProfile = {};
-    user.providerProfile.fcmToken = fcmToken;
+    // ✅ If provider → also store inside providerProfile
+    const providerRoles = [USER_ROLES.TOW_TRUCK, USER_ROLES.MECHANIC];
+    if (providerRoles.includes(user.role)) {
+      if (!user.providerProfile) user.providerProfile = {};
+      user.providerProfile.fcmToken = fcmToken;
+    }
 
     await user.save();
 
-    return res.status(200).json({ message: 'FCM token saved successfully ✅' });
+    return res.status(200).json({
+      message: 'FCM token saved successfully ✅',
+      role: user.role,
+      savedInProviderProfile: providerRoles.includes(user.role)
+    });
   } catch (err) {
     return res.status(500).json({ message: 'Could not save token', error: err.message });
   }
