@@ -6,7 +6,7 @@ import { sendPushToManyUsers } from './sendPush.js';
  * ✅ Broadcast job to nearest 10 matching providers
  * ✅ ALSO sends push notifications (Bolt style)
  *
- * ✅ This helper can be called from:
+ * ✅ Called from:
  * - routes/jobs.js (job creation)
  * - routes/payments.js (after booking fee payment)
  */
@@ -52,6 +52,12 @@ export const broadcastJobToProviders = async (jobId) => {
 
   console.log('✅ Providers found:', providers.length);
 
+  // ✅ Debug: show provider IDs
+  console.log(
+    '✅ Provider IDs found:',
+    providers.map((p) => p._id.toString())
+  );
+
   // ✅ Save broadcast list + status
   job.broadcastedTo = providers.map((p) => p._id);
   job.status = JOB_STATUSES.BROADCASTED;
@@ -65,21 +71,35 @@ export const broadcastJobToProviders = async (jobId) => {
   await job.save();
 
   /**
-   * ✅ SEND PUSH NOTIFICATIONS (WITH FULL DEBUG)
+   * ✅ SEND PUSH NOTIFICATIONS (FULL DEBUG)
    */
   try {
-    const providersWithTokens = providers.filter((p) => p.providerProfile?.fcmToken);
+    // ✅ Build token list (prefer providerProfile.fcmToken, fallback to root fcmToken)
+    const providersWithTokens = providers
+      .map((p) => ({
+        id: p._id.toString(),
+        token: p.providerProfile?.fcmToken || p.fcmToken || null
+      }))
+      .filter((p) => p.token);
 
     console.log('✅ Providers with tokens:', providersWithTokens.length);
 
-    // ✅ Debug token preview
     console.log(
       '✅ Token preview:',
       providersWithTokens.map((p) => ({
-        id: p._id.toString(),
-        token: p.providerProfile.fcmToken.slice(0, 15) + '...'
+        id: p.id,
+        token: p.token.slice(0, 15) + '...'
       }))
     );
+
+    // ✅ Debug missing tokens
+    const missingTokens = providers
+      .filter((p) => !(p.providerProfile?.fcmToken || p.fcmToken))
+      .map((p) => p._id.toString());
+
+    if (missingTokens.length > 0) {
+      console.log('⚠️ Providers missing tokens:', missingTokens);
+    }
 
     if (providersWithTokens.length > 0) {
       const pushTitle = '🚨 New Job Request Near You';
@@ -88,13 +108,11 @@ export const broadcastJobToProviders = async (jobId) => {
       const vehicle = job.vehicleType ? `Vehicle: ${job.vehicleType}` : '';
       const pickup = job.pickupAddressText ? `Pickup: ${job.pickupAddressText}` : '';
 
-      const pushBody =
-        `${job.title}\n` +
-        [towType, vehicle, pickup].filter(Boolean).join(' | ');
+      const pushBody = `${job.title}\n${[towType, vehicle, pickup].filter(Boolean).join(' | ')}`;
 
       // ✅ Send push
       const response = await sendPushToManyUsers({
-        userIds: providersWithTokens.map((p) => p._id),
+        userIds: providersWithTokens.map((p) => p.id),
         title: pushTitle,
         body: pushBody,
         data: {
@@ -105,15 +123,24 @@ export const broadcastJobToProviders = async (jobId) => {
 
       console.log('✅ Firebase multicast response:', response);
 
-      // ✅ If any failures, log details
+      // ✅ If failures, log detailed error codes
       if (response?.failureCount > 0) {
-        console.log('⚠️ Push failures details:', response.responses);
+        console.log(
+          '⚠️ Push failure responses:',
+          response.responses.map((r, i) => ({
+            index: i,
+            success: r.success,
+            error: r.error?.message || null,
+            code: r.error?.code || null
+          }))
+        );
       }
 
-      console.log('✅ Push notifications sent!');
+      console.log('✅ Push notifications attempted ✅');
+    } else {
+      console.log('⚠️ No providers had tokens → push not sent.');
     }
   } catch (err) {
-    // ✅ Log full error instead of only err.message
     console.error('⚠️ Push notification failed FULL ERROR:', err);
   }
 
