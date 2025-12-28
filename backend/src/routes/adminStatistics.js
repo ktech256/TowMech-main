@@ -1,36 +1,56 @@
 import express from 'express';
 import auth from '../middleware/auth.js';
 import authorizeRoles from '../middleware/role.js';
-import { USER_ROLES } from '../models/User.js';
-import User from '../models/User.js';
+
+import Payment, { PAYMENT_STATUSES } from '../models/Payment.js';
 import Job from '../models/Job.js';
+import User, { USER_ROLES } from '../models/User.js';
 
 const router = express.Router();
 
 /**
- * ✅ Convert range query to milliseconds
+ * ✅ Utility: Convert "period" string into date range
  */
-const rangeToMs = (range) => {
-  const map = {
-    '1m': 1 * 60 * 1000,
-    '5m': 5 * 60 * 1000,
-    '10m': 10 * 60 * 1000,
-    '30m': 30 * 60 * 1000,
-    '1h': 60 * 60 * 1000,
-    '6h': 6 * 60 * 60 * 1000,
-    '12h': 12 * 60 * 60 * 1000,
-    '1d': 24 * 60 * 60 * 1000,
-    '7d': 7 * 24 * 60 * 60 * 1000,
-    '30d': 30 * 24 * 60 * 60 * 1000,
-    '1y': 365 * 24 * 60 * 60 * 1000
-  };
+const getDateRangeFromPeriod = (period) => {
+  const now = new Date();
+  let from = null;
 
-  return map[range] || map['7d']; // default 7 days
+  switch (period) {
+    case '1m':
+      from = new Date(now.getTime() - 1 * 60 * 1000);
+      break;
+    case '5m':
+      from = new Date(now.getTime() - 5 * 60 * 1000);
+      break;
+    case '15m':
+      from = new Date(now.getTime() - 15 * 60 * 1000);
+      break;
+    case '1h':
+      from = new Date(now.getTime() - 60 * 60 * 1000);
+      break;
+    case '1d':
+      from = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+      break;
+    case '7d':
+      from = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+      break;
+    case '30d':
+      from = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+      break;
+    case '1y':
+      from = new Date(now.getTime() - 365 * 24 * 60 * 60 * 1000);
+      break;
+    default:
+      from = null;
+  }
+
+  return { from, to: now };
 };
 
 /**
- * ✅ ADMIN Statistics
- * GET /api/admin/statistics?range=7d
+ * ✅ ADMIN STATISTICS
+ * GET /api/admin/statistics?period=1h
+ * OR  /api/admin/statistics?from=YYYY-MM-DD&to=YYYY-MM-DD
  */
 router.get(
   '/',
@@ -38,88 +58,112 @@ router.get(
   authorizeRoles(USER_ROLES.ADMIN),
   async (req, res) => {
     try {
-      const range = req.query.range || '7d';
-      const ms = rangeToMs(range);
+      const { period, from, to } = req.query;
 
-      const startDate = new Date(Date.now() - ms);
-      const endDate = new Date();
+      let dateFrom = null;
+      let dateTo = null;
+
+      // ✅ Custom date range
+      if (from && to) {
+        dateFrom = new Date(from);
+        dateTo = new Date(to);
+      }
+      // ✅ Period-based range
+      else if (period) {
+        const range = getDateRangeFromPeriod(period);
+        dateFrom = range.from;
+        dateTo = range.to;
+      }
+
+      // ✅ Build filter (if period/range provided)
+      const dateFilter =
+        dateFrom && dateTo
+          ? { createdAt: { $gte: dateFrom, $lte: dateTo } }
+          : {};
 
       /**
-       * ✅ USERS STATS
+       * ✅ REVENUE CALCULATION (Booking fees only)
+       * Revenue comes from PAID payments.
        */
-      const totalUsers = await User.countDocuments();
-      const totalCustomers = await User.countDocuments({ role: USER_ROLES.CUSTOMER });
+      const paidPayments = await Payment.find({
+        status: PAYMENT_STATUSES.PAID,
+        ...dateFilter
+      }).populate('job');
 
+      let totalRevenue = 0;
+      let towTruckRevenue = 0;
+      let mechanicRevenue = 0;
+
+      paidPayments.forEach((p) => {
+        const amount = p.amount || 0;
+        totalRevenue += amount;
+
+        const roleNeeded = p.job?.roleNeeded;
+
+        if (roleNeeded === USER_ROLES.TOW_TRUCK) towTruckRevenue += amount;
+        if (roleNeeded === USER_ROLES.MECHANIC) mechanicRevenue += amount;
+      });
+
+      /**
+       * ✅ USER COUNTS
+       */
+      const totalUsers = await User.countDocuments({});
+      const totalCustomers = await User.countDocuments({ role: USER_ROLES.CUSTOMER });
       const totalProviders = await User.countDocuments({
         role: { $in: [USER_ROLES.MECHANIC, USER_ROLES.TOW_TRUCK] }
       });
 
       const newUsers = await User.countDocuments({
-        createdAt: { $gte: startDate, $lte: endDate }
+        ...dateFilter
       });
+
+      /**
+       * ✅ ACTIVE PROVIDERS
+       * - online providers
+       * - active within last X minutes
+       */
+      const onlineProviders = await User.countDocuments({
+        role: { $in: [USER_ROLES.MECHANIC, USER_ROLES.TOW_TRUCK] },
+        'providerProfile.isOnline': true
+      });
+
+      // ✅ Active providers = lastSeenAt within 15 minutes (default)
+      const activeWindowMinutes = Number(req.query.activeWindowMinutes || 15);
+      const activeSince = new Date(Date.now() - activeWindowMinutes * 60 * 1000);
 
       const activeProviders = await User.countDocuments({
         role: { $in: [USER_ROLES.MECHANIC, USER_ROLES.TOW_TRUCK] },
-        'providerProfile.lastSeenAt': { $gte: startDate }
+        'providerProfile.lastSeenAt': { $gte: activeSince }
       });
 
-      /**
-       * ✅ REVENUE STATS
-       * Booking fee is revenue for TowMech
-       */
-      const jobsInPeriod = await Job.find({
-        createdAt: { $gte: startDate, $lte: endDate },
-        'pricing.bookingFeeStatus': 'PAID'
-      });
-
-      const towTruckRevenue = jobsInPeriod
-        .filter((j) => j.roleNeeded === USER_ROLES.TOW_TRUCK)
-        .reduce((sum, j) => sum + (j.pricing?.bookingFee || 0), 0);
-
-      const mechanicRevenue = jobsInPeriod
-        .filter((j) => j.roleNeeded === USER_ROLES.MECHANIC)
-        .reduce((sum, j) => sum + (j.pricing?.bookingFee || 0), 0);
-
-      const totalRevenue = towTruckRevenue + mechanicRevenue;
-
-      /**
-       * ✅ Jobs breakdown
-       */
-      const totalJobs = await Job.countDocuments({
-        createdAt: { $gte: startDate, $lte: endDate }
-      });
-
-      const towJobs = await Job.countDocuments({
-        createdAt: { $gte: startDate, $lte: endDate },
-        roleNeeded: USER_ROLES.TOW_TRUCK
-      });
-
-      const mechJobs = await Job.countDocuments({
-        createdAt: { $gte: startDate, $lte: endDate },
-        roleNeeded: USER_ROLES.MECHANIC
+      // ✅ Providers with tokens
+      const providersWithTokens = await User.countDocuments({
+        role: { $in: [USER_ROLES.MECHANIC, USER_ROLES.TOW_TRUCK] },
+        'providerProfile.fcmToken': { $ne: null }
       });
 
       return res.status(200).json({
-        range,
-        startDate,
-        endDate,
+        range: {
+          from: dateFrom,
+          to: dateTo
+        },
+        revenue: {
+          totalRevenue,
+          towTruckRevenue,
+          mechanicRevenue,
+          currency: 'ZAR'
+        },
         users: {
           totalUsers,
           totalCustomers,
           totalProviders,
-          newUsers,
-          activeProviders
+          newUsers
         },
-        revenue: {
-          towTruckRevenue,
-          mechanicRevenue,
-          totalRevenue,
-          currency: 'ZAR'
-        },
-        jobs: {
-          totalJobs,
-          towJobs,
-          mechJobs
+        providers: {
+          onlineProviders,
+          activeProviders,
+          providersWithTokens,
+          activeWindowMinutes
         }
       });
     } catch (err) {

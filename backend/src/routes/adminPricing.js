@@ -41,8 +41,28 @@ router.patch(
 
       if (!config) config = await PricingConfig.create({});
 
-      // ✅ Apply updates safely
-      Object.assign(config, req.body);
+      /**
+       * ✅ SAFE UPDATE (Whitelist fields)
+       * Prevent injecting random unwanted fields
+       */
+      const allowedUpdates = [
+        'currency',
+        'baseFee',
+        'perKmFee',
+        'towTruckTypeMultipliers',
+        'vehicleTypeMultipliers',
+        'bookingFees',
+        'payoutSplit',
+        'surgePricing',
+        'refundRules',
+        'payoutRules'
+      ];
+
+      allowedUpdates.forEach((field) => {
+        if (req.body[field] !== undefined) {
+          config[field] = req.body[field];
+        }
+      });
 
       await config.save();
 
