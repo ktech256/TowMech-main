@@ -18,9 +18,7 @@ router.post('/create', auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, re
   try {
     const { jobId } = req.body;
 
-    if (!jobId) {
-      return res.status(400).json({ message: 'jobId is required' });
-    }
+    if (!jobId) return res.status(400).json({ message: 'jobId is required' });
 
     const job = await Job.findById(jobId);
     if (!job) return res.status(404).json({ message: 'Job not found' });
@@ -41,8 +39,8 @@ router.post('/create', auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, re
       return res.status(200).json({ message: 'Payment already exists ✅', payment: existing });
     }
 
-    // ✅ Booking fee only
     const bookingFee = job.pricing?.bookingFee || 0;
+
     if (bookingFee <= 0) {
       return res.status(400).json({
         message: 'Booking fee is not set for this job. Cannot create payment.'
@@ -76,9 +74,7 @@ router.get('/job/:jobId', auth, async (req, res) => {
   try {
     const payment = await Payment.findOne({ job: req.params.jobId }).populate('job');
 
-    if (!payment) {
-      return res.status(404).json({ message: 'Payment not found for job' });
-    }
+    if (!payment) return res.status(404).json({ message: 'Payment not found for job' });
 
     // ✅ Customer can only view own payment
     if (
@@ -96,7 +92,7 @@ router.get('/job/:jobId', auth, async (req, res) => {
 });
 
 /**
- * ✅ Mark payment PAID using JOB ID (SIMULATION)
+ * ✅ Mark payment PAID using JOB ID
  * PATCH /api/payments/job/:jobId/mark-paid
  */
 router.patch('/job/:jobId/mark-paid', auth, async (req, res) => {
@@ -106,7 +102,6 @@ router.patch('/job/:jobId/mark-paid', auth, async (req, res) => {
     const payment = await Payment.findOne({ job: req.params.jobId });
 
     if (!payment) {
-      console.log('⛔ Payment not found for job:', req.params.jobId);
       return res.status(404).json({ message: 'Payment not found for job' });
     }
 
@@ -123,33 +118,30 @@ router.patch('/job/:jobId/mark-paid', auth, async (req, res) => {
       return res.status(403).json({ message: 'Not authorized to mark this payment' });
     }
 
-    // ✅ If already PAID
+    // ✅ Prevent re-payment
     if (payment.status === PAYMENT_STATUSES.PAID) {
       return res.status(200).json({ message: 'Payment already marked PAID ✅', payment });
     }
 
-    // ✅ Mark payment PAID
+    // ✅ Mark payment as PAID
     payment.status = PAYMENT_STATUSES.PAID;
     payment.providerReference = `SIM-${Date.now()}`;
     await payment.save();
 
     console.log('✅ Payment marked PAID:', payment._id.toString());
 
-    // ✅ Mark job bookingFeePaid
+    // ✅ Update job booking fee fields
     const job = await Job.findById(payment.job);
-    if (!job) {
-      console.log('⛔ Job not found for payment:', payment.job.toString());
-      return res.status(404).json({ message: 'Job not found' });
-    }
 
-    job.pricing.bookingFeePaid = true;
+    if (!job) return res.status(404).json({ message: 'Job not found' });
+
+    job.pricing.bookingFeeStatus = 'PAID';
+    job.pricing.bookingFeePaidAt = new Date();
     await job.save();
 
-    console.log('✅ Job updated: bookingFeePaid = true');
+    console.log('✅ Job updated: bookingFeeStatus = PAID');
 
-    // ✅ NOW BROADCAST + PUSH
-    console.log('🔥 Calling broadcastJobToProviders(jobId)...');
-
+    // ✅ Broadcast + Push
     const broadcastResult = await broadcastJobToProviders(job._id);
 
     console.log('✅ broadcastJobToProviders RESULT:', broadcastResult);
@@ -166,18 +158,14 @@ router.patch('/job/:jobId/mark-paid', auth, async (req, res) => {
 });
 
 /**
- * ✅ Mark payment PAID using PAYMENT ID (SIMULATION)
+ * ✅ Mark payment PAID using PAYMENT ID
  * PATCH /api/payments/:paymentId/mark-paid
  */
 router.patch('/:paymentId/mark-paid', auth, async (req, res) => {
   try {
-    console.log('🔥 MARK-PAID HIT: paymentId =', req.params.paymentId);
-
     const payment = await Payment.findById(req.params.paymentId);
 
-    if (!payment) {
-      return res.status(404).json({ message: 'Payment not found' });
-    }
+    if (!payment) return res.status(404).json({ message: 'Payment not found' });
 
     // ✅ Only Admin or Customer
     if (![USER_ROLES.ADMIN, USER_ROLES.CUSTOMER].includes(req.user.role)) {
@@ -192,32 +180,23 @@ router.patch('/:paymentId/mark-paid', auth, async (req, res) => {
       return res.status(403).json({ message: 'Not authorized to mark this payment' });
     }
 
-    // ✅ If already PAID
     if (payment.status === PAYMENT_STATUSES.PAID) {
       return res.status(200).json({ message: 'Payment already marked PAID ✅', payment });
     }
 
-    // ✅ Mark paid
     payment.status = PAYMENT_STATUSES.PAID;
     payment.providerReference = `SIM-${Date.now()}`;
     await payment.save();
 
-    console.log('✅ Payment marked PAID:', payment._id.toString());
-
-    // ✅ Mark job bookingFeePaid + broadcast
+    // ✅ Update job booking fee fields
     const job = await Job.findById(payment.job);
     if (!job) return res.status(404).json({ message: 'Job not found' });
 
-    job.pricing.bookingFeePaid = true;
+    job.pricing.bookingFeeStatus = 'PAID';
+    job.pricing.bookingFeePaidAt = new Date();
     await job.save();
 
-    console.log('✅ Job updated: bookingFeePaid = true');
-
-    console.log('🔥 Calling broadcastJobToProviders(jobId)...');
-
     const broadcastResult = await broadcastJobToProviders(job._id);
-
-    console.log('✅ broadcastJobToProviders RESULT:', broadcastResult);
 
     return res.status(200).json({
       message: 'Booking fee PAID ✅ Broadcast triggered ✅ Check logs for push status',

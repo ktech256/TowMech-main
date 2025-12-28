@@ -15,11 +15,24 @@ export const broadcastJobToProviders = async (jobId) => {
 
   if (!job) throw new Error('Job not found');
 
-  // ✅ Prevent broadcasting if booking fee not paid
-  if (!job.pricing?.bookingFeePaid) {
-    console.log('⛔ Booking fee not paid. Job not broadcasted.');
+  /**
+   * ✅ BOOKING FEE CHECK (UPDATED)
+   * New fields:
+   * - bookingFeeStatus
+   * - bookingFeePaidAt
+   */
+  const bookingFeePaid =
+    job.pricing?.bookingFeeStatus === 'PAID' ||
+    job.pricing?.bookingFeePaidAt !== null;
+
+  if (!bookingFeePaid) {
+    console.log('⛔ Booking fee NOT PAID. Job not broadcasted.');
+    console.log('⛔ bookingFeeStatus:', job.pricing?.bookingFeeStatus);
+    console.log('⛔ bookingFeePaidAt:', job.pricing?.bookingFeePaidAt);
     return { message: 'Booking fee not paid', providers: [] };
   }
+
+  console.log('✅ Booking fee PAID → broadcasting job');
 
   const [lng, lat] = job.pickupLocation.coordinates;
   const role = job.roleNeeded;
@@ -31,7 +44,7 @@ export const broadcastJobToProviders = async (jobId) => {
     _id: { $nin: job.excludedProviders || [] }
   };
 
-  // ✅ TowTruck additional filters
+  // ✅ TowTruck extra filters
   if (role === USER_ROLES.TOW_TRUCK) {
     if (job.towTruckTypeNeeded) {
       providerQuery['providerProfile.towTruckTypes'] = job.towTruckTypeNeeded;
@@ -51,12 +64,7 @@ export const broadcastJobToProviders = async (jobId) => {
     .limit(10);
 
   console.log('✅ Providers found:', providers.length);
-
-  // ✅ Debug: show provider IDs
-  console.log(
-    '✅ Provider IDs found:',
-    providers.map((p) => p._id.toString())
-  );
+  console.log('✅ Provider IDs:', providers.map((p) => p._id.toString()));
 
   // ✅ Save broadcast list + status
   job.broadcastedTo = providers.map((p) => p._id);
@@ -74,7 +82,6 @@ export const broadcastJobToProviders = async (jobId) => {
    * ✅ SEND PUSH NOTIFICATIONS (FULL DEBUG)
    */
   try {
-    // ✅ Build token list (prefer providerProfile.fcmToken, fallback to root fcmToken)
     const providersWithTokens = providers
       .map((p) => ({
         id: p._id.toString(),
@@ -92,7 +99,6 @@ export const broadcastJobToProviders = async (jobId) => {
       }))
     );
 
-    // ✅ Debug missing tokens
     const missingTokens = providers
       .filter((p) => !(p.providerProfile?.fcmToken || p.fcmToken))
       .map((p) => p._id.toString());
@@ -110,7 +116,6 @@ export const broadcastJobToProviders = async (jobId) => {
 
       const pushBody = `${job.title}\n${[towType, vehicle, pickup].filter(Boolean).join(' | ')}`;
 
-      // ✅ Send push
       const response = await sendPushToManyUsers({
         userIds: providersWithTokens.map((p) => p.id),
         title: pushTitle,
@@ -123,7 +128,6 @@ export const broadcastJobToProviders = async (jobId) => {
 
       console.log('✅ Firebase multicast response:', response);
 
-      // ✅ If failures, log detailed error codes
       if (response?.failureCount > 0) {
         console.log(
           '⚠️ Push failure responses:',
