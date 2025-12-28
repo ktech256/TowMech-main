@@ -5,7 +5,7 @@ import auth from '../middleware/auth.js';
 import authorizeRoles from '../middleware/role.js';
 import { USER_ROLES } from '../models/User.js';
 
-// ✅ BROADCAST + PUSH helper (runs after booking fee is PAID)
+// ✅ BROADCAST + PUSH helper
 import { broadcastJobToProviders } from '../utils/broadcastJob.js';
 
 const router = express.Router();
@@ -23,7 +23,6 @@ router.post('/create', auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, re
     }
 
     const job = await Job.findById(jobId);
-
     if (!job) return res.status(404).json({ message: 'Job not found' });
 
     // ✅ Customer must own job
@@ -39,12 +38,11 @@ router.post('/create', auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, re
     // ✅ Prevent duplicate payment requests
     const existing = await Payment.findOne({ job: job._id });
     if (existing) {
-      return res.status(200).json({ message: 'Payment already exists', payment: existing });
+      return res.status(200).json({ message: 'Payment already exists ✅', payment: existing });
     }
 
-    // ✅ CHARGE ONLY booking fee
+    // ✅ Booking fee only
     const bookingFee = job.pricing?.bookingFee || 0;
-
     if (bookingFee <= 0) {
       return res.status(400).json({
         message: 'Booking fee is not set for this job. Cannot create payment.'
@@ -65,6 +63,7 @@ router.post('/create', auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, re
       payment
     });
   } catch (err) {
+    console.error('❌ PAYMENT CREATE ERROR:', err);
     return res.status(500).json({ message: 'Could not create payment', error: err.message });
   }
 });
@@ -91,6 +90,7 @@ router.get('/job/:jobId', auth, async (req, res) => {
 
     return res.status(200).json({ payment });
   } catch (err) {
+    console.error('❌ PAYMENT FETCH ERROR:', err);
     return res.status(500).json({ message: 'Could not fetch payment', error: err.message });
   }
 });
@@ -101,9 +101,12 @@ router.get('/job/:jobId', auth, async (req, res) => {
  */
 router.patch('/job/:jobId/mark-paid', auth, async (req, res) => {
   try {
+    console.log('🔥 MARK-PAID HIT: jobId =', req.params.jobId);
+
     const payment = await Payment.findOne({ job: req.params.jobId });
 
     if (!payment) {
+      console.log('⛔ Payment not found for job:', req.params.jobId);
       return res.status(404).json({ message: 'Payment not found for job' });
     }
 
@@ -120,7 +123,7 @@ router.patch('/job/:jobId/mark-paid', auth, async (req, res) => {
       return res.status(403).json({ message: 'Not authorized to mark this payment' });
     }
 
-    // ✅ If already paid, return
+    // ✅ If already PAID
     if (payment.status === PAYMENT_STATUSES.PAID) {
       return res.status(200).json({ message: 'Payment already marked PAID ✅', payment });
     }
@@ -130,22 +133,34 @@ router.patch('/job/:jobId/mark-paid', auth, async (req, res) => {
     payment.providerReference = `SIM-${Date.now()}`;
     await payment.save();
 
+    console.log('✅ Payment marked PAID:', payment._id.toString());
+
     // ✅ Mark job bookingFeePaid
     const job = await Job.findById(payment.job);
-
-    if (job) {
-      job.pricing.bookingFeePaid = true;
-      await job.save();
-
-      // ✅ Now broadcast + push
-      await broadcastJobToProviders(job._id);
+    if (!job) {
+      console.log('⛔ Job not found for payment:', payment.job.toString());
+      return res.status(404).json({ message: 'Job not found' });
     }
 
+    job.pricing.bookingFeePaid = true;
+    await job.save();
+
+    console.log('✅ Job updated: bookingFeePaid = true');
+
+    // ✅ NOW BROADCAST + PUSH
+    console.log('🔥 Calling broadcastJobToProviders(jobId)...');
+
+    const broadcastResult = await broadcastJobToProviders(job._id);
+
+    console.log('✅ broadcastJobToProviders RESULT:', broadcastResult);
+
     return res.status(200).json({
-      message: 'Booking fee PAID ✅ Job broadcasted ✅ Push sent ✅',
-      payment
+      message: 'Booking fee PAID ✅ Broadcast triggered ✅ Check logs for push status',
+      payment,
+      broadcastResult
     });
   } catch (err) {
+    console.error('❌ MARK-PAID ERROR FULL:', err);
     return res.status(500).json({ message: 'Could not mark payment', error: err.message });
   }
 });
@@ -156,6 +171,8 @@ router.patch('/job/:jobId/mark-paid', auth, async (req, res) => {
  */
 router.patch('/:paymentId/mark-paid', auth, async (req, res) => {
   try {
+    console.log('🔥 MARK-PAID HIT: paymentId =', req.params.paymentId);
+
     const payment = await Payment.findById(req.params.paymentId);
 
     if (!payment) {
@@ -175,7 +192,7 @@ router.patch('/:paymentId/mark-paid', auth, async (req, res) => {
       return res.status(403).json({ message: 'Not authorized to mark this payment' });
     }
 
-    // ✅ If already paid
+    // ✅ If already PAID
     if (payment.status === PAYMENT_STATUSES.PAID) {
       return res.status(200).json({ message: 'Payment already marked PAID ✅', payment });
     }
@@ -185,21 +202,30 @@ router.patch('/:paymentId/mark-paid', auth, async (req, res) => {
     payment.providerReference = `SIM-${Date.now()}`;
     await payment.save();
 
+    console.log('✅ Payment marked PAID:', payment._id.toString());
+
     // ✅ Mark job bookingFeePaid + broadcast
     const job = await Job.findById(payment.job);
+    if (!job) return res.status(404).json({ message: 'Job not found' });
 
-    if (job) {
-      job.pricing.bookingFeePaid = true;
-      await job.save();
+    job.pricing.bookingFeePaid = true;
+    await job.save();
 
-      await broadcastJobToProviders(job._id);
-    }
+    console.log('✅ Job updated: bookingFeePaid = true');
+
+    console.log('🔥 Calling broadcastJobToProviders(jobId)...');
+
+    const broadcastResult = await broadcastJobToProviders(job._id);
+
+    console.log('✅ broadcastJobToProviders RESULT:', broadcastResult);
 
     return res.status(200).json({
-      message: 'Booking fee PAID ✅ Job broadcasted ✅ Push sent ✅',
-      payment
+      message: 'Booking fee PAID ✅ Broadcast triggered ✅ Check logs for push status',
+      payment,
+      broadcastResult
     });
   } catch (err) {
+    console.error('❌ MARK-PAID ERROR FULL:', err);
     return res.status(500).json({ message: 'Could not mark payment', error: err.message });
   }
 });
