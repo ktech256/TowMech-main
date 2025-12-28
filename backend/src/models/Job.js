@@ -17,7 +17,7 @@ export const BOOKING_FEE_STATUSES = {
 
 export const PAYMENT_MODES = {
   DIRECT_TO_PROVIDER: 'DIRECT_TO_PROVIDER', // TowTruck: customer pays provider directly
-  PAY_AFTER_COMPLETION: 'PAY_AFTER_COMPLETION' // Mechanic: customer pays after job complete
+  PAY_AFTER_COMPLETION: 'PAY_AFTER_COMPLETION' // Mechanic: customer pays after completion
 };
 
 const jobSchema = new mongoose.Schema(
@@ -25,14 +25,13 @@ const jobSchema = new mongoose.Schema(
     title: { type: String, required: true },
     description: { type: String },
 
-    roleNeeded: { type: String, required: true }, // TowTruck or Mechanic
+    roleNeeded: { type: String, required: true },
 
     pickupLocation: {
       type: { type: String, enum: ['Point'], default: 'Point' },
       coordinates: { type: [Number], required: true } // [lng, lat]
     },
 
-    // ✅ OPTIONAL (Only TowTruck jobs should have this)
     dropoffLocation: {
       type: {
         type: String,
@@ -45,16 +44,18 @@ const jobSchema = new mongoose.Schema(
       }
     },
 
-    dropoffAddressText: { type: String, default: null },
     pickupAddressText: { type: String, default: null },
+    dropoffAddressText: { type: String, default: null },
 
     towTruckTypeNeeded: { type: String, default: null },
     vehicleType: { type: String, default: null },
 
     /**
-     * ✅ Pricing (Auto-calculated when job created)
+     * ✅ Pricing block
      */
     pricing: {
+      _id: false,
+
       currency: { type: String, default: 'ZAR' },
 
       baseFee: { type: Number, default: 0 },
@@ -65,13 +66,11 @@ const jobSchema = new mongoose.Schema(
       towTruckTypeMultiplier: { type: Number, default: 1 },
       vehicleTypeMultiplier: { type: Number, default: 1 },
 
-      surgeMultiplier: { type: Number, default: 1 }, // ✅ store demand surge used
+      surgeMultiplier: { type: Number, default: 1 },
       estimatedTotal: { type: Number, default: 0 },
 
       /**
        * ✅ Booking Fee System
-       * TowTruck = % of total
-       * Mechanic = fixed
        */
       bookingFee: { type: Number, default: 0 },
 
@@ -84,23 +83,16 @@ const jobSchema = new mongoose.Schema(
       bookingFeePaidAt: { type: Date, default: null },
       bookingFeeRefundedAt: { type: Date, default: null },
 
-      bookingFeePercentUsed: { type: Number, default: null }, // ✅ tow truck %
-      mechanicBookingFeeUsed: { type: Number, default: null }, // ✅ mechanic fixed amount
+      bookingFeePercentUsed: { type: Number, default: null },
+      mechanicBookingFeeUsed: { type: Number, default: null },
 
       /**
-       * ✅ Payout split
-       * bookingFee = company commission
-       * providerAmountDue = provider payout
+       * ✅ Revenue Split
        */
       commissionAmount: { type: Number, default: 0 },
       providerAmountDue: { type: Number, default: 0 }
     },
 
-    /**
-     * ✅ Payment Mode
-     * TowTruck = customer pays provider directly
-     * Mechanic = customer pays after completion
-     */
     paymentMode: {
       type: String,
       enum: Object.values(PAYMENT_MODES),
@@ -109,7 +101,6 @@ const jobSchema = new mongoose.Schema(
 
     customer: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
 
-    // ✅ Broadcast mode
     broadcastedTo: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
     excludedProviders: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User', default: [] }],
 

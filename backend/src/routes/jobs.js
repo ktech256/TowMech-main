@@ -52,11 +52,13 @@ router.post('/', auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
 
     const baseFee = pricingConfig.baseFee || 0;
     const perKmFee = pricingConfig.perKmFee || 0;
+    const currency = pricingConfig.currency || 'ZAR';
 
     const hasDropoff = dropoffLat !== undefined && dropoffLng !== undefined;
 
     /**
      * ✅ TowTruck estimated distance placeholder
+     * (Later replace with Google Maps distance)
      */
     const estimatedDistanceKm =
       roleNeeded === USER_ROLES.TOW_TRUCK && hasDropoff ? 25 : 0;
@@ -71,6 +73,7 @@ router.post('/', auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
 
     /**
      * ✅ Only TowTruck has total estimate
+     * Mechanic total is unknown until mechanic arrives
      */
     const estimatedTotal =
       roleNeeded === USER_ROLES.TOW_TRUCK
@@ -78,9 +81,9 @@ router.post('/', auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
         : 0;
 
     /**
-     * ✅ BOOKING FEE
-     * TowTruck = % of estimatedTotal
-     * Mechanic = fixed booking fee
+     * ✅ BOOKING FEES
+     * TowTruck = % of estimated total
+     * Mechanic = fixed amount
      */
     const towBookingPercent = pricingConfig.bookingFees?.towTruckPercent || 15;
     const mechanicFixedFee = pricingConfig.bookingFees?.mechanicFixed || 200;
@@ -91,16 +94,32 @@ router.post('/', auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
         : mechanicFixedFee;
 
     /**
-     * ✅ Provider payout amount
+     * ✅ COMMISSION + PROVIDER AMOUNT DUE (TowTruck only)
+     * Mechanic providerAmountDue stays 0 (customer pays mechanic directly)
      */
-    const providerPayoutAmount =
+    const towTruckCompanyPercent = pricingConfig.payoutSplit?.towTruckCompanyPercent || 15;
+    const towTruckProviderPercent = pricingConfig.payoutSplit?.towTruckProviderPercent || 85;
+
+    const commissionAmount =
       roleNeeded === USER_ROLES.TOW_TRUCK
-        ? Math.max(estimatedTotal - bookingFee, 0)
+        ? Math.round((estimatedTotal * towTruckCompanyPercent) / 100)
+        : 0;
+
+    const providerAmountDue =
+      roleNeeded === USER_ROLES.TOW_TRUCK
+        ? Math.max(estimatedTotal - commissionAmount, 0)
         : 0;
 
     /**
+     * ✅ PAYMENT MODE
+     */
+    const paymentMode =
+      roleNeeded === USER_ROLES.TOW_TRUCK
+        ? 'DIRECT_TO_PROVIDER'
+        : 'PAY_AFTER_SERVICE';
+
+    /**
      * ✅ Create Job
-     * Status stays CREATED until booking fee is PAID
      */
     const job = await Job.create({
       title,
@@ -124,10 +143,13 @@ router.post('/', auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
       vehicleType: vehicleType || null,
 
       customer: req.user._id,
+
       status: JOB_STATUSES.CREATED,
 
+      paymentMode,
+
       pricing: {
-        currency: pricingConfig.currency || 'ZAR',
+        currency,
         baseFee,
         perKmFee,
         estimatedDistanceKm,
@@ -136,12 +158,12 @@ router.post('/', auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
         estimatedTotal,
 
         bookingFee,
-
-        // ✅ NEW STRUCTURE
         bookingFeeStatus: 'PENDING',
         bookingFeePaidAt: null,
+        bookingFeeRefundedAt: null,
 
-        providerPayoutAmount
+        commissionAmount,
+        providerAmountDue
       }
     });
 
@@ -152,14 +174,13 @@ router.post('/', auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
       job: job._id,
       customer: req.user._id,
       amount: bookingFee,
-      currency: pricingConfig.currency || 'ZAR',
+      currency,
       status: PAYMENT_STATUSES.PENDING,
       provider: 'SIMULATION'
     });
 
     return res.status(201).json({
-      message:
-        'Job created ✅ Booking fee payment required before matching provider',
+      message: 'Job created ✅ Booking fee payment required before matching provider',
       job,
       payment
     });
@@ -178,11 +199,8 @@ router.post('/', auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
 router.get('/available', auth, async (req, res) => {
   try {
     const providerRoles = [USER_ROLES.MECHANIC, USER_ROLES.TOW_TRUCK];
-
     if (!providerRoles.includes(req.user.role)) {
-      return res.status(403).json({
-        message: 'Only service providers can view available jobs'
-      });
+      return res.status(403).json({ message: 'Only service providers can view available jobs' });
     }
 
     const jobs = await Job.find({
@@ -193,86 +211,68 @@ router.get('/available', auth, async (req, res) => {
 
     return res.status(200).json(jobs);
   } catch (err) {
-    return res.status(500).json({
-      message: 'Could not fetch available jobs',
-      error: err.message
-    });
+    return res.status(500).json({ message: 'Could not fetch available jobs', error: err.message });
   }
 });
 
 /**
  * ✅ Customer active jobs
  * MUST COME BEFORE "/:id"
+ * GET /api/jobs/my/active
  */
-router.get(
-  '/my/active',
-  auth,
-  authorizeRoles(USER_ROLES.CUSTOMER),
-  async (req, res) => {
-    try {
-      const jobs = await Job.find({
-        customer: req.user._id,
-        status: {
-          $in: [
-            JOB_STATUSES.CREATED,
-            JOB_STATUSES.BROADCASTED,
-            JOB_STATUSES.ASSIGNED,
-            JOB_STATUSES.IN_PROGRESS
-          ]
-        }
-      })
-        .populate('assignedTo', 'name email role providerProfile')
-        .sort({ updatedAt: -1 });
+router.get('/my/active', auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => {
+  try {
+    const jobs = await Job.find({
+      customer: req.user._id,
+      status: {
+        $in: [
+          JOB_STATUSES.CREATED,
+          JOB_STATUSES.BROADCASTED,
+          JOB_STATUSES.ASSIGNED,
+          JOB_STATUSES.IN_PROGRESS
+        ]
+      }
+    })
+      .populate('assignedTo', 'name email role providerProfile')
+      .sort({ updatedAt: -1 });
 
-      return res.status(200).json({ jobs });
-    } catch (err) {
-      return res.status(500).json({
-        message: 'Could not fetch active jobs',
-        error: err.message
-      });
-    }
+    return res.status(200).json({ jobs });
+  } catch (err) {
+    return res.status(500).json({ message: 'Could not fetch active jobs', error: err.message });
   }
-);
+});
 
 /**
  * ✅ Customer job history
  * MUST COME BEFORE "/:id"
+ * GET /api/jobs/my/history
  */
-router.get(
-  '/my/history',
-  auth,
-  authorizeRoles(USER_ROLES.CUSTOMER),
-  async (req, res) => {
-    try {
-      const jobs = await Job.find({
-        customer: req.user._id,
-        status: { $in: [JOB_STATUSES.COMPLETED, JOB_STATUSES.CANCELLED] }
-      })
-        .populate('assignedTo', 'name email role providerProfile')
-        .sort({ updatedAt: -1 })
-        .limit(50);
+router.get('/my/history', auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => {
+  try {
+    const jobs = await Job.find({
+      customer: req.user._id,
+      status: { $in: [JOB_STATUSES.COMPLETED, JOB_STATUSES.CANCELLED] }
+    })
+      .populate('assignedTo', 'name email role providerProfile')
+      .sort({ updatedAt: -1 })
+      .limit(50);
 
-      return res.status(200).json({ jobs });
-    } catch (err) {
-      return res.status(500).json({
-        message: 'Could not fetch job history',
-        error: err.message
-      });
-    }
+    return res.status(200).json({ jobs });
+  } catch (err) {
+    return res.status(500).json({ message: 'Could not fetch job history', error: err.message });
   }
-);
+});
 
 /**
  * ✅ Provider accepts broadcasted job
+ * PATCH /api/jobs/:id/accept
  */
 router.patch('/:id/accept', auth, async (req, res) => {
   try {
     const providerRoles = [USER_ROLES.MECHANIC, USER_ROLES.TOW_TRUCK];
 
     if (!providerRoles.includes(req.user.role)) {
-      return res.status(403).json({
-        message: 'Only service providers can accept jobs'
-      });
+      return res.status(403).json({ message: 'Only service providers can accept jobs' });
     }
 
     const job = await Job.findOneAndUpdate(
@@ -298,15 +298,45 @@ router.patch('/:id/accept', auth, async (req, res) => {
 
     return res.status(200).json({ message: 'Job accepted ✅', job });
   } catch (err) {
-    return res.status(500).json({
-      message: 'Could not accept job',
-      error: err.message
-    });
+    return res.status(500).json({ message: 'Could not accept job', error: err.message });
+  }
+});
+
+/**
+ * ✅ Provider rejects job
+ * PATCH /api/jobs/:id/reject
+ */
+router.patch('/:id/reject', auth, async (req, res) => {
+  try {
+    const providerRoles = [USER_ROLES.MECHANIC, USER_ROLES.TOW_TRUCK];
+
+    if (!providerRoles.includes(req.user.role)) {
+      return res.status(403).json({ message: 'Only service providers can reject jobs' });
+    }
+
+    const job = await Job.findById(req.params.id);
+    if (!job) return res.status(404).json({ message: 'Job not found' });
+
+    job.broadcastedTo = job.broadcastedTo.filter(
+      (id) => id.toString() !== req.user._id.toString()
+    );
+
+    job.excludedProviders = job.excludedProviders || [];
+    if (!job.excludedProviders.map(String).includes(req.user._id.toString())) {
+      job.excludedProviders.push(req.user._id);
+    }
+
+    await job.save();
+
+    return res.status(200).json({ message: 'Job rejected ✅', job });
+  } catch (err) {
+    return res.status(500).json({ message: 'Could not reject job', error: err.message });
   }
 });
 
 /**
  * ✅ Update job status
+ * PATCH /api/jobs/:id/status
  */
 router.patch('/:id/status', auth, async (req, res) => {
   try {
@@ -332,18 +362,22 @@ router.patch('/:id/status', auth, async (req, res) => {
 
     /**
      * ✅ Booking fee enforcement
-     * Enforce using job.pricing.bookingFeeStatus (not bookingFeePaid)
+     * Providers cannot start or complete without PAID booking fee
      */
     if (
       [JOB_STATUSES.IN_PROGRESS, JOB_STATUSES.COMPLETED].includes(status) &&
       req.user.role !== USER_ROLES.ADMIN
     ) {
-      const feeStatus = job.pricing?.bookingFeeStatus;
-
-      if (feeStatus !== 'PAID') {
+      if (job.pricing?.bookingFeeStatus !== 'PAID') {
         return res.status(400).json({
-          message: 'Booking fee not paid. Cannot start job.',
-          bookingFeeStatus: feeStatus || 'NOT_SET'
+          message: 'Booking fee not paid. Cannot start job.'
+        });
+      }
+
+      const payment = await Payment.findOne({ job: job._id });
+      if (!payment || payment.status !== PAYMENT_STATUSES.PAID) {
+        return res.status(400).json({
+          message: 'Booking fee must be PAID before starting job.'
         });
       }
     }
@@ -356,15 +390,13 @@ router.patch('/:id/status', auth, async (req, res) => {
       job
     });
   } catch (err) {
-    return res.status(500).json({
-      message: 'Could not update job status',
-      error: err.message
-    });
+    return res.status(500).json({ message: 'Could not update job status', error: err.message });
   }
 });
 
 /**
  * ✅ Get job by ID
+ * GET /api/jobs/:id
  */
 router.get('/:id', auth, async (req, res) => {
   try {
@@ -385,65 +417,46 @@ router.get('/:id', auth, async (req, res) => {
     const isAdmin = req.user.role === USER_ROLES.ADMIN;
 
     if (!isCustomerOwner && !isAssignedProvider && !isAdmin) {
-      return res.status(403).json({
-        message: 'Not authorized to view this job'
-      });
+      return res.status(403).json({ message: 'Not authorized to view this job' });
     }
 
     return res.status(200).json(job);
   } catch (err) {
-    return res.status(500).json({
-      message: 'Could not fetch job',
-      error: err.message
-    });
+    return res.status(500).json({ message: 'Could not fetch job', error: err.message });
   }
 });
 
 /**
  * ✅ Customer cancels job
+ * PATCH /api/jobs/:id/cancel
  */
-router.patch(
-  '/:id/cancel',
-  auth,
-  authorizeRoles(USER_ROLES.CUSTOMER, USER_ROLES.ADMIN),
-  async (req, res) => {
-    try {
-      const job = await Job.findById(req.params.id);
-      if (!job) return res.status(404).json({ message: 'Job not found' });
+router.patch('/:id/cancel', auth, authorizeRoles(USER_ROLES.CUSTOMER, USER_ROLES.ADMIN), async (req, res) => {
+  try {
+    const job = await Job.findById(req.params.id);
+    if (!job) return res.status(404).json({ message: 'Job not found' });
 
-      if (
-        req.user.role === USER_ROLES.CUSTOMER &&
-        job.customer.toString() !== req.user._id.toString()
-      ) {
-        return res.status(403).json({
-          message: 'Not authorized to cancel this job'
-        });
-      }
-
-      if (job.status === JOB_STATUSES.COMPLETED) {
-        return res.status(400).json({
-          message: 'Cannot cancel a completed job'
-        });
-      }
-
-      job.status = JOB_STATUSES.CANCELLED;
-      job.cancelledBy = req.user._id;
-      job.cancelReason = req.body.reason || 'Cancelled by customer';
-      job.cancelledAt = new Date();
-
-      await job.save();
-
-      return res.status(200).json({
-        message: 'Job cancelled successfully ✅',
-        job
-      });
-    } catch (err) {
-      return res.status(500).json({
-        message: 'Could not cancel job',
-        error: err.message
-      });
+    if (
+      req.user.role === USER_ROLES.CUSTOMER &&
+      job.customer.toString() !== req.user._id.toString()
+    ) {
+      return res.status(403).json({ message: 'Not authorized to cancel this job' });
     }
+
+    if (job.status === JOB_STATUSES.COMPLETED) {
+      return res.status(400).json({ message: 'Cannot cancel a completed job' });
+    }
+
+    job.status = JOB_STATUSES.CANCELLED;
+    job.cancelledBy = req.user._id;
+    job.cancelReason = req.body.reason || 'Cancelled by customer';
+    job.cancelledAt = new Date();
+
+    await job.save();
+
+    return res.status(200).json({ message: 'Job cancelled successfully ✅', job });
+  } catch (err) {
+    return res.status(500).json({ message: 'Could not cancel job', error: err.message });
   }
-);
+});
 
 export default router;

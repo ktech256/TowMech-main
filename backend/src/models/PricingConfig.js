@@ -39,42 +39,34 @@ const pricingConfigSchema = new mongoose.Schema(
      * Mechanic: fixed amount
      */
     bookingFees: {
-      towTruckPercent: { type: Number, default: 15 }, // ✅ stored as percent (15 = 15%)
-      mechanicFixed: { type: Number, default: 200 } // ✅ fixed booking fee
+      towTruckPercent: { type: Number, default: 15 }, // 15 = 15%
+      mechanicFixed: { type: Number, default: 200 }
     },
 
     /**
      * ✅ PAYOUT SPLIT RULES
-     * TowTruck: customer pays provider directly, but we calculate expected payout split
-     * Mechanic: paid after completion
+     * TowTruck: calculated split (customer pays provider directly)
      */
     payoutSplit: {
-      towTruckProviderPercent: { type: Number, default: 85 }, // ✅ provider gets 85%
-      towTruckCompanyPercent: { type: Number, default: 15 }, // ✅ company gets 15%
+      towTruckProviderPercent: { type: Number, default: 85 },
+      towTruckCompanyPercent: { type: Number, default: 15 }
     },
 
     /**
-     * ✅ DEMAND SURGE SETTINGS (Admin Controlled)
-     * Pricing and booking fee can increase when demand is high
+     * ✅ SURGE SETTINGS
      */
     surgePricing: {
       enabled: { type: Boolean, default: true },
 
-      // ✅ TowTruck surge multiplier
       towTruckMultiplier: { type: Number, default: 1.0 },
-
-      // ✅ Mechanic surge multiplier
       mechanicMultiplier: { type: Number, default: 1.0 },
-
-      // ✅ Mechanic booking fee surge multiplier
       mechanicBookingFeeMultiplier: { type: Number, default: 1.0 },
 
-      // ✅ Safety cap (surge cannot go beyond this)
       maxSurgeMultiplier: { type: Number, default: 2.5 }
     },
 
     /**
-     * ✅ REFUND RULES (Admin Controlled)
+     * ✅ REFUND RULES
      */
     refundRules: {
       bookingFeeRefundableIfNoProviderFound: { type: Boolean, default: true },
@@ -82,7 +74,7 @@ const pricingConfigSchema = new mongoose.Schema(
     },
 
     /**
-     * ✅ PAYOUT RULES / DISCLAIMERS
+     * ✅ DISCLAIMERS / RULES
      */
     payoutRules: {
       towTruckPaysProviderDirectly: { type: Boolean, default: true },
@@ -95,7 +87,7 @@ const pricingConfigSchema = new mongoose.Schema(
       }
     }
   },
-  { timestamps: true }
+  { timestamps: true, strict: true }
 );
 
 export default mongoose.model('PricingConfig', pricingConfigSchema);
