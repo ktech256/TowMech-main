@@ -57,7 +57,6 @@ router.post('/', auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
 
     /**
      * ✅ TowTruck estimated distance placeholder
-     * (You can later calculate real distance using Google Maps)
      */
     const estimatedDistanceKm =
       roleNeeded === USER_ROLES.TOW_TRUCK && hasDropoff ? 25 : 0;
@@ -72,7 +71,6 @@ router.post('/', auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
 
     /**
      * ✅ Only TowTruck has total estimate
-     * Mechanic total is unknown until mechanic arrives
      */
     const estimatedTotal =
       roleNeeded === USER_ROLES.TOW_TRUCK
@@ -94,8 +92,6 @@ router.post('/', auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
 
     /**
      * ✅ Provider payout amount
-     * TowTruck = total - bookingFee
-     * Mechanic = unknown, customer pays mechanic directly later
      */
     const providerPayoutAmount =
       roleNeeded === USER_ROLES.TOW_TRUCK
@@ -128,7 +124,6 @@ router.post('/', auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
       vehicleType: vehicleType || null,
 
       customer: req.user._id,
-
       status: JOB_STATUSES.CREATED,
 
       pricing: {
@@ -141,7 +136,11 @@ router.post('/', auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
         estimatedTotal,
 
         bookingFee,
-        bookingFeePaid: false,
+
+        // ✅ NEW STRUCTURE
+        bookingFeeStatus: 'PENDING',
+        bookingFeePaidAt: null,
+
         providerPayoutAmount
       }
     });
@@ -204,7 +203,6 @@ router.get('/available', auth, async (req, res) => {
 /**
  * ✅ Customer active jobs
  * MUST COME BEFORE "/:id"
- * GET /api/jobs/my/active
  */
 router.get(
   '/my/active',
@@ -239,7 +237,6 @@ router.get(
 /**
  * ✅ Customer job history
  * MUST COME BEFORE "/:id"
- * GET /api/jobs/my/history
  */
 router.get(
   '/my/history',
@@ -267,7 +264,6 @@ router.get(
 
 /**
  * ✅ Provider accepts broadcasted job
- * PATCH /api/jobs/:id/accept
  */
 router.patch('/:id/accept', auth, async (req, res) => {
   try {
@@ -310,45 +306,7 @@ router.patch('/:id/accept', auth, async (req, res) => {
 });
 
 /**
- * ✅ Provider rejects job
- * PATCH /api/jobs/:id/reject
- */
-router.patch('/:id/reject', auth, async (req, res) => {
-  try {
-    const providerRoles = [USER_ROLES.MECHANIC, USER_ROLES.TOW_TRUCK];
-
-    if (!providerRoles.includes(req.user.role)) {
-      return res.status(403).json({
-        message: 'Only service providers can reject jobs'
-      });
-    }
-
-    const job = await Job.findById(req.params.id);
-    if (!job) return res.status(404).json({ message: 'Job not found' });
-
-    job.broadcastedTo = job.broadcastedTo.filter(
-      (id) => id.toString() !== req.user._id.toString()
-    );
-
-    job.excludedProviders = job.excludedProviders || [];
-    if (!job.excludedProviders.map(String).includes(req.user._id.toString())) {
-      job.excludedProviders.push(req.user._id);
-    }
-
-    await job.save();
-
-    return res.status(200).json({ message: 'Job rejected ✅', job });
-  } catch (err) {
-    return res.status(500).json({
-      message: 'Could not reject job',
-      error: err.message
-    });
-  }
-});
-
-/**
  * ✅ Update job status
- * PATCH /api/jobs/:id/status
  */
 router.patch('/:id/status', auth, async (req, res) => {
   try {
@@ -374,31 +332,18 @@ router.patch('/:id/status', auth, async (req, res) => {
 
     /**
      * ✅ Booking fee enforcement
-     * Providers cannot start or complete without paid booking fee
+     * Enforce using job.pricing.bookingFeeStatus (not bookingFeePaid)
      */
     if (
       [JOB_STATUSES.IN_PROGRESS, JOB_STATUSES.COMPLETED].includes(status) &&
       req.user.role !== USER_ROLES.ADMIN
     ) {
-      // ✅ BookingFeePaid must be true
-      if (!job.pricing?.bookingFeePaid) {
-        return res.status(400).json({
-          message: 'Booking fee not paid. Cannot start job.'
-        });
-      }
+      const feeStatus = job.pricing?.bookingFeeStatus;
 
-      // ✅ Payment must exist + PAID
-      const payment = await Payment.findOne({ job: job._id });
-
-      if (!payment) {
+      if (feeStatus !== 'PAID') {
         return res.status(400).json({
-          message: 'Booking fee payment record not found.'
-        });
-      }
-
-      if (payment.status !== PAYMENT_STATUSES.PAID) {
-        return res.status(400).json({
-          message: 'Booking fee must be PAID before starting job.'
+          message: 'Booking fee not paid. Cannot start job.',
+          bookingFeeStatus: feeStatus || 'NOT_SET'
         });
       }
     }
@@ -420,7 +365,6 @@ router.patch('/:id/status', auth, async (req, res) => {
 
 /**
  * ✅ Get job by ID
- * GET /api/jobs/:id
  */
 router.get('/:id', auth, async (req, res) => {
   try {
@@ -457,7 +401,6 @@ router.get('/:id', auth, async (req, res) => {
 
 /**
  * ✅ Customer cancels job
- * PATCH /api/jobs/:id/cancel
  */
 router.patch(
   '/:id/cancel',
