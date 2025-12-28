@@ -60,33 +60,45 @@ const broadcastJobToProviders = async (job) => {
   /**
    * ✅ SEND PUSH NOTIFICATIONS (Bolt style)
    */
+
   try {
-    const providersWithTokens = providers.filter((p) => p.providerProfile?.fcmToken);
+  const providersWithTokens = providers.filter((p) => p.providerProfile?.fcmToken);
 
-    if (providersWithTokens.length > 0) {
-      const pushTitle = '🚨 New Job Request Near You';
+  // ✅ DEBUG LOGGING
+  console.log("✅ Providers found:", providers.length);
+  console.log(
+    "✅ Providers with tokens:",
+    providersWithTokens.length,
+    providersWithTokens.map((p) => ({
+      id: p._id,
+      token: p.providerProfile?.fcmToken?.slice(0, 15) + "..."
+    }))
+  );
 
-      const towType = job.towTruckTypeNeeded ? `Tow Type: ${job.towTruckTypeNeeded}` : '';
-      const vehicle = job.vehicleType ? `Vehicle: ${job.vehicleType}` : '';
-      const pickup = job.pickupAddressText ? `Pickup: ${job.pickupAddressText}` : '';
+  if (providersWithTokens.length > 0) {
+    const pushTitle = '🚨 New Job Request Near You';
 
-      const pushBody =
-        `${job.title}\n` +
-        [towType, vehicle, pickup].filter(Boolean).join(' | ');
+    const towType = job.towTruckTypeNeeded ? `Tow Type: ${job.towTruckTypeNeeded}` : '';
+    const vehicle = job.vehicleType ? `Vehicle: ${job.vehicleType}` : '';
+    const pickup = job.pickupAddressText ? `Pickup: ${job.pickupAddressText}` : '';
 
-      await sendPushToManyUsers({
-        userIds: providersWithTokens.map((p) => p._id),
-        title: pushTitle,
-        body: pushBody,
-        data: {
-          jobId: job._id.toString(),
-          roleNeeded: job.roleNeeded
-        }
-      });
-    }
-  } catch (err) {
-    console.error('⚠️ Push notification failed:', err.message);
+    const pushBody =
+      `${job.title}\n` +
+      [towType, vehicle, pickup].filter(Boolean).join(' | ');
+
+    await sendPushToManyUsers({
+      userIds: providersWithTokens.map((p) => p._id),
+      title: pushTitle,
+      body: pushBody,
+      data: {
+        jobId: job._id.toString(),
+        roleNeeded: job.roleNeeded
+      }
+    });
   }
+} catch (err) {
+  console.error('⚠️ Push notification failed:', err.message);
+}
 
   return providers;
 };
