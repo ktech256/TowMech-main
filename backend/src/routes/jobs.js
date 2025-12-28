@@ -2,7 +2,7 @@ import express from 'express';
 import Job, { JOB_STATUSES } from '../models/Job.js';
 import User, { USER_ROLES } from '../models/User.js';
 import PricingConfig from '../models/PricingConfig.js';
-import Payment from '../models/Payment.js';
+import Payment, { PAYMENT_STATUSES } from '../models/Payment.js';
 import auth from '../middleware/auth.js';
 import authorizeRoles from '../middleware/role.js';
 
@@ -12,8 +12,52 @@ import { sendPushToManyUsers } from '../utils/sendPush.js';
 const router = express.Router();
 
 /**
+ * ✅ HELPER: Calculate surge multipliers
+ */
+const getSurgeMultiplier = (pricingConfig, roleNeeded) => {
+  if (!pricingConfig?.surgePricing?.enabled) return 1;
+
+  if (roleNeeded === USER_ROLES.TOW_TRUCK) {
+    return pricingConfig.surgePricing.towTruckMultiplier || 1;
+  }
+
+  if (roleNeeded === USER_ROLES.MECHANIC) {
+    return pricingConfig.surgePricing.mechanicMultiplier || 1;
+  }
+
+  return 1;
+};
+
+/**
+ * ✅ HELPER: Calculate booking fee
+ *
+ * TowTruck → % of total
+ * Mechanic → fixed amount
+ */
+const calculateBookingFee = ({ roleNeeded, estimatedTotal, pricingConfig }) => {
+  const towPercent = pricingConfig?.bookingFees?.towTruckPercent || 15;
+  const mechanicFixed = pricingConfig?.bookingFees?.mechanicFixed || 200;
+
+  if (roleNeeded === USER_ROLES.TOW_TRUCK) {
+    return Math.round((estimatedTotal * towPercent) / 100);
+  }
+
+  if (roleNeeded === USER_ROLES.MECHANIC) {
+    let fee = mechanicFixed;
+
+    // ✅ Surge booking fee multiplier (mechanic)
+    const surgeFeeMult = pricingConfig?.surgePricing?.mechanicBookingFeeMultiplier || 1;
+    fee = Math.round(fee * surgeFeeMult);
+
+    return fee;
+  }
+
+  return 0;
+};
+
+/**
  * ✅ Broadcast job to nearest 10 matching providers
- * ✅ ALSO sends push notifications (Bolt style)
+ * ✅ ALSO sends push notifications
  */
 const broadcastJobToProviders = async (job) => {
   const [lng, lat] = job.pickupLocation.coordinates;
@@ -26,7 +70,7 @@ const broadcastJobToProviders = async (job) => {
     _id: { $nin: job.excludedProviders || [] }
   };
 
-  // TowTruck additional filters
+  // ✅ TowTruck filters
   if (role === USER_ROLES.TOW_TRUCK) {
     if (job.towTruckTypeNeeded) {
       providerQuery['providerProfile.towTruckTypes'] = job.towTruckTypeNeeded;
@@ -45,11 +89,9 @@ const broadcastJobToProviders = async (job) => {
     })
     .limit(10);
 
-  // ✅ Save broadcast list
   job.broadcastedTo = providers.map((p) => p._id);
   job.status = JOB_STATUSES.BROADCASTED;
 
-  // ✅ Track dispatch attempts
   job.dispatchAttempts = providers.map((p) => ({
     providerId: p._id,
     attemptedAt: new Date()
@@ -57,55 +99,58 @@ const broadcastJobToProviders = async (job) => {
 
   await job.save();
 
-  /**
-   * ✅ SEND PUSH NOTIFICATIONS (Bolt style)
-   */
-
+  // ✅ SEND PUSH
   try {
-  const providersWithTokens = providers.filter((p) => p.providerProfile?.fcmToken);
+    const providersWithTokens = providers.filter((p) => p.providerProfile?.fcmToken);
 
-  // ✅ DEBUG LOGGING
-  console.log("✅ Providers found:", providers.length);
-  console.log(
-    "✅ Providers with tokens:",
-    providersWithTokens.length,
-    providersWithTokens.map((p) => ({
-      id: p._id,
-      token: p.providerProfile?.fcmToken?.slice(0, 15) + "..."
-    }))
-  );
+    // ✅ DEBUG LOGGING
+    console.log("✅ Providers found:", providers.length);
+    console.log(
+      "✅ Providers with tokens:",
+      providersWithTokens.length,
+      providersWithTokens.map((p) => ({
+        id: p._id,
+        token: p.providerProfile?.fcmToken?.slice(0, 15) + "..."
+      }))
+    );
 
-  if (providersWithTokens.length > 0) {
-    const pushTitle = '🚨 New Job Request Near You';
+    if (providersWithTokens.length > 0) {
+      const pushTitle = '🚨 New Job Request Near You';
 
-    const towType = job.towTruckTypeNeeded ? `Tow Type: ${job.towTruckTypeNeeded}` : '';
-    const vehicle = job.vehicleType ? `Vehicle: ${job.vehicleType}` : '';
-    const pickup = job.pickupAddressText ? `Pickup: ${job.pickupAddressText}` : '';
+      const towType = job.towTruckTypeNeeded ? `Tow Type: ${job.towTruckTypeNeeded}` : '';
+      const vehicle = job.vehicleType ? `Vehicle: ${job.vehicleType}` : '';
+      const pickup = job.pickupAddressText ? `Pickup: ${job.pickupAddressText}` : '';
 
-    const pushBody =
-      `${job.title}\n` +
-      [towType, vehicle, pickup].filter(Boolean).join(' | ');
+      const pushBody =
+        `${job.title}\n` +
+        [towType, vehicle, pickup].filter(Boolean).join(' | ');
 
-    await sendPushToManyUsers({
-      userIds: providersWithTokens.map((p) => p._id),
-      title: pushTitle,
-      body: pushBody,
-      data: {
-        jobId: job._id.toString(),
-        roleNeeded: job.roleNeeded
-      }
-    });
+      await sendPushToManyUsers({
+        userIds: providersWithTokens.map((p) => p._id),
+        title: pushTitle,
+        body: pushBody,
+        data: {
+          jobId: job._id.toString(),
+          roleNeeded: job.roleNeeded
+        }
+      });
+    }
+  } catch (err) {
+    console.error('⚠️ Push notification failed:', err.message);
   }
-} catch (err) {
-  console.error('⚠️ Push notification failed:', err.message);
-}
 
   return providers;
 };
 
 /**
- * ✅ CUSTOMER creates job → system broadcasts to providers
+ * ✅ CUSTOMER creates job
  * POST /api/jobs
+ *
+ * ✅ NEW RULE:
+ * - Mechanic job total cannot be estimated
+ * - TowTruck job total is estimated
+ * - Booking Fee is calculated & stored
+ * - Job is NOT assigned until booking fee is PAID
  */
 router.post('/', auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => {
   try {
@@ -116,11 +161,9 @@ router.post('/', auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
       pickupLat,
       pickupLng,
       pickupAddressText,
-
       dropoffLat,
       dropoffLng,
       dropoffAddressText,
-
       towTruckTypeNeeded,
       vehicleType
     } = req.body;
@@ -131,7 +174,7 @@ router.post('/', auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
       });
     }
 
-    // ✅ TowTruck jobs require dropoff location
+    // ✅ TowTruck jobs require dropoff
     if (
       roleNeeded === USER_ROLES.TOW_TRUCK &&
       (dropoffLat === undefined || dropoffLng === undefined)
@@ -144,6 +187,8 @@ router.post('/', auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
     // ✅ Load pricing config
     let pricingConfig = await PricingConfig.findOne();
     if (!pricingConfig) pricingConfig = await PricingConfig.create({});
+
+    const surgeMult = getSurgeMultiplier(pricingConfig, roleNeeded);
 
     const baseFee = pricingConfig.baseFee || 0;
     const perKmFee = pricingConfig.perKmFee || 0;
@@ -159,11 +204,24 @@ router.post('/', auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
       ? pricingConfig.vehicleTypeMultipliers?.[vehicleType] || 1
       : 1;
 
-    const estimatedTotal = (baseFee + perKmFee * estimatedDistanceKm) * towMult * vehicleMult;
+    /**
+     * ✅ Mechanic total cannot be estimated
+     */
+    let estimatedTotal = 0;
 
-    const hasDropoff =
-      dropoffLat !== undefined &&
-      dropoffLng !== undefined;
+    if (roleNeeded === USER_ROLES.TOW_TRUCK) {
+      estimatedTotal =
+        (baseFee + perKmFee * estimatedDistanceKm) * towMult * vehicleMult * surgeMult;
+    }
+
+    const bookingFee = calculateBookingFee({ roleNeeded, estimatedTotal, pricingConfig });
+
+    const providerPayoutAmount =
+      roleNeeded === USER_ROLES.TOW_TRUCK
+        ? estimatedTotal - bookingFee
+        : 0; // Mechanic payout unknown
+
+    const hasDropoff = dropoffLat !== undefined && dropoffLng !== undefined;
 
     const job = await Job.create({
       title,
@@ -177,7 +235,6 @@ router.post('/', auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
 
       pickupAddressText,
 
-      // ✅ Only store dropoff if provided
       dropoffLocation: hasDropoff
         ? { type: 'Point', coordinates: [dropoffLng, dropoffLat] }
         : undefined,
@@ -198,15 +255,71 @@ router.post('/', auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
         estimatedDistanceKm,
         towTruckTypeMultiplier: towMult,
         vehicleTypeMultiplier: vehicleMult,
-        estimatedTotal
+        estimatedTotal,
+        bookingFee,
+        bookingFeePaid: false,
+        providerPayoutAmount
       }
     });
 
-    await broadcastJobToProviders(job);
+    /**
+     * ✅ Create payment immediately (booking fee only)
+     */
+    await Payment.create({
+      job: job._id,
+      customer: req.user._id,
+      amount: bookingFee,
+      currency: pricingConfig.currency || 'ZAR',
+      status: PAYMENT_STATUSES.PENDING,
+      provider: 'SIMULATION'
+    });
 
-    return res.status(201).json({ message: 'Job created and broadcasted', job });
+    return res.status(201).json({
+      message: 'Job created ✅. Booking fee payment required before provider assignment.',
+      job
+    });
   } catch (err) {
     return res.status(500).json({ message: 'Could not create job', error: err.message });
+  }
+});
+
+/**
+ * ✅ CUSTOMER pays booking fee → then system broadcasts job
+ * PATCH /api/jobs/:id/pay-booking
+ */
+router.patch('/:id/pay-booking', auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => {
+  try {
+    const job = await Job.findById(req.params.id);
+
+    if (!job) return res.status(404).json({ message: 'Job not found' });
+
+    if (job.customer.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ message: 'Not authorized to pay for this job' });
+    }
+
+    if (job.pricing.bookingFeePaid) {
+      return res.status(200).json({ message: 'Booking fee already paid', job });
+    }
+
+    // ✅ Payment record
+    const payment = await Payment.findOne({ job: job._id });
+    if (!payment) return res.status(404).json({ message: 'Payment record not found' });
+
+    payment.status = PAYMENT_STATUSES.PAID;
+    await payment.save();
+
+    job.pricing.bookingFeePaid = true;
+    await job.save();
+
+    // ✅ Now broadcast job
+    await broadcastJobToProviders(job);
+
+    return res.status(200).json({
+      message: 'Booking fee paid ✅ Job broadcasted to providers.',
+      job
+    });
+  } catch (err) {
+    return res.status(500).json({ message: 'Could not pay booking fee', error: err.message });
   }
 });
 
@@ -235,7 +348,6 @@ router.get('/available', auth, async (req, res) => {
 
 /**
  * ✅ Provider accepts broadcasted job
- * PATCH /api/jobs/:id/accept
  */
 router.patch('/:id/accept', auth, async (req, res) => {
   try {
@@ -273,7 +385,6 @@ router.patch('/:id/accept', auth, async (req, res) => {
 
 /**
  * ✅ Provider rejects job
- * PATCH /api/jobs/:id/reject
  */
 router.patch('/:id/reject', auth, async (req, res) => {
   try {
@@ -285,12 +396,10 @@ router.patch('/:id/reject', auth, async (req, res) => {
     const job = await Job.findById(req.params.id);
     if (!job) return res.status(404).json({ message: 'Job not found' });
 
-    // ✅ Remove provider from broadcast list
     job.broadcastedTo = job.broadcastedTo.filter(
       (id) => id.toString() !== req.user._id.toString()
     );
 
-    // ✅ Add provider to excludedProviders
     job.excludedProviders = job.excludedProviders || [];
     if (!job.excludedProviders.map(String).includes(req.user._id.toString())) {
       job.excludedProviders.push(req.user._id);
@@ -305,8 +414,10 @@ router.patch('/:id/reject', auth, async (req, res) => {
 });
 
 /**
- * ✅ Update job status
- * PATCH /api/jobs/:id/status
+ * ✅ Update job status (Assigned provider or Admin)
+ *
+ * TowTruck customer pays provider directly → no enforcement on completion
+ * Mechanic: booking fee paid first, rest paid later directly to provider
  */
 router.patch('/:id/status', auth, async (req, res) => {
   try {
@@ -330,20 +441,13 @@ router.patch('/:id/status', auth, async (req, res) => {
       });
     }
 
-    // ✅ Payment enforcement
+    // ✅ Ensure booking fee paid BEFORE starting
     if (
       [JOB_STATUSES.IN_PROGRESS, JOB_STATUSES.COMPLETED].includes(status) &&
+      !job.pricing.bookingFeePaid &&
       req.user.role !== USER_ROLES.ADMIN
     ) {
-      const payment = await Payment.findOne({ job: job._id });
-
-      if (!payment) {
-        return res.status(400).json({ message: 'Payment required before starting job' });
-      }
-
-      if (payment.status !== 'PAID') {
-        return res.status(400).json({ message: 'Payment must be PAID before starting job' });
-      }
+      return res.status(400).json({ message: 'Booking fee must be PAID before starting job' });
     }
 
     job.status = status;
@@ -357,7 +461,6 @@ router.patch('/:id/status', auth, async (req, res) => {
 
 /**
  * ✅ Get job by ID
- * GET /api/jobs/:id
  */
 router.get('/:id', auth, async (req, res) => {
   try {
@@ -390,7 +493,6 @@ router.get('/:id', auth, async (req, res) => {
 
 /**
  * ✅ Customer cancels job
- * PATCH /api/jobs/:id/cancel
  */
 router.patch('/:id/cancel', auth, authorizeRoles(USER_ROLES.CUSTOMER, USER_ROLES.ADMIN), async (req, res) => {
   try {
@@ -423,7 +525,6 @@ router.patch('/:id/cancel', auth, authorizeRoles(USER_ROLES.CUSTOMER, USER_ROLES
 
 /**
  * ✅ Customer active jobs
- * GET /api/jobs/my/active
  */
 router.get('/my/active', auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => {
   try {
@@ -449,7 +550,6 @@ router.get('/my/active', auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, 
 
 /**
  * ✅ Customer job history
- * GET /api/jobs/my/history
  */
 router.get('/my/history', auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => {
   try {

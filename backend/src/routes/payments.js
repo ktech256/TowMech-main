@@ -5,10 +5,13 @@ import auth from '../middleware/auth.js';
 import authorizeRoles from '../middleware/role.js';
 import { USER_ROLES } from '../models/User.js';
 
+// ✅ NEW: broadcast helper
+import { broadcastJobToProviders } from '../utils/broadcastJob.js';
+
 const router = express.Router();
 
 /**
- * ✅ Customer creates payment request for a Job
+ * ✅ Customer creates payment request for a Job (BOOKING FEE ONLY)
  * POST /api/payments/create
  */
 router.post('/create', auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => {
@@ -39,7 +42,14 @@ router.post('/create', auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, re
       return res.status(200).json({ message: 'Payment already exists', payment: existing });
     }
 
-    const amount = job.pricing?.estimatedTotal || 0;
+    // ✅ CHARGE BOOKING FEE ONLY
+    const amount = job.pricing?.bookingFee || 0;
+
+    if (amount <= 0) {
+      return res.status(400).json({
+        message: 'Booking fee is not set for this job. Cannot create payment.'
+      });
+    }
 
     const payment = await Payment.create({
       job: job._id,
@@ -51,7 +61,7 @@ router.post('/create', auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, re
     });
 
     return res.status(201).json({
-      message: 'Payment created (pending)',
+      message: 'Booking payment created (pending)',
       payment
     });
   } catch (err) {
@@ -114,7 +124,17 @@ router.patch('/job/:jobId/mark-paid', auth, async (req, res) => {
     payment.providerReference = `SIM-${Date.now()}`;
     await payment.save();
 
-    return res.status(200).json({ message: 'Payment marked PAID ✅ (simulation)', payment });
+    // ✅ Mark job bookingFeePaid and broadcast job
+    const job = await Job.findById(payment.job);
+    if (job) {
+      job.pricing.bookingFeePaid = true;
+      await job.save();
+
+      // ✅ BROADCAST + PUSH
+      await broadcastJobToProviders(job._id);
+    }
+
+    return res.status(200).json({ message: 'Booking fee PAID ✅ Job broadcasted ✅', payment });
   } catch (err) {
     return res.status(500).json({ message: 'Could not mark payment', error: err.message });
   }
@@ -123,8 +143,6 @@ router.patch('/job/:jobId/mark-paid', auth, async (req, res) => {
 /**
  * ✅ Mark payment PAID by PAYMENT ID (SIMULATION)
  * PATCH /api/payments/:paymentId/mark-paid
- *
- * ✅ This matches your CURL command
  */
 router.patch('/:paymentId/mark-paid', auth, async (req, res) => {
   try {
@@ -151,7 +169,17 @@ router.patch('/:paymentId/mark-paid', auth, async (req, res) => {
     payment.providerReference = `SIM-${Date.now()}`;
     await payment.save();
 
-    return res.status(200).json({ message: 'Payment marked PAID ✅ (simulation)', payment });
+    // ✅ Mark job bookingFeePaid and broadcast job
+    const job = await Job.findById(payment.job);
+    if (job) {
+      job.pricing.bookingFeePaid = true;
+      await job.save();
+
+      // ✅ BROADCAST + PUSH
+      await broadcastJobToProviders(job._id);
+    }
+
+    return res.status(200).json({ message: 'Booking fee PAID ✅ Job broadcasted ✅', payment });
   } catch (err) {
     return res.status(500).json({ message: 'Could not mark payment', error: err.message });
   }

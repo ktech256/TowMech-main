@@ -41,6 +41,9 @@ const providerProfileSchema = new mongoose.Schema(
     towTruckTypes: [{ type: String, enum: TOW_TRUCK_TYPES }],
     carTypesSupported: [{ type: String, enum: VEHICLE_TYPES }],
 
+    // ✅ Firebase token storage
+    fcmToken: { type: String, default: null },
+
     // ✅ Admin verification requirement
     verificationStatus: {
       type: String,
@@ -56,10 +59,7 @@ const providerProfileSchema = new mongoose.Schema(
       licenseUrl: { type: String, default: null },
       vehicleProofUrl: { type: String, default: null },
       workshopProofUrl: { type: String, default: null }
-    },
-
-    // ✅ Firebase token storage
-    fcmToken: { type: String, default: null }
+    }
   },
   { _id: false }
 );
@@ -81,6 +81,7 @@ const userSchema = new mongoose.Schema(
     otpCode: { type: String, default: null },
     otpExpiresAt: { type: Date, default: null },
 
+    // ✅ Only used for TowTruck + Mechanic users
     providerProfile: providerProfileSchema
   },
   { timestamps: true }
