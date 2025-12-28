@@ -8,10 +8,10 @@ import providerRoutes from './routes/providers.js';
 import paymentRoutes from './routes/payments.js';
 import notificationRoutes from './routes/notifications.js';
 
-// ✅ Admin Routes
+// ✅ Admin + Config Routes
 import pricingConfigRoutes from './routes/adminPricing.js';
 import adminProviderRoutes from './routes/adminProviders.js';
-import adminStatisticsRoutes from './routes/adminStatistics.js'; // ✅ NEW
+import adminStatisticsRoutes from './routes/adminStatistics.js';
 
 const app = express();
 
@@ -23,7 +23,7 @@ app.use(express.json());
 app.get('/health', (req, res) => res.status(200).json({ status: 'ok' }));
 
 /**
- * ✅ PUBLIC / GENERAL ROUTES
+ * ✅ PUBLIC ROUTES
  */
 app.use('/api/auth', authRoutes);
 app.use('/api/jobs', jobRoutes);
@@ -32,8 +32,8 @@ app.use('/api/payments', paymentRoutes);
 app.use('/api/notifications', notificationRoutes);
 
 /**
- * ✅ PRICING CONFIG ROUTE (Admin controlled)
- * ✅ Requirement: must be /api/pricing-config ✅
+ * ✅ Pricing Config (Your requirement ✅)
+ * /api/pricing-config
  */
 app.use('/api/pricing-config', pricingConfigRoutes);
 
@@ -41,10 +41,10 @@ app.use('/api/pricing-config', pricingConfigRoutes);
  * ✅ ADMIN ROUTES
  */
 app.use('/api/admin/providers', adminProviderRoutes);
-app.use('/api/admin/statistics', adminStatisticsRoutes); // ✅ NEW REGISTERED ROUTE
+app.use('/api/admin/statistics', adminStatisticsRoutes);
 
 /**
- * ✅ 404 Handler (helps debugging)
+ * ✅ 404 Handler
  */
 app.use((req, res) => {
   return res.status(404).json({ message: 'Route not found ❌' });
