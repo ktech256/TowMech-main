@@ -5,13 +5,13 @@ import auth from '../middleware/auth.js';
 import authorizeRoles from '../middleware/role.js';
 import { USER_ROLES } from '../models/User.js';
 
-// ✅ NEW: broadcast helper
+// ✅ Broadcast helper (ONLY AFTER PAYMENT)
 import { broadcastJobToProviders } from '../utils/broadcastJob.js';
 
 const router = express.Router();
 
 /**
- * ✅ Customer creates payment request for a Job (BOOKING FEE ONLY)
+ * ✅ Customer creates payment request (BOOKING FEE ONLY)
  * POST /api/payments/create
  */
 router.post('/create', auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => {
@@ -36,25 +36,26 @@ router.post('/create', auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, re
       return res.status(400).json({ message: `Cannot pay for job in status ${job.status}` });
     }
 
-    // ✅ Prevent duplicate payment requests
-    const existing = await Payment.findOne({ job: job._id });
-    if (existing) {
-      return res.status(200).json({ message: 'Payment already exists', payment: existing });
+    // ✅ Booking fee must exist
+    const bookingFee = job.pricing?.bookingFee || 0;
+    if (bookingFee <= 0) {
+      return res.status(400).json({ message: 'Booking fee is not set for this job' });
     }
 
-    // ✅ CHARGE BOOKING FEE ONLY
-    const amount = job.pricing?.bookingFee || 0;
-
-    if (amount <= 0) {
-      return res.status(400).json({
-        message: 'Booking fee is not set for this job. Cannot create payment.'
+    // ✅ Prevent duplicate booking fee payments
+    const existing = await Payment.findOne({ job: job._id });
+    if (existing) {
+      return res.status(200).json({
+        message: 'Payment already exists',
+        payment: existing
       });
     }
 
+    // ✅ Create payment request for booking fee only
     const payment = await Payment.create({
       job: job._id,
       customer: req.user._id,
-      amount,
+      amount: bookingFee,
       currency: job.pricing?.currency || 'ZAR',
       status: PAYMENT_STATUSES.PENDING,
       provider: 'SIMULATION'
@@ -81,7 +82,7 @@ router.get('/job/:jobId', auth, async (req, res) => {
       return res.status(404).json({ message: 'Payment not found for job' });
     }
 
-    // ✅ Customer can only view own payments
+    // ✅ Customer can only view own payment
     if (
       req.user.role === USER_ROLES.CUSTOMER &&
       payment.customer.toString() !== req.user._id.toString()
@@ -107,7 +108,12 @@ router.patch('/job/:jobId/mark-paid', auth, async (req, res) => {
       return res.status(404).json({ message: 'Payment not found for job' });
     }
 
-    // ✅ Customer can mark paid only for own job
+    // ✅ Only Admin or Customer
+    if (![USER_ROLES.ADMIN, USER_ROLES.CUSTOMER].includes(req.user.role)) {
+      return res.status(403).json({ message: 'Only Admin or Customer can mark payment as paid' });
+    }
+
+    // ✅ Customer must own payment
     if (
       req.user.role === USER_ROLES.CUSTOMER &&
       payment.customer.toString() !== req.user._id.toString()
@@ -115,26 +121,32 @@ router.patch('/job/:jobId/mark-paid', auth, async (req, res) => {
       return res.status(403).json({ message: 'Not authorized to mark this payment' });
     }
 
-    // ✅ Only Admin or Customer
-    if (![USER_ROLES.ADMIN, USER_ROLES.CUSTOMER].includes(req.user.role)) {
-      return res.status(403).json({ message: 'Only Admin or Customer can mark payment as paid' });
+    // ✅ If already paid
+    if (payment.status === PAYMENT_STATUSES.PAID) {
+      return res.status(200).json({ message: 'Payment already PAID ✅', payment });
     }
 
+    // ✅ Mark payment PAID
     payment.status = PAYMENT_STATUSES.PAID;
     payment.providerReference = `SIM-${Date.now()}`;
     await payment.save();
 
-    // ✅ Mark job bookingFeePaid and broadcast job
+    // ✅ Update job bookingFeePaid + broadcast job
     const job = await Job.findById(payment.job);
+
     if (job) {
       job.pricing.bookingFeePaid = true;
+      job.status = JOB_STATUSES.CREATED; // stays CREATED until broadcast sets BROADCASTED
       await job.save();
 
       // ✅ BROADCAST + PUSH
       await broadcastJobToProviders(job._id);
     }
 
-    return res.status(200).json({ message: 'Booking fee PAID ✅ Job broadcasted ✅', payment });
+    return res.status(200).json({
+      message: 'Booking fee PAID ✅ Job broadcasted ✅ Providers notified ✅',
+      payment
+    });
   } catch (err) {
     return res.status(500).json({ message: 'Could not mark payment', error: err.message });
   }
@@ -152,7 +164,12 @@ router.patch('/:paymentId/mark-paid', auth, async (req, res) => {
       return res.status(404).json({ message: 'Payment not found' });
     }
 
-    // ✅ Customer can mark paid only for own payment
+    // ✅ Only Admin or Customer
+    if (![USER_ROLES.ADMIN, USER_ROLES.CUSTOMER].includes(req.user.role)) {
+      return res.status(403).json({ message: 'Only Admin or Customer can mark payment as paid' });
+    }
+
+    // ✅ Customer must own payment
     if (
       req.user.role === USER_ROLES.CUSTOMER &&
       payment.customer.toString() !== req.user._id.toString()
@@ -160,26 +177,32 @@ router.patch('/:paymentId/mark-paid', auth, async (req, res) => {
       return res.status(403).json({ message: 'Not authorized to mark this payment' });
     }
 
-    // ✅ Only Admin or Customer
-    if (![USER_ROLES.ADMIN, USER_ROLES.CUSTOMER].includes(req.user.role)) {
-      return res.status(403).json({ message: 'Only Admin or Customer can mark payment as paid' });
+    // ✅ If already paid
+    if (payment.status === PAYMENT_STATUSES.PAID) {
+      return res.status(200).json({ message: 'Payment already PAID ✅', payment });
     }
 
+    // ✅ Mark payment PAID
     payment.status = PAYMENT_STATUSES.PAID;
     payment.providerReference = `SIM-${Date.now()}`;
     await payment.save();
 
-    // ✅ Mark job bookingFeePaid and broadcast job
+    // ✅ Update job bookingFeePaid + broadcast job
     const job = await Job.findById(payment.job);
+
     if (job) {
       job.pricing.bookingFeePaid = true;
+      job.status = JOB_STATUSES.CREATED;
       await job.save();
 
       // ✅ BROADCAST + PUSH
       await broadcastJobToProviders(job._id);
     }
 
-    return res.status(200).json({ message: 'Booking fee PAID ✅ Job broadcasted ✅', payment });
+    return res.status(200).json({
+      message: 'Booking fee PAID ✅ Job broadcasted ✅ Providers notified ✅',
+      payment
+    });
   } catch (err) {
     return res.status(500).json({ message: 'Could not mark payment', error: err.message });
   }
