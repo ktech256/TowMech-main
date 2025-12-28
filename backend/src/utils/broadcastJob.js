@@ -65,12 +65,21 @@ export const broadcastJobToProviders = async (jobId) => {
   await job.save();
 
   /**
-   * ✅ SEND PUSH NOTIFICATIONS
+   * ✅ SEND PUSH NOTIFICATIONS (WITH FULL DEBUG)
    */
   try {
     const providersWithTokens = providers.filter((p) => p.providerProfile?.fcmToken);
 
     console.log('✅ Providers with tokens:', providersWithTokens.length);
+
+    // ✅ Debug token preview
+    console.log(
+      '✅ Token preview:',
+      providersWithTokens.map((p) => ({
+        id: p._id.toString(),
+        token: p.providerProfile.fcmToken.slice(0, 15) + '...'
+      }))
+    );
 
     if (providersWithTokens.length > 0) {
       const pushTitle = '🚨 New Job Request Near You';
@@ -83,7 +92,8 @@ export const broadcastJobToProviders = async (jobId) => {
         `${job.title}\n` +
         [towType, vehicle, pickup].filter(Boolean).join(' | ');
 
-      await sendPushToManyUsers({
+      // ✅ Send push
+      const response = await sendPushToManyUsers({
         userIds: providersWithTokens.map((p) => p._id),
         title: pushTitle,
         body: pushBody,
@@ -93,10 +103,18 @@ export const broadcastJobToProviders = async (jobId) => {
         }
       });
 
+      console.log('✅ Firebase multicast response:', response);
+
+      // ✅ If any failures, log details
+      if (response?.failureCount > 0) {
+        console.log('⚠️ Push failures details:', response.responses);
+      }
+
       console.log('✅ Push notifications sent!');
     }
   } catch (err) {
-    console.error('⚠️ Push notification failed:', err.message);
+    // ✅ Log full error instead of only err.message
+    console.error('⚠️ Push notification failed FULL ERROR:', err);
   }
 
   return { message: 'Job broadcasted successfully', providers };
