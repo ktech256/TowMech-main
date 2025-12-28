@@ -86,10 +86,8 @@ router.get('/job/:jobId', auth, async (req, res) => {
 });
 
 /**
- * ✅ Mark payment PAID (SIMULATION)
+ * ✅ Mark payment PAID by JOB ID (SIMULATION)
  * PATCH /api/payments/job/:jobId/mark-paid
- *
- * ✅ Allowed: Admin or Customer (only own job)
  */
 router.patch('/job/:jobId/mark-paid', auth, async (req, res) => {
   try {
@@ -116,7 +114,44 @@ router.patch('/job/:jobId/mark-paid', auth, async (req, res) => {
     payment.providerReference = `SIM-${Date.now()}`;
     await payment.save();
 
-    return res.status(200).json({ message: 'Payment marked PAID (simulation)', payment });
+    return res.status(200).json({ message: 'Payment marked PAID ✅ (simulation)', payment });
+  } catch (err) {
+    return res.status(500).json({ message: 'Could not mark payment', error: err.message });
+  }
+});
+
+/**
+ * ✅ Mark payment PAID by PAYMENT ID (SIMULATION)
+ * PATCH /api/payments/:paymentId/mark-paid
+ *
+ * ✅ This matches your CURL command
+ */
+router.patch('/:paymentId/mark-paid', auth, async (req, res) => {
+  try {
+    const payment = await Payment.findById(req.params.paymentId);
+
+    if (!payment) {
+      return res.status(404).json({ message: 'Payment not found' });
+    }
+
+    // ✅ Customer can mark paid only for own payment
+    if (
+      req.user.role === USER_ROLES.CUSTOMER &&
+      payment.customer.toString() !== req.user._id.toString()
+    ) {
+      return res.status(403).json({ message: 'Not authorized to mark this payment' });
+    }
+
+    // ✅ Only Admin or Customer
+    if (![USER_ROLES.ADMIN, USER_ROLES.CUSTOMER].includes(req.user.role)) {
+      return res.status(403).json({ message: 'Only Admin or Customer can mark payment as paid' });
+    }
+
+    payment.status = PAYMENT_STATUSES.PAID;
+    payment.providerReference = `SIM-${Date.now()}`;
+    await payment.save();
+
+    return res.status(200).json({ message: 'Payment marked PAID ✅ (simulation)', payment });
   } catch (err) {
     return res.status(500).json({ message: 'Could not mark payment', error: err.message });
   }
