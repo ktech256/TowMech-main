@@ -13,6 +13,10 @@ import pricingConfigRoutes from './routes/adminPricing.js';
 import adminProviderRoutes from './routes/adminProviders.js';
 import adminStatisticsRoutes from './routes/adminStatistics.js';
 
+// ✅ NEW ROUTES (SuperAdmin + Admin User Management)
+import superAdminRoutes from './routes/superAdmin.js';
+import adminUsersRoutes from './routes/adminUsers.js';
+
 const app = express();
 
 /**
@@ -49,6 +53,12 @@ app.use('/api/pricing-config', pricingConfigRoutes);
  */
 app.use('/api/admin/providers', adminProviderRoutes);
 app.use('/api/admin/statistics', adminStatisticsRoutes);
+
+// ✅ Admin User Management (Suspend/Ban/Unban/Unsuspend)
+app.use('/api/admin', adminUsersRoutes);
+
+// ✅ SuperAdmin Admin-Management Routes (Create Admin, Update permissions, Archive)
+app.use('/api/super-admin', superAdminRoutes);
 
 /**
  * ✅ 404 Handler (Routes not found)

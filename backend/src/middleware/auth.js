@@ -1,5 +1,5 @@
 import jwt from 'jsonwebtoken';
-import User from '../models/User.js';
+import User, { USER_ROLES } from '../models/User.js';
 
 const auth = async (req, res, next) => {
   const authHeader = req.headers.authorization;
@@ -12,13 +12,38 @@ const auth = async (req, res, next) => {
 
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
+
     const user = await User.findById(decoded.id).select('-password');
 
     if (!user) {
       return res.status(401).json({ message: 'User not found' });
     }
 
+    const status = user.accountStatus || {};
+
+    // ✅ Block BANNED accounts
+    if (status.isBanned) {
+      return res.status(403).json({
+        message: 'Account is banned ❌'
+      });
+    }
+
+    // ✅ Block SUSPENDED accounts
+    if (status.isSuspended) {
+      return res.status(403).json({
+        message: 'Account is suspended ❌'
+      });
+    }
+
+    // ✅ Block ARCHIVED accounts
+    if (status.isArchived) {
+      return res.status(403).json({
+        message: 'Account is archived ❌'
+      });
+    }
+
     req.user = user;
+
     return next();
   } catch (err) {
     return res.status(401).json({ message: 'Invalid or expired token' });
