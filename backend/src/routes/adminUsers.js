@@ -6,15 +6,34 @@ import User, { USER_ROLES } from '../models/User.js';
 const router = express.Router();
 
 /**
+ * ✅ Block Suspended / Banned admins from doing actions
+ */
+const blockRestrictedAdmins = (req, res) => {
+  if (req.user.accountStatus?.isSuspended) {
+    res.status(403).json({ message: 'Your admin account is suspended ❌' });
+    return true;
+  }
+
+  if (req.user.accountStatus?.isBanned) {
+    res.status(403).json({ message: 'Your admin account is banned ❌' });
+    return true;
+  }
+
+  return false;
+};
+
+/**
  * ✅ ADMIN / SUPERADMIN: suspend a user
  * PATCH /api/admin/users/:id/suspend
  */
 router.patch(
   '/users/:id/suspend',
   auth,
-  authorizeRoles(USER_ROLES.ADMIN, USER_ROLES.SUPER_ADMIN),
+  authorizeRoles(USER_ROLES.ADMIN, USER_ROLES.SUPER_ADMIN, 'canManageUsers'),
   async (req, res) => {
     try {
+      if (blockRestrictedAdmins(req, res)) return;
+
       const { reason } = req.body;
 
       const target = await User.findById(req.params.id);
@@ -22,7 +41,7 @@ router.patch(
 
       // ✅ Admin cannot suspend SuperAdmin
       if (target.role === USER_ROLES.SUPER_ADMIN && req.user.role !== USER_ROLES.SUPER_ADMIN) {
-        return res.status(403).json({ message: 'Only SuperAdmin can suspend another SuperAdmin' });
+        return res.status(403).json({ message: 'Only SuperAdmin can suspend SuperAdmin ❌' });
       }
 
       if (!target.accountStatus) target.accountStatus = {};
@@ -51,9 +70,11 @@ router.patch(
 router.patch(
   '/users/:id/unsuspend',
   auth,
-  authorizeRoles(USER_ROLES.ADMIN, USER_ROLES.SUPER_ADMIN),
+  authorizeRoles(USER_ROLES.ADMIN, USER_ROLES.SUPER_ADMIN, 'canManageUsers'),
   async (req, res) => {
     try {
+      if (blockRestrictedAdmins(req, res)) return;
+
       const target = await User.findById(req.params.id);
       if (!target) return res.status(404).json({ message: 'User not found' });
 
@@ -83,16 +104,19 @@ router.patch(
 router.patch(
   '/users/:id/ban',
   auth,
-  authorizeRoles(USER_ROLES.ADMIN, USER_ROLES.SUPER_ADMIN),
+  authorizeRoles(USER_ROLES.ADMIN, USER_ROLES.SUPER_ADMIN, 'canManageUsers'),
   async (req, res) => {
     try {
+      if (blockRestrictedAdmins(req, res)) return;
+
       const { reason } = req.body;
 
       const target = await User.findById(req.params.id);
       if (!target) return res.status(404).json({ message: 'User not found' });
 
+      // ✅ Admin cannot ban SuperAdmin
       if (target.role === USER_ROLES.SUPER_ADMIN && req.user.role !== USER_ROLES.SUPER_ADMIN) {
-        return res.status(403).json({ message: 'Only SuperAdmin can ban another SuperAdmin' });
+        return res.status(403).json({ message: 'Only SuperAdmin can ban SuperAdmin ❌' });
       }
 
       if (!target.accountStatus) target.accountStatus = {};
@@ -121,9 +145,11 @@ router.patch(
 router.patch(
   '/users/:id/unban',
   auth,
-  authorizeRoles(USER_ROLES.ADMIN, USER_ROLES.SUPER_ADMIN),
+  authorizeRoles(USER_ROLES.ADMIN, USER_ROLES.SUPER_ADMIN, 'canManageUsers'),
   async (req, res) => {
     try {
+      if (blockRestrictedAdmins(req, res)) return;
+
       const target = await User.findById(req.params.id);
       if (!target) return res.status(404).json({ message: 'User not found' });
 
@@ -156,6 +182,8 @@ router.patch(
   authorizeRoles(USER_ROLES.SUPER_ADMIN),
   async (req, res) => {
     try {
+      if (blockRestrictedAdmins(req, res)) return;
+
       const target = await User.findById(req.params.id);
       if (!target) return res.status(404).json({ message: 'User not found' });
 

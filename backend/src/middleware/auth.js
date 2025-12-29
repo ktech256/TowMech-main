@@ -19,29 +19,40 @@ const auth = async (req, res, next) => {
       return res.status(401).json({ message: 'User not found' });
     }
 
+    /**
+     * ✅ BLOCK users based on accountStatus
+     * SuperAdmin is allowed to bypass (optional)
+     */
     const status = user.accountStatus || {};
 
-    // ✅ Block BANNED accounts
-    if (status.isBanned) {
-      return res.status(403).json({
-        message: 'Account is banned ❌'
-      });
+    // ✅ SuperAdmin bypass
+    const isSuperAdmin = user.role === USER_ROLES.SUPER_ADMIN;
+
+    if (!isSuperAdmin) {
+      if (status.isArchived) {
+        return res.status(403).json({
+          message: 'Account archived. Access denied.'
+        });
+      }
+
+      if (status.isBanned) {
+        return res.status(403).json({
+          message: 'Account banned. Access denied.',
+          reason: status.banReason || null
+        });
+      }
+
+      if (status.isSuspended) {
+        return res.status(403).json({
+          message: 'Account suspended. Access denied.',
+          reason: status.suspendReason || null
+        });
+      }
     }
 
-    // ✅ Block SUSPENDED accounts
-    if (status.isSuspended) {
-      return res.status(403).json({
-        message: 'Account is suspended ❌'
-      });
-    }
-
-    // ✅ Block ARCHIVED accounts
-    if (status.isArchived) {
-      return res.status(403).json({
-        message: 'Account is archived ❌'
-      });
-    }
-
+    /**
+     * ✅ Attach user to req
+     */
     req.user = user;
 
     return next();

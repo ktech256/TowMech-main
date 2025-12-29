@@ -28,13 +28,14 @@ router.get('/', async (req, res) => {
 });
 
 /**
- * ✅ UPDATE pricing config (Admin only)
+ * ✅ UPDATE pricing config
  * PATCH /api/pricing-config
+ * ✅ Only SuperAdmin OR Admin with canManagePricing ✅
  */
 router.patch(
   '/',
   auth,
-  authorizeRoles(USER_ROLES.ADMIN),
+  authorizeRoles(USER_ROLES.ADMIN, USER_ROLES.SUPER_ADMIN, 'canManagePricing'),
   async (req, res) => {
     try {
       let config = await PricingConfig.findOne();

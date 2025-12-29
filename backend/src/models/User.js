@@ -49,6 +49,8 @@ const permissionsSchema = new mongoose.Schema(
 
 /**
  * ✅ Account Status Schema
+ * Only visible by SuperAdmin
+ * Admin sees limited version via toSafeJSON()
  */
 const accountStatusSchema = new mongoose.Schema(
   {
@@ -64,7 +66,8 @@ const accountStatusSchema = new mongoose.Schema(
 
     isArchived: { type: Boolean, default: false },
     archivedAt: { type: Date, default: null },
-    archivedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null }
+    archivedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+    archiveReason: { type: String, default: null } // ✅ ADDED
   },
   { _id: false }
 );
@@ -157,6 +160,9 @@ userSchema.methods.matchPassword = async function (enteredPassword) {
 
 /**
  * ✅ Safe JSON output with role-based visibility
+ * - Customers/providers see NO accountStatus
+ * - Admin sees limited status + reasons
+ * - SuperAdmin sees FULL accountStatus
  */
 userSchema.methods.toSafeJSON = function (viewerRole) {
   const obj = this.toObject();
