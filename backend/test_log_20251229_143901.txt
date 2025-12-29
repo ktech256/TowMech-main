@@ -1,0 +1,47 @@
+ 
+===== TowMech Full Test Run 20251229_143901 =====
+BASE=http://localhost:5000
+
+[2025/12/29 14:39:01,37] STEP 0 - Health check
+[2025/12/29 14:39:01,50] STEP 1 - Ensure SuperAdmin exists (optional)
+[2025/12/29 14:39:01,53] Found src\scripts\createSuperAdmin.js - it
+✅ MongoDB connected
+⚠️ SuperAdmin already exists: superadmin@test.com
+[2025/12/29 14:39:03,66] STEP 2 - SuperAdmin login (OTP)
+[2025/12/29 14:39:05,33] Super OTP:  
+[2025/12/29 14:39:05,34] STEP 3 - SuperAdmin verify OTP (Token)
+[2025/12/29 14:39:06,00] Super token OK
+[2025/12/29 14:39:06,01] STEP 4 - SuperAdmin create Admin (admin_1474711693@test.com)
+[2025/12/29 14:39:06,60] Admin created OK:  
+[2025/12/29 14:39:06,61] STEP 5 - Admin login (OTP)
+[2025/12/29 14:39:07,36] STEP 5b - Admin verify OTP
+[2025/12/29 14:39:08,02] Admin token OK
+[2025/12/29 14:39:08,02] STEP 6 - Register Customer (customer_1474711693@test.com)
+[2025/12/29 14:39:08,86] Customer ID:  
+[2025/12/29 14:39:08,87] STEP 6b - Customer login (OTP)
+[2025/12/29 14:39:09,74] STEP 6c - Customer verify OTP
+[2025/12/29 14:39:10,37] Customer token OK
+[2025/12/29 14:39:10,38] STEP 7 - Register Provider (tow_1474711693@test.com)
+[2025/12/29 14:39:11,15] Provider ID:  
+[2025/12/29 14:39:11,16] STEP 7b - Provider login (OTP)
+[2025/12/29 14:39:12,01] STEP 7c - Provider verify OTP
+[2025/12/29 14:39:12,66] Provider token OK
+[2025/12/29 14:39:12,66] STEP 8 - Admin approves provider
+[2025/12/29 14:39:12,76] Approve provider response: 
+[2025/12/29 14:39:12,77] STEP 9 - Admin suspend customer
+[2025/12/29 14:39:12,83] Suspend response: 
+[2025/12/29 14:39:12,84] STEP 9b - Admin unsuspend customer
+[2025/12/29 14:39:12,91] Unsuspend response: 
+[2025/12/29 14:39:12,92] STEP 10 - Admin ban customer
+[2025/12/29 14:39:12,99] Ban response: 
+[2025/12/29 14:39:12,99] STEP 10b - Admin unban customer
+[2025/12/29 14:39:13,07] Unban response: 
+[2025/12/29 14:39:13,07] STEP 11 - SuperAdmin archive customer
+[2025/12/29 14:39:13,16] Archive response: 
+[2025/12/29 14:39:13,16] STEP 12 - Admin statistics test
+[2025/12/29 14:39:13,24] STEP 12b - Pricing config GET
+[2025/12/29 14:39:13,38] STEP 12c - Pricing config PATCH (requires admin pricing permission if enforced)
+[2025/12/29 14:39:13,45] STEP 13 - Create LIMITED admin (no canManageUsers)
+[2025/12/29 14:39:13,54] STEP 13b - Limited admin login
+[2025/12/29 14:39:14,75] STEP 13c - Limited admin tries suspend customer (should FAIL)
+[2025/12/29 14:39:14,80] Limited suspend attempt response: 

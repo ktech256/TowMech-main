@@ -1,0 +1,10 @@
+============================================ 
+✅ TowMech FULL AUTO TEST SCRIPT STARTING... 
+BASE: http://localhost:5000 
+LOGFILE: test_log_20251229_142351.txt 
+============================================ 
+ADMIN EMAIL: admin_20251229_142351_13092@test.com 
+CUSTOMER EMAIL: customer_20251229_142351_13092@test.com 
+ 
+✅ STEP 1: SuperAdmin LOGIN 
+Response: {"message":"OTP generated ✅ (placeholder - no SMS integration)","otp":"423786"} 

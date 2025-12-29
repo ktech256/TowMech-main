@@ -1,0 +1,9 @@
+===== TowMech Full Test Run 20251229_150815 =====
+BASE=http://localhost:5000
+
+[2025/12/29 15:08:15,28] STEP 0 - Health check
+[2025/12/29 15:08:15,69] REQUEST: GET http://localhost:5000/health
+[2025/12/29 15:08:15,70] RESPONSE: 
+[2025/12/29 15:08:15,71] ----
+[2025/12/29 15:08:15,73] Health response: 
+[2025/12/29 15:08:15,76] ❌ Health failed. Make sure server is running: npm run dev
