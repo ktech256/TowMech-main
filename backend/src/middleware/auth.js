@@ -20,32 +20,40 @@ const auth = async (req, res, next) => {
     }
 
     /**
+     * ✅ Role-based reason visibility
+     * Only Admin + SuperAdmin can see ban/suspend reasons
+     */
+    const canSeeReasons = [USER_ROLES.ADMIN, USER_ROLES.SUPER_ADMIN].includes(user.role);
+
+    /**
      * ✅ BLOCK users based on accountStatus
-     * SuperAdmin is allowed to bypass (optional)
+     * SuperAdmin bypass allowed (optional)
      */
     const status = user.accountStatus || {};
 
-    // ✅ SuperAdmin bypass
     const isSuperAdmin = user.role === USER_ROLES.SUPER_ADMIN;
 
     if (!isSuperAdmin) {
+      // ✅ Archived = blocked always
       if (status.isArchived) {
         return res.status(403).json({
           message: 'Account archived. Access denied.'
         });
       }
 
+      // ✅ Banned
       if (status.isBanned) {
         return res.status(403).json({
           message: 'Account banned. Access denied.',
-          reason: status.banReason || null
+          ...(canSeeReasons && { reason: status.banReason || null })
         });
       }
 
+      // ✅ Suspended
       if (status.isSuspended) {
         return res.status(403).json({
           message: 'Account suspended. Access denied.',
-          reason: status.suspendReason || null
+          ...(canSeeReasons && { reason: status.suspendReason || null })
         });
       }
     }
