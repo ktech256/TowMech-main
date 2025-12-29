@@ -24,7 +24,7 @@ const app = express();
  */
 app.use(cors());
 app.use(express.json());
-app.use(express.urlencoded({ extended: true })); // ✅ helps later with form-data / URL encoded payloads
+app.use(express.urlencoded({ extended: true }));
 
 /**
  * ✅ Health Check
@@ -57,8 +57,11 @@ app.use('/api/admin/statistics', adminStatisticsRoutes);
 // ✅ Admin User Management (Suspend/Ban/Unban/Unsuspend)
 app.use('/api/admin', adminUsersRoutes);
 
-// ✅ SuperAdmin Admin-Management Routes (Create Admin, Update permissions, Archive)
-app.use('/api/super-admin', superAdminRoutes);
+/**
+ * ✅ SUPER ADMIN ROUTES
+ * ✅ MUST BE /api/superadmin ✅
+ */
+app.use('/api/superadmin', superAdminRoutes);
 
 /**
  * ✅ 404 Handler (Routes not found)
@@ -79,7 +82,7 @@ app.use((err, req, res, next) => {
 
   return res.status(err.statusCode || 500).json({
     message: err.message || 'Internal Server Error',
-    ...(process.env.NODE_ENV === 'development' && { stack: err.stack }) // ✅ only in dev
+    ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
   });
 });
 
