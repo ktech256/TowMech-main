@@ -1,13 +1,12 @@
 import Job, { JOB_STATUSES } from '../models/Job.js';
-import User, { USER_ROLES } from '../models/User.js';
 import { sendPushToManyUsers } from './sendPush.js';
+import { findNearbyProviders } from './findNearbyProviders.js';
 
 /**
  * ✅ Broadcast job to nearest 10 matching providers
- * ✅ ALSO sends push notifications (Bolt style)
+ * ✅ Also sends push notifications (Bolt style)
  *
  * ✅ Called from:
- * - routes/jobs.js (job creation)
  * - routes/payments.js (after booking fee payment)
  */
 export const broadcastJobToProviders = async (jobId) => {
@@ -16,10 +15,8 @@ export const broadcastJobToProviders = async (jobId) => {
   if (!job) throw new Error('Job not found');
 
   /**
-   * ✅ BOOKING FEE CHECK (UPDATED)
-   * New fields:
-   * - bookingFeeStatus
-   * - bookingFeePaidAt
+   * ✅ BOOKING FEE CHECK
+   * Only broadcast if booking fee is PAID
    */
   const bookingFeePaid =
     job.pricing?.bookingFeeStatus === 'PAID' ||
@@ -34,34 +31,19 @@ export const broadcastJobToProviders = async (jobId) => {
 
   console.log('✅ Booking fee PAID → broadcasting job');
 
-  const [lng, lat] = job.pickupLocation.coordinates;
-  const role = job.roleNeeded;
+  const [pickupLng, pickupLat] = job.pickupLocation.coordinates;
 
-  const providerQuery = {
-    role,
-    'providerProfile.isOnline': true,
-    'providerProfile.verificationStatus': 'APPROVED',
-    _id: { $nin: job.excludedProviders || [] }
-  };
-
-  // ✅ TowTruck extra filters
-  if (role === USER_ROLES.TOW_TRUCK) {
-    if (job.towTruckTypeNeeded) {
-      providerQuery['providerProfile.towTruckTypes'] = job.towTruckTypeNeeded;
-    }
-    if (job.vehicleType) {
-      providerQuery['providerProfile.carTypesSupported'] = job.vehicleType;
-    }
-  }
-
-  const providers = await User.find(providerQuery)
-    .where('providerProfile.location')
-    .near({
-      center: { type: 'Point', coordinates: [lng, lat] },
-      maxDistance: 20000,
-      spherical: true
-    })
-    .limit(10);
+  // ✅ Find providers using shared helper
+  const providers = await findNearbyProviders({
+    roleNeeded: job.roleNeeded,
+    pickupLng,
+    pickupLat,
+    towTruckTypeNeeded: job.towTruckTypeNeeded,
+    vehicleType: job.vehicleType,
+    excludedProviders: job.excludedProviders || [],
+    maxDistanceMeters: 20000,
+    limit: 10
+  });
 
   console.log('✅ Providers found:', providers.length);
   console.log('✅ Provider IDs:', providers.map((p) => p._id.toString()));
@@ -79,7 +61,7 @@ export const broadcastJobToProviders = async (jobId) => {
   await job.save();
 
   /**
-   * ✅ SEND PUSH NOTIFICATIONS (FULL DEBUG)
+   * ✅ SEND PUSH NOTIFICATIONS
    */
   try {
     const providersWithTokens = providers
@@ -90,22 +72,6 @@ export const broadcastJobToProviders = async (jobId) => {
       .filter((p) => p.token);
 
     console.log('✅ Providers with tokens:', providersWithTokens.length);
-
-    console.log(
-      '✅ Token preview:',
-      providersWithTokens.map((p) => ({
-        id: p.id,
-        token: p.token.slice(0, 15) + '...'
-      }))
-    );
-
-    const missingTokens = providers
-      .filter((p) => !(p.providerProfile?.fcmToken || p.fcmToken))
-      .map((p) => p._id.toString());
-
-    if (missingTokens.length > 0) {
-      console.log('⚠️ Providers missing tokens:', missingTokens);
-    }
 
     if (providersWithTokens.length > 0) {
       const pushTitle = '🚨 New Job Request Near You';
@@ -127,19 +93,6 @@ export const broadcastJobToProviders = async (jobId) => {
       });
 
       console.log('✅ Firebase multicast response:', response);
-
-      if (response?.failureCount > 0) {
-        console.log(
-          '⚠️ Push failure responses:',
-          response.responses.map((r, i) => ({
-            index: i,
-            success: r.success,
-            error: r.error?.message || null,
-            code: r.error?.code || null
-          }))
-        );
-      }
-
       console.log('✅ Push notifications attempted ✅');
     } else {
       console.log('⚠️ No providers had tokens → push not sent.');

@@ -10,8 +10,18 @@ import { USER_ROLES } from '../models/User.js';
 const authorizeRoles = (...rolesOrPermission) => {
   let requiredPermission = null;
 
-  // ✅ If last argument is a string → treat as permission key
-  if (typeof rolesOrPermission[rolesOrPermission.length - 1] === 'string') {
+  // ✅ Known permission keys
+  const permissionKeys = [
+    "canManageUsers",
+    "canManagePricing",
+    "canViewStats",
+    "canVerifyProviders"
+  ];
+
+  // ✅ Only treat last argument as permission if it matches valid permission key
+  const lastArg = rolesOrPermission[rolesOrPermission.length - 1];
+
+  if (typeof lastArg === "string" && permissionKeys.includes(lastArg)) {
     requiredPermission = rolesOrPermission.pop();
   }
 
@@ -36,7 +46,7 @@ const authorizeRoles = (...rolesOrPermission) => {
     }
 
     /**
-     * ✅ SuperAdmin always allowed (after restriction checks)
+     * ✅ SuperAdmin always allowed
      */
     if (role === USER_ROLES.SUPER_ADMIN) {
       return next();
@@ -54,7 +64,7 @@ const authorizeRoles = (...rolesOrPermission) => {
     }
 
     /**
-     * ✅ If permission is required, check admin.permissions
+     * ✅ Permission check only for admins
      */
     if (requiredPermission) {
       if (!req.user.permissions || req.user.permissions[requiredPermission] !== true) {
