@@ -16,11 +16,13 @@ const generateToken = (userId, role) =>
  */
 router.post('/register', async (req, res) => {
   try {
+    console.log("🟦 REGISTER HIT");
+    console.log("📩 REGISTER BODY:", req.body);
+
     const { name, email, password, role = USER_ROLES.CUSTOMER } = req.body;
 
-    console.log('🟦 REGISTER HIT:', email);
-
     if (!name || !email || !password) {
+      console.log("🟥 REGISTER FAIL: Missing required fields");
       return res.status(400).json({ message: 'Name, email, and password are required' });
     }
 
@@ -31,6 +33,7 @@ router.post('/register', async (req, res) => {
     }
 
     if (!Object.values(USER_ROLES).includes(role)) {
+      console.log("🟥 REGISTER FAIL: Invalid role", role);
       return res.status(400).json({ message: 'Invalid role provided' });
     }
 
@@ -48,8 +51,13 @@ router.post('/register', async (req, res) => {
       }
     });
   } catch (err) {
-    console.error('❌ REGISTER ERROR:', err);
-    return res.status(500).json({ message: 'Registration failed', error: err.message });
+    console.error("❌ REGISTER ERROR MESSAGE:", err.message);
+    console.error("❌ REGISTER ERROR STACK:", err.stack);
+
+    return res.status(500).json({
+      message: 'Registration failed',
+      error: err.message
+    });
   }
 });
 
@@ -68,7 +76,6 @@ router.post('/login', async (req, res) => {
       return res.status(400).json({ message: 'Email and password are required' });
     }
 
-    // ✅ MUST include password for bcrypt to work
     const user = await User.findOne({ email });
 
     console.log('🟩 USER FOUND:', user ? 'YES ✅' : 'NO ❌');
