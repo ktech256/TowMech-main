@@ -280,6 +280,51 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
   }
 });
 
+
+/**
+ * ✅ CUSTOMER - GET ACTIVE JOBS
+ * ✅ GET /api/jobs/my/active
+ */
+router.get("/my/active", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => {
+  try {
+    const jobs = await Job.find({
+      customer: req.user._id,
+      status: { $in: [JOB_STATUSES.CREATED, JOB_STATUSES.ASSIGNED, JOB_STATUSES.IN_PROGRESS] }
+    }).sort({ createdAt: -1 });
+
+    return res.status(200).json({ jobs });
+  } catch (err) {
+    console.error("❌ CUSTOMER ACTIVE JOBS ERROR:", err);
+    return res.status(500).json({
+      message: "Failed to load active jobs",
+      error: err.message
+    });
+  }
+});
+
+
+/**
+ * ✅ CUSTOMER - GET JOB HISTORY
+ * ✅ GET /api/jobs/my/history
+ */
+router.get("/my/history", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => {
+  try {
+    const jobs = await Job.find({
+      customer: req.user._id,
+      status: { $in: [JOB_STATUSES.COMPLETED, JOB_STATUSES.CANCELLED] }
+    }).sort({ createdAt: -1 });
+
+    return res.status(200).json({ jobs });
+  } catch (err) {
+    console.error("❌ CUSTOMER JOB HISTORY ERROR:", err);
+    return res.status(500).json({
+      message: "Failed to load job history",
+      error: err.message
+    });
+  }
+});
+
+
 /**
  * ✅ Provider sees available jobs broadcasted to them
  * GET /api/jobs/available
