@@ -124,8 +124,8 @@ router.post("/create", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, re
       }
     });
 
-    // ✅ TEMP LOG
-    console.log("✅ iKhokha INIT RESPONSE:", ikhInit);
+    // ✅✅✅ TEMP LOG (FULL JSON so we can see exact keys)
+    console.log("✅ iKhokha INIT RESPONSE (FULL):", JSON.stringify(ikhInit, null, 2));
 
     if (!ikhInit) {
       return res.status(500).json({
@@ -144,6 +144,7 @@ router.post("/create", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, re
       payment,
       ikhokha: ikhInit
     });
+
   } catch (err) {
     console.error("❌ PAYMENT CREATE ERROR:", err);
     return res.status(500).json({ message: "Could not create payment", error: err.message });
@@ -203,6 +204,7 @@ router.get("/verify/paystack/:reference", auth, async (req, res) => {
       payment,
       broadcastResult
     });
+
   } catch (err) {
     console.error("❌ PAYSTACK VERIFY ERROR:", err);
     return res.status(500).json({ message: "Could not verify payment", error: err.message });
@@ -219,14 +221,12 @@ router.get("/verify/ikhokha/:reference", auth, async (req, res) => {
 
     const verifyRes = await verifyIKhokhaPayment(reference);
 
-    console.log("✅ iKhokha VERIFY RESPONSE:", verifyRes);
+    console.log("✅ iKhokha VERIFY RESPONSE (FULL):", JSON.stringify(verifyRes, null, 2));
 
     if (!verifyRes) {
       return res.status(400).json({ message: "iKhokha verification failed", verifyRes });
     }
 
-    // ✅ IMPORTANT: we confirm which field indicates success by logs
-    // For now assume:
     const status =
       verifyRes.paymentStatus || verifyRes.status || verifyRes.transactionStatus || "";
 
@@ -268,6 +268,7 @@ router.get("/verify/ikhokha/:reference", auth, async (req, res) => {
       payment,
       broadcastResult
     });
+
   } catch (err) {
     console.error("❌ IKHOKHA VERIFY ERROR:", err);
     return res.status(500).json({ message: "Could not verify payment", error: err.message });
@@ -292,6 +293,7 @@ router.get("/job/:jobId", auth, async (req, res) => {
     }
 
     return res.status(200).json({ payment });
+
   } catch (err) {
     console.error("❌ PAYMENT FETCH ERROR:", err);
     return res.status(500).json({ message: "Could not fetch payment", error: err.message });
@@ -344,6 +346,7 @@ router.patch("/job/:jobId/mark-paid", auth, async (req, res) => {
       payment,
       broadcastResult
     });
+
   } catch (err) {
     console.error("❌ MANUAL MARK-PAID ERROR:", err);
     return res.status(500).json({ message: "Could not mark payment", error: err.message });
