@@ -1,23 +1,32 @@
-import dotenv from 'dotenv';
-import app from './app.js';
-import connectDB from './config/db.js';
+import dotenv from "dotenv";
+import path from "path";
+import { fileURLToPath } from "url";
 
-dotenv.config();
+import app from "./app.js";
+import connectDB from "./config/db.js";
+
+// ✅ get current file path
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// ✅ FORCE LOAD backend/.env
+dotenv.config({ path: path.join(__dirname, "../.env") });
 
 const PORT = process.env.PORT || 5000;
 
-const startServer = async () => {
+(async () => {
   try {
+    console.log("✅ server.js started");
+    console.log("✅ ENV CHECK:", process.env.MONGODB_URI ? "Loaded ✅" : "Missing ❌");
+
     await connectDB();
+    console.log("✅ DB connected");
+
     app.listen(PORT, () => {
-      // eslint-disable-next-line no-console
-      console.log(`Server running on port ${PORT}`);
+      console.log(`✅ TowMech API running on http://localhost:${PORT}`);
     });
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('Failed to start server', err);
+    console.error("❌ Failed to start server:", err.message);
     process.exit(1);
   }
-};
-
-startServer();
+})();

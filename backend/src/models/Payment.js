@@ -21,10 +21,17 @@ const paymentSchema = new mongoose.Schema(
       default: PAYMENT_STATUSES.PENDING
     },
 
-    // ✅ Placeholder fields for future gateway integration
-    provider: { type: String, default: null }, // PayFast, Ozow, Stripe
-    providerReference: { type: String, default: null }, // transaction ID
-    providerPayload: { type: Object, default: null } // store callback response
+    // ✅ Placeholder fields for gateway integration
+    provider: { type: String, default: "PAYSTACK" }, // Paystack, Stripe, etc
+    providerReference: { type: String, default: null }, // Paystack reference
+    providerPayload: { type: Object, default: null }, // Store full Paystack callback response
+
+    // ✅ NEW ✅ Payment timestamps
+    paidAt: { type: Date, default: null },
+
+    // ✅ NEW ✅ Optional for refunds / disputes
+    refundedAt: { type: Date, default: null },
+    refundReference: { type: String, default: null }
   },
   { timestamps: true }
 );
