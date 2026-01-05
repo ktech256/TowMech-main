@@ -1,23 +1,22 @@
-import mongoose from 'mongoose';
+import dotenv from "dotenv";
+import app from "./app.js";
+import connectDB from "./config/db.js";
 
-import app from './app.js';
-import { config } from './config/index.js';
+dotenv.config();
 
-const start = async () => {
+const PORT = process.env.PORT || 5000;
+
+(async () => {
   try {
-    await mongoose.connect(config.mongoUri);
-    // eslint-disable-next-line no-console
-    console.log('Connected to MongoDB');
+    console.log("✅ server.js started");
+    await connectDB();
+    console.log("✅ DB connected");
 
-    app.listen(config.port, () => {
-      // eslint-disable-next-line no-console
-      console.log(`TowMech API running on port ${config.port}`);
+    app.listen(PORT, () => {
+      console.log(`✅ TowMech API running on http://localhost:${PORT}`);
     });
-  } catch (error) {
-    // eslint-disable-next-line no-console
-    console.error('Failed to start server', error);
+  } catch (err) {
+    console.error("❌ Failed to start server:", err.message);
     process.exit(1);
   }
-};
-
-start();
+})();
