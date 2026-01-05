@@ -29,60 +29,102 @@ console.log("✅ payments.js loaded ✅");
  * POST /api/payments/create
  * ✅ Creates payment record + initializes IKhokha OR Paystack
  */
-router.post("/create", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => {
-  try {
-    const { jobId, gateway } = req.body; // gateway = "PAYSTACK" or "IKHOKHA"
+router.post(
+  "/create",
+  auth,
+  authorizeRoles(USER_ROLES.CUSTOMER),
+  async (req, res) => {
+    try {
+      const { jobId, gateway } = req.body; // gateway = "PAYSTACK" or "IKHOKHA"
 
-    if (!jobId) return res.status(400).json({ message: "jobId is required" });
+      if (!jobId) return res.status(400).json({ message: "jobId is required" });
 
-    const job = await Job.findById(jobId);
-    if (!job) return res.status(404).json({ message: "Job not found" });
+      const job = await Job.findById(jobId);
+      if (!job) return res.status(404).json({ message: "Job not found" });
 
-    // ✅ Customer must own job
-    if (job.customer.toString() !== req.user._id.toString()) {
-      return res.status(403).json({ message: "Not authorized to pay for this job" });
-    }
+      // ✅ Customer must own job
+      if (job.customer.toString() !== req.user._id.toString()) {
+        return res
+          .status(403)
+          .json({ message: "Not authorized to pay for this job" });
+      }
 
-    // ✅ Cannot pay cancelled/completed jobs
-    if ([JOB_STATUSES.CANCELLED, JOB_STATUSES.COMPLETED].includes(job.status)) {
-      return res.status(400).json({ message: `Cannot pay for job in status ${job.status}` });
-    }
+      // ✅ Cannot pay cancelled/completed jobs
+      if ([JOB_STATUSES.CANCELLED, JOB_STATUSES.COMPLETED].includes(job.status)) {
+        return res
+          .status(400)
+          .json({ message: `Cannot pay for job in status ${job.status}` });
+      }
 
-    // ✅ Prevent duplicate payment requests
-    const existing = await Payment.findOne({ job: job._id });
-    if (existing) {
-      return res.status(200).json({
-        message: "Payment already exists ✅",
-        payment: existing
+      // ✅ Prevent duplicate payment requests
+      const existing = await Payment.findOne({ job: job._id });
+      if (existing) {
+        return res.status(200).json({
+          message: "Payment already exists ✅",
+          payment: existing
+        });
+      }
+
+      const bookingFee = job.pricing?.bookingFee || 0;
+      if (bookingFee <= 0) {
+        return res.status(400).json({
+          message: "Booking fee is not set for this job. Cannot create payment."
+        });
+      }
+
+      // ✅ Create payment record (Pending)
+      const payment = await Payment.create({
+        job: job._id,
+        customer: req.user._id,
+        amount: bookingFee,
+        currency: job.pricing?.currency || "ZAR",
+        status: PAYMENT_STATUSES.PENDING,
+        provider: gateway || "IKHOKHA"
       });
-    }
 
-    const bookingFee = job.pricing?.bookingFee || 0;
-    if (bookingFee <= 0) {
-      return res.status(400).json({
-        message: "Booking fee is not set for this job. Cannot create payment."
-      });
-    }
+      // ✅ Choose gateway (default = IKHOKHA)
+      const chosenGateway = (gateway || "IKHOKHA").toUpperCase();
 
-    // ✅ Create payment record (Pending)
-    const payment = await Payment.create({
-      job: job._id,
-      customer: req.user._id,
-      amount: bookingFee,
-      currency: job.pricing?.currency || "ZAR",
-      status: PAYMENT_STATUSES.PENDING,
-      provider: gateway || "IKHOKHA"
-    });
+      // ✅ PAYSTACK INIT
+      if (chosenGateway === "PAYSTACK") {
+        const paystackInit = await initializePaystackTransaction({
+          email: req.user.email,
+          amount: Math.round(bookingFee * 100),
+          currency: payment.currency,
+          metadata: {
+            jobId: job._id,
+            paymentId: payment._id,
+            customerId: req.user._id
+          }
+        });
 
-    // ✅ Choose gateway (default = IKHOKHA)
-    const chosenGateway = (gateway || "IKHOKHA").toUpperCase();
+        if (!paystackInit.status) {
+          return res.status(500).json({
+            message: "Failed to initialize Paystack transaction",
+            paystackInit
+          });
+        }
 
-    // ✅ PAYSTACK INIT
-    if (chosenGateway === "PAYSTACK") {
-      const paystackInit = await initializePaystackTransaction({
-        email: req.user.email,
-        amount: Math.round(bookingFee * 100),
+        payment.providerReference = paystackInit.data.reference;
+        await payment.save();
+
+        return res.status(201).json({
+          message: "Paystack payment initialized ✅",
+          payment,
+          paystack: {
+            authorization_url: paystackInit.data.authorization_url,
+            access_code: paystackInit.data.access_code,
+            reference: paystackInit.data.reference
+          }
+        });
+      }
+
+      // ✅ IKHOKHA INIT (DEFAULT)
+      const ikhInit = await initializeIKhokhaPayment({
+        amount: bookingFee,
         currency: payment.currency,
+        reference: `TM-${payment._id}`,
+        customerEmail: req.user.email,
         metadata: {
           jobId: job._id,
           paymentId: payment._id,
@@ -90,66 +132,56 @@ router.post("/create", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, re
         }
       });
 
-      if (!paystackInit.status) {
+      // ✅✅✅ TEMP LOG (FULL JSON so we can see exact keys)
+      console.log(
+        "✅ iKhokha INIT RESPONSE (FULL):",
+        JSON.stringify(ikhInit, null, 2)
+      );
+
+      if (!ikhInit) {
         return res.status(500).json({
-          message: "Failed to initialize Paystack transaction",
-          paystackInit
+          message: "Failed to initialize iKhokha transaction",
+          ikhInit
         });
       }
 
-      payment.providerReference = paystackInit.data.reference;
+      // ✅ ALWAYS use our generated reference (Android requires it)
+      const generatedReference = `TM-${payment._id}`;
+
+      // ✅ Extract payment URL no matter what field name iKhokha uses
+      const paymentUrl =
+        ikhInit.paymentUrl ||
+        ikhInit.redirectUrl ||
+        ikhInit.url ||
+        ikhInit.data?.paymentUrl ||
+        ikhInit.data?.redirectUrl ||
+        ikhInit.data?.url ||
+        null;
+
+      // ✅ Save reference + payload in DB
+      payment.providerReference = generatedReference;
+      payment.providerPayload = ikhInit;
       await payment.save();
 
+      // ✅ Return clean object Android expects
       return res.status(201).json({
-        message: "Paystack payment initialized ✅",
+        message: "iKhokha payment initialized ✅",
         payment,
-        paystack: {
-          authorization_url: paystackInit.data.authorization_url,
-          access_code: paystackInit.data.access_code,
-          reference: paystackInit.data.reference
+        ikhokha: {
+          reference: generatedReference,
+          paymentUrl,
+          raw: ikhInit
         }
       });
-    }
-
-    // ✅ IKHOKHA INIT (DEFAULT)
-    const ikhInit = await initializeIKhokhaPayment({
-      amount: bookingFee,
-      currency: payment.currency,
-      reference: `TM-${payment._id}`,
-      customerEmail: req.user.email,
-      metadata: {
-        jobId: job._id,
-        paymentId: payment._id,
-        customerId: req.user._id
-      }
-    });
-
-    // ✅✅✅ TEMP LOG (FULL JSON so we can see exact keys)
-    console.log("✅ iKhokha INIT RESPONSE (FULL):", JSON.stringify(ikhInit, null, 2));
-
-    if (!ikhInit) {
+    } catch (err) {
+      console.error("❌ PAYMENT CREATE ERROR:", err);
       return res.status(500).json({
-        message: "Failed to initialize iKhokha transaction",
-        ikhInit
+        message: "Could not create payment",
+        error: err.message
       });
     }
-
-    // ✅ Save reference
-    payment.providerReference = `TM-${payment._id}`;
-    payment.providerPayload = ikhInit;
-    await payment.save();
-
-    return res.status(201).json({
-      message: "iKhokha payment initialized ✅",
-      payment,
-      ikhokha: ikhInit
-    });
-
-  } catch (err) {
-    console.error("❌ PAYMENT CREATE ERROR:", err);
-    return res.status(500).json({ message: "Could not create payment", error: err.message });
   }
-});
+);
 
 /**
  * ✅ VERIFY PAYSTACK TRANSACTION
@@ -204,7 +236,6 @@ router.get("/verify/paystack/:reference", auth, async (req, res) => {
       payment,
       broadcastResult
     });
-
   } catch (err) {
     console.error("❌ PAYSTACK VERIFY ERROR:", err);
     return res.status(500).json({ message: "Could not verify payment", error: err.message });
@@ -268,7 +299,6 @@ router.get("/verify/ikhokha/:reference", auth, async (req, res) => {
       payment,
       broadcastResult
     });
-
   } catch (err) {
     console.error("❌ IKHOKHA VERIFY ERROR:", err);
     return res.status(500).json({ message: "Could not verify payment", error: err.message });
@@ -293,7 +323,6 @@ router.get("/job/:jobId", auth, async (req, res) => {
     }
 
     return res.status(200).json({ payment });
-
   } catch (err) {
     console.error("❌ PAYMENT FETCH ERROR:", err);
     return res.status(500).json({ message: "Could not fetch payment", error: err.message });
@@ -346,7 +375,6 @@ router.patch("/job/:jobId/mark-paid", auth, async (req, res) => {
       payment,
       broadcastResult
     });
-
   } catch (err) {
     console.error("❌ MANUAL MARK-PAID ERROR:", err);
     return res.status(500).json({ message: "Could not mark payment", error: err.message });
