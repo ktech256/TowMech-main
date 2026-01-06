@@ -34,7 +34,7 @@ router.post("/create", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, re
   console.log("✅ /api/payments/create HIT ✅", req.body);
 
   try {
-    const { jobId, gateway } = req.body; // gateway = "PAYSTACK" or "IKHOKHA"
+    const { jobId, gateway } = req.body;
     if (!jobId) return res.status(400).json({ message: "jobId is required" });
 
     const job = await Job.findById(jobId);
@@ -129,16 +129,11 @@ router.post("/create", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, re
      */
     const generatedReference = `TM-${payment._id}`;
 
+    // ✅ Only send what ikhoka.js expects now
     const ikhInit = await initializeIKhokhaPayment({
       amount: bookingFee,
       currency: payment.currency,
-      reference: generatedReference,
-      customerEmail: req.user.email,
-      metadata: {
-        jobId: job._id,
-        paymentId: payment._id,
-        customerId: req.user._id
-      }
+      reference: generatedReference
     });
 
     console.log("✅ iKhokha INIT RESPONSE (FULL):", JSON.stringify(ikhInit, null, 2));
@@ -150,9 +145,15 @@ router.post("/create", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, re
       });
     }
 
-    // ✅ PAYLINK RESPONSE FIELDS
-    const paymentUrl = ikhInit.paylinkUrl || null;
-    const externalTransactionID = ikhInit.externalTransactionID || generatedReference;
+    // ✅ iKhokha may return paylinkUrl OR paylinkUrlUrl (different docs)
+    const paymentUrl =
+      ikhInit.paylinkUrl ||
+      ikhInit.paylinkUrlUrl ||
+      ikhInit.url ||
+      null;
+
+    const externalTransactionID =
+      ikhInit.externalTransactionID || generatedReference;
 
     if (!paymentUrl) {
       return res.status(500).json({
@@ -172,7 +173,7 @@ router.post("/create", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, re
       payment,
       ikhokha: {
         reference: externalTransactionID,
-        paymentUrl: paymentUrl
+        paymentUrl
       }
     });
 
