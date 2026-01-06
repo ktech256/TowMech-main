@@ -6,6 +6,7 @@ const IKHOKHA_BASE_URL =
   process.env.IKHOKHA_BASE_URL || "https://api.ikhokha.com/public-api/v1";
 
 // ✅ ENV Vars (must exist in Render)
+const ENTITY_ID = process.env.IKHOKHA_ENTITY_ID; // ✅ REQUIRED
 const APP_KEY = process.env.IKHOKHA_APP_KEY;
 const APP_SECRET = process.env.IKHOKHA_APP_SECRET;
 
@@ -35,9 +36,10 @@ export const initializeIKhokhaPayment = async ({
   reference
 }) => {
   try {
-    // ✅ ENV CHECK (ENTITY REMOVED)
-    if (!APP_KEY || !APP_SECRET) {
+    // ✅ ENV CHECK
+    if (!ENTITY_ID || !APP_KEY || !APP_SECRET) {
       console.log("❌ iKhokha ENV Missing:", {
+        ENTITY_ID: ENTITY_ID ? "✅ present" : "❌ missing",
         APP_KEY: APP_KEY ? "✅ present" : "❌ missing",
         APP_SECRET: APP_SECRET ? "✅ present" : "❌ missing"
       });
@@ -48,8 +50,9 @@ export const initializeIKhokhaPayment = async ({
     // ✅ Convert amount to cents (smallest unit)
     const amountInCents = Math.round(Number(amount) * 100);
 
-    // ✅ PAYLOAD (ENTITY ID REMOVED)
+    // ✅ REQUIRED: entityID must exist in payload
     const payload = {
+      entityID: ENTITY_ID.trim(), // ✅ REQUIRED
       amount: amountInCents,
       currency: currency || "ZAR",
       requesterUrl: "https://towmech-main.onrender.com",
