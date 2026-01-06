@@ -87,7 +87,9 @@ router.post("/create", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, re
       await payment.save();
     }
 
-    // ✅ PAYSTACK INIT
+    /**
+     * ✅ PAYSTACK INIT
+     */
     if (chosenGateway === "PAYSTACK") {
       const paystackInit = await initializePaystackTransaction({
         email: req.user.email,
@@ -122,7 +124,9 @@ router.post("/create", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, re
       });
     }
 
-    // ✅ IKHOKHA INIT (DEFAULT)
+    /**
+     * ✅ IKHOKHA PAYLINK INIT (DEFAULT)
+     */
     const generatedReference = `TM-${payment._id}`;
 
     const ikhInit = await initializeIKhokhaPayment({
@@ -146,18 +150,19 @@ router.post("/create", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, re
       });
     }
 
-    // ✅ Extract payment URL no matter what field name iKhokha uses
-    const paymentUrl =
-      ikhInit.paymentUrl ||
-      ikhInit.redirectUrl ||
-      ikhInit.url ||
-      ikhInit.data?.paymentUrl ||
-      ikhInit.data?.redirectUrl ||
-      ikhInit.data?.url ||
-      null;
+    // ✅ PAYLINK RESPONSE FIELDS
+    const paymentUrl = ikhInit.paylinkUrl || null;
+    const externalTransactionID = ikhInit.externalTransactionID || generatedReference;
+
+    if (!paymentUrl) {
+      return res.status(500).json({
+        message: "iKhokha init succeeded but paylinkUrl missing ❌",
+        ikhInit
+      });
+    }
 
     // ✅ Store in DB
-    payment.providerReference = generatedReference;
+    payment.providerReference = externalTransactionID;
     payment.providerPayload = ikhInit;
     await payment.save();
 
@@ -166,9 +171,8 @@ router.post("/create", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, re
       message: "iKhokha payment initialized ✅",
       payment,
       ikhokha: {
-        reference: generatedReference,
-        paymentUrl,
-        raw: ikhInit
+        reference: externalTransactionID,
+        paymentUrl: paymentUrl
       }
     });
 
@@ -241,6 +245,7 @@ router.get("/verify/paystack/:reference", auth, async (req, res) => {
 
 /**
  * ✅ VERIFY IKHOKHA TRANSACTION
+ * (Paylink API does not provide verify endpoint)
  * GET /api/payments/verify/ikhokha/:reference
  */
 router.get("/verify/ikhokha/:reference", auth, async (req, res) => {
@@ -248,52 +253,15 @@ router.get("/verify/ikhokha/:reference", auth, async (req, res) => {
     const { reference } = req.params;
 
     const verifyRes = await verifyIKhokhaPayment(reference);
-    console.log("✅ iKhokha VERIFY RESPONSE (FULL):", JSON.stringify(verifyRes, null, 2));
 
-    if (!verifyRes) {
-      return res.status(400).json({ message: "iKhokha verification failed", verifyRes });
-    }
-
-    const status =
-      verifyRes.paymentStatus || verifyRes.status || verifyRes.transactionStatus || "";
-
-    if (status.toString().toUpperCase() !== "SUCCESS") {
-      return res.status(400).json({
-        message: "Payment not successful",
-        statusField: status,
-        verifyRes
-      });
-    }
-
-    const payment = await Payment.findOne({ providerReference: reference });
-    if (!payment) return res.status(404).json({ message: "Payment record not found" });
-
-    if (payment.customer.toString() !== req.user._id.toString()) {
-      return res.status(403).json({ message: "Not authorized to verify this payment" });
-    }
-
-    if (payment.status === PAYMENT_STATUSES.PAID) {
-      return res.status(200).json({ message: "Payment already verified ✅", payment });
-    }
-
-    payment.status = PAYMENT_STATUSES.PAID;
-    payment.paidAt = new Date();
-    await payment.save();
-
-    const job = await Job.findById(payment.job);
-    if (!job) return res.status(404).json({ message: "Job not found" });
-
-    job.pricing.bookingFeeStatus = "PAID";
-    job.pricing.bookingFeePaidAt = new Date();
-    await job.save();
-
-    const broadcastResult = await broadcastJobToProviders(job._id);
+    console.log("✅ iKhokha VERIFY RESPONSE:", verifyRes);
 
     return res.status(200).json({
-      message: "iKhokha payment verified ✅ Job broadcasted ✅",
-      payment,
-      broadcastResult
+      message: "iKhokha Paylink API does not support direct verify yet",
+      reference,
+      verifyRes
     });
+
   } catch (err) {
     console.error("❌ IKHOKHA VERIFY ERROR:", err);
     return res.status(500).json({ message: "Could not verify payment", error: err.message });
