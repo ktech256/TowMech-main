@@ -80,13 +80,30 @@ router.post(
         });
       }
 
-      // ✅ Load PricingConfig (includes towTruckTypes)
+      // ✅ Load PricingConfig
       let config = await PricingConfig.findOne();
       if (!config) config = await PricingConfig.create({});
 
-      const towTruckTypes = config.towTruckTypes || [];
+      let towTruckTypes = config.towTruckTypes || [];
 
-      // ✅ STEP 1 DEBUG LOG ✅✅✅
+      // ✅ FIX: Ensure towTruckTypes is never empty
+      if (!towTruckTypes || towTruckTypes.length === 0) {
+        console.log("⚠️ towTruckTypes empty → setting defaults...");
+
+        config.towTruckTypes = [
+          "Flatbed",
+          "TowTruck",
+          "Rollback",
+          "TowTruck-XL",
+          "TowTruck-XXL",
+          "Recovery"
+        ];
+
+        await config.save();
+        towTruckTypes = config.towTruckTypes;
+      }
+
+      // ✅ DEBUG LOG
       console.log("✅ towTruckTypes:", towTruckTypes);
 
       // ✅ Compute real distance (TowTruck jobs only)
@@ -253,7 +270,6 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
       });
     }
 
-    // ✅ Distance (for accurate pricing)
     const distanceKm =
       roleNeeded === USER_ROLES.TOW_TRUCK &&
       dropoffLat !== undefined &&
@@ -261,7 +277,6 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
         ? haversineDistanceKm(pickupLat, pickupLng, dropoffLat, dropoffLng)
         : 0;
 
-    // ✅ Pricing using calculateJobPricing()
     const pricing = await calculateJobPricing({
       roleNeeded,
       pickupLat,
@@ -280,7 +295,6 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
         ? "DIRECT_TO_PROVIDER"
         : "PAY_AFTER_SERVICE";
 
-    // ✅ CREATE JOB
     const job = await Job.create({
       title,
       description,
@@ -304,7 +318,6 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
       }
     });
 
-    // ✅ CREATE PAYMENT
     const payment = await Payment.create({
       job: job._id,
       customer: req.user._id,
