@@ -13,7 +13,7 @@ export const USER_ROLES = {
 };
 
 /**
- * ✅ PROVIDER TYPES
+ * ✅ PROVIDER TYPES (TowTruck types)
  */
 export const TOW_TRUCK_TYPES = [
   'Flatbed',
@@ -67,7 +67,7 @@ const accountStatusSchema = new mongoose.Schema(
     isArchived: { type: Boolean, default: false },
     archivedAt: { type: Date, default: null },
     archivedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
-    archiveReason: { type: String, default: null } // ✅ ADDED
+    archiveReason: { type: String, default: null }
   },
   { _id: false }
 );
@@ -85,7 +85,10 @@ const providerProfileSchema = new mongoose.Schema(
       coordinates: { type: [Number], default: [0, 0] }
     },
 
+    // ✅ TowTruck providers select from these
     towTruckTypes: [{ type: String, enum: TOW_TRUCK_TYPES }],
+
+    // ✅ Mechanic providers may use this later
     carTypesSupported: [{ type: String, enum: VEHICLE_TYPES }],
 
     fcmToken: { type: String, default: null },
@@ -114,10 +117,28 @@ const providerProfileSchema = new mongoose.Schema(
  */
 const userSchema = new mongoose.Schema(
   {
+    // ✅ Basic identity
     name: { type: String, required: true },
 
-    email: { type: String, required: true, unique: true, lowercase: true },
+    firstName: { type: String, required: true },
+    lastName: { type: String, required: true },
 
+    phone: { type: String, required: true },
+
+    birthday: { type: Date, required: true },
+
+    nationalityType: {
+      type: String,
+      enum: ['SouthAfrican', 'ForeignNational'],
+      required: true
+    },
+
+    saIdNumber: { type: String, default: null },
+    passportNumber: { type: String, default: null },
+    country: { type: String, default: null },
+
+    // ✅ Auth
+    email: { type: String, required: true, unique: true, lowercase: true },
     password: { type: String, required: true },
 
     role: {
