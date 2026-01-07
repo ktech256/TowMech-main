@@ -39,7 +39,7 @@ function haversineDistanceKm(lat1, lng1, lat2, lng2) {
 /**
  * ✅ PREVIEW JOB
  * ✅ Returns pricing estimate without creating job
- * ✅ If towTruckTypeNeeded is missing -> returns results for ALL tow truck types
+ * ✅ If towTruckTypeNeeded missing -> returns results for ALL tow truck types
  * POST /api/jobs/preview
  */
 router.post(
@@ -62,12 +62,12 @@ router.post(
         dropoffLng,
         dropoffAddressText,
         towTruckTypeNeeded,
-        vehicleType
+        vehicleType,
       } = req.body;
 
       if (!title || !roleNeeded || pickupLat === undefined || pickupLng === undefined) {
         return res.status(400).json({
-          message: "title, roleNeeded, pickupLat, pickupLng are required"
+          message: "title, roleNeeded, pickupLat, pickupLng are required",
         });
       }
 
@@ -76,7 +76,7 @@ router.post(
         (dropoffLat === undefined || dropoffLng === undefined)
       ) {
         return res.status(400).json({
-          message: "TowTruck jobs require dropoffLat and dropoffLng"
+          message: "TowTruck jobs require dropoffLat and dropoffLng",
         });
       }
 
@@ -96,17 +96,16 @@ router.post(
           "Rollback",
           "TowTruck-XL",
           "TowTruck-XXL",
-          "Recovery"
+          "Recovery",
         ];
 
         await config.save();
         towTruckTypes = config.towTruckTypes;
       }
 
-      // ✅ DEBUG LOG
       console.log("✅ towTruckTypes:", towTruckTypes);
 
-      // ✅ Compute real distance (TowTruck jobs only)
+      // ✅ Compute distance (TowTruck jobs only)
       const distanceKm =
         roleNeeded === USER_ROLES.TOW_TRUCK &&
         dropoffLat !== undefined &&
@@ -126,7 +125,7 @@ router.post(
           dropoffLng,
           towTruckTypeNeeded,
           vehicleType,
-          distanceKm
+          distanceKm,
         });
 
         const providers = await findNearbyProviders({
@@ -137,7 +136,7 @@ router.post(
           vehicleType,
           excludedProviders: [],
           maxDistanceMeters: 20000,
-          limit: 10
+          limit: 10,
         });
 
         return res.status(200).json({
@@ -147,12 +146,13 @@ router.post(
             providers.length > 0
               ? "Providers found ✅ Please pay booking fee to proceed"
               : "No providers online within range. Booking fee not required.",
-          preview: pricing
+          preview: pricing,
         });
       }
 
       /**
-       * ✅ CASE 2: towTruckTypeNeeded missing → return pricing + ONLINE/OFFLINE per tow truck type
+       * ✅ CASE 2: towTruckTypeNeeded missing
+       * ✅ return pricing + ONLINE/OFFLINE per tow truck type
        */
       const resultsByTowTruckType = {};
 
@@ -165,10 +165,10 @@ router.post(
           dropoffLng,
           towTruckTypeNeeded: type,
           vehicleType,
-          distanceKm
+          distanceKm,
         });
 
-        // ✅ Check providers for THIS towTruckType
+        // ✅ Providers for THIS towTruckType
         const providersForType = await findNearbyProviders({
           roleNeeded,
           pickupLng,
@@ -177,7 +177,7 @@ router.post(
           vehicleType,
           excludedProviders: [],
           maxDistanceMeters: 20000,
-          limit: 10
+          limit: 10,
         });
 
         resultsByTowTruckType[type] = {
@@ -188,9 +188,9 @@ router.post(
           towTruckTypeMultiplier: pricing.towTruckTypeMultiplier,
           vehicleTypeMultiplier: pricing.vehicleTypeMultiplier,
 
-          // ✅ NEW: availability
+          // ✅ NEW: Availability data
           providersCount: providersForType.length,
-          status: providersForType.length > 0 ? "ONLINE" : "OFFLINE"
+          status: providersForType.length > 0 ? "ONLINE" : "OFFLINE",
         };
       }
 
@@ -203,7 +203,7 @@ router.post(
         vehicleType,
         excludedProviders: [],
         maxDistanceMeters: 20000,
-        limit: 10
+        limit: 10,
       });
 
       return res.status(200).json({
@@ -216,15 +216,14 @@ router.post(
         preview: {
           currency: config.currency || "ZAR",
           distanceKm,
-          resultsByTowTruckType
-        }
+          resultsByTowTruckType,
+        },
       });
-
     } catch (err) {
       console.error("❌ PREVIEW ERROR:", err);
       return res.status(500).json({
         message: "Could not preview job",
-        error: err.message
+        error: err.message,
       });
     }
   }
@@ -251,12 +250,12 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
       dropoffLng,
       dropoffAddressText,
       towTruckTypeNeeded,
-      vehicleType
+      vehicleType,
     } = req.body;
 
     if (!title || !roleNeeded || pickupLat === undefined || pickupLng === undefined) {
       return res.status(400).json({
-        message: "title, roleNeeded, pickupLat, pickupLng are required"
+        message: "title, roleNeeded, pickupLat, pickupLng are required",
       });
     }
 
@@ -265,7 +264,7 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
       (dropoffLat === undefined || dropoffLng === undefined)
     ) {
       return res.status(400).json({
-        message: "TowTruck jobs require dropoffLat and dropoffLng"
+        message: "TowTruck jobs require dropoffLat and dropoffLng",
       });
     }
 
@@ -277,12 +276,12 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
       vehicleType,
       excludedProviders: [],
       maxDistanceMeters: 20000,
-      limit: 10
+      limit: 10,
     });
 
     if (!providers || providers.length === 0) {
       return res.status(400).json({
-        message: "No providers online within range. Cannot create job."
+        message: "No providers online within range. Cannot create job.",
       });
     }
 
@@ -301,15 +300,13 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
       dropoffLng,
       towTruckTypeNeeded,
       vehicleType,
-      distanceKm
+      distanceKm,
     });
 
     const hasDropoff = dropoffLat !== undefined && dropoffLng !== undefined;
 
     const paymentMode =
-      roleNeeded === USER_ROLES.TOW_TRUCK
-        ? "DIRECT_TO_PROVIDER"
-        : "PAY_AFTER_SERVICE";
+      roleNeeded === USER_ROLES.TOW_TRUCK ? "DIRECT_TO_PROVIDER" : "PAY_AFTER_SERVICE";
 
     const job = await Job.create({
       title,
@@ -330,8 +327,8 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
         ...pricing,
         bookingFeeStatus: "PENDING",
         bookingFeePaidAt: null,
-        bookingFeeRefundedAt: null
-      }
+        bookingFeeRefundedAt: null,
+      },
     });
 
     const payment = await Payment.create({
@@ -340,20 +337,19 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
       amount: pricing.bookingFee,
       currency: pricing.currency,
       status: PAYMENT_STATUSES.PENDING,
-      provider: "SIMULATION"
+      provider: "SIMULATION",
     });
 
     return res.status(201).json({
       message: `Job created ✅ Providers found: ${providers.length}. Booking fee required.`,
       job,
-      payment
+      payment,
     });
-
   } catch (err) {
     console.error("❌ CREATE JOB ERROR:", err);
     return res.status(500).json({
       message: "Could not create job",
-      error: err.message
+      error: err.message,
     });
   }
 });
