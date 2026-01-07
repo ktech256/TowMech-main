@@ -1,28 +1,25 @@
-// backend/src/utils/calculateJobPricing.js
-
 import PricingConfig from "../models/PricingConfig.js";
 import { USER_ROLES } from "../models/User.js";
 
 /**
- * ✅ Calculate distance using Haversine Formula (KM)
+ * ✅ Haversine distance fallback (KM)
  */
 const haversineDistanceKm = (lat1, lng1, lat2, lng2) => {
   const toRad = (value) => (value * Math.PI) / 180;
+  const R = 6371;
 
-  const R = 6371; // Earth radius in km
   const dLat = toRad(lat2 - lat1);
   const dLng = toRad(lng2 - lng1);
 
   const a =
-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.sin(dLat / 2) ** 2 +
     Math.cos(toRad(lat1)) *
       Math.cos(toRad(lat2)) *
-      Math.sin(dLng / 2) *
-      Math.sin(dLng / 2);
+      Math.sin(dLng / 2) ** 2;
 
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 
-  return Math.round(R * c * 10) / 10; // ✅ 1 decimal
+  return Math.round(R * c * 10) / 10;
 };
 
 /**
@@ -36,11 +33,8 @@ export const calculateJobPricing = async ({
   dropoffLng,
   towTruckTypeNeeded,
   vehicleType,
-
-  // ✅ NEW OPTIONAL INPUT ✅
-  distanceKm
+  distanceKm // ✅ NEW
 }) => {
-  // ✅ Load config
   let pricingConfig = await PricingConfig.findOne();
   if (!pricingConfig) pricingConfig = await PricingConfig.create({});
 
@@ -48,19 +42,17 @@ export const calculateJobPricing = async ({
   const perKmFee = pricingConfig.perKmFee || 0;
   const currency = pricingConfig.currency || "ZAR";
 
-  /**
-   * ✅ Determine distance (TowTruck only)
-   * Priority:
-   * 1️⃣ use distanceKm if provided
-   * 2️⃣ else compute using Haversine
-   * 3️⃣ else fallback to 0
-   */
+  // ✅ Use provided distanceKm if exists, else compute fallback
   let estimatedDistanceKm = 0;
 
-  if (roleNeeded === USER_ROLES.TOW_TRUCK) {
-    if (distanceKm !== undefined && distanceKm !== null && !isNaN(distanceKm)) {
+  if (
+    roleNeeded === USER_ROLES.TOW_TRUCK &&
+    dropoffLat !== undefined &&
+    dropoffLng !== undefined
+  ) {
+    if (distanceKm !== undefined && distanceKm !== null) {
       estimatedDistanceKm = Number(distanceKm);
-    } else if (dropoffLat !== undefined && dropoffLng !== undefined) {
+    } else {
       estimatedDistanceKm = haversineDistanceKm(
         pickupLat,
         pickupLng,
@@ -85,7 +77,6 @@ export const calculateJobPricing = async ({
     ? pricingConfig.surge?.multiplier || 1
     : 1;
 
-  // ✅ Base total (TowTruck only)
   const estimatedTotal =
     roleNeeded === USER_ROLES.TOW_TRUCK
       ? (baseFee + perKmFee * estimatedDistanceKm) *
@@ -122,14 +113,11 @@ export const calculateJobPricing = async ({
     baseFee,
     perKmFee,
     estimatedDistanceKm,
-
     towTruckTypeMultiplier: towMult,
     vehicleTypeMultiplier: vehicleMult,
     surgeMultiplier,
-
     estimatedTotal: Math.round(estimatedTotal),
     bookingFee,
-
     commissionAmount,
     providerAmountDue
   };

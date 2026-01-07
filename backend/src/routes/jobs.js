@@ -27,8 +27,10 @@ function haversineDistanceKm(lat1, lng1, lat2, lng2) {
 
   const a =
     Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
-    Math.sin(dLng / 2) * Math.sin(dLng / 2);
+    Math.cos(toRad(lat1)) *
+      Math.cos(toRad(lat2)) *
+      Math.sin(dLng / 2) *
+      Math.sin(dLng / 2);
 
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   return Number((R * c).toFixed(2));
@@ -78,19 +80,23 @@ router.post(
         });
       }
 
-      // ✅ Get config to know towTruckTypes
+      // ✅ Load PricingConfig (includes towTruckTypes)
       let config = await PricingConfig.findOne();
       if (!config) config = await PricingConfig.create({});
 
-      const towTruckTypes = User.TOW_TRUCK_TYPES || [];
+      const towTruckTypes = config.towTruckTypes || [];
 
-      // ✅ Compute real distance (only for tow truck)
+      // ✅ Compute real distance (TowTruck jobs only)
       const distanceKm =
-        roleNeeded === USER_ROLES.TOW_TRUCK && dropoffLat !== undefined && dropoffLng !== undefined
+        roleNeeded === USER_ROLES.TOW_TRUCK &&
+        dropoffLat !== undefined &&
+        dropoffLng !== undefined
           ? haversineDistanceKm(pickupLat, pickupLng, dropoffLat, dropoffLng)
           : 0;
 
-      // ✅ If towTruckTypeNeeded exists -> normal preview
+      /**
+       * ✅ CASE 1: towTruckTypeNeeded provided → return single preview result
+       */
       if (towTruckTypeNeeded) {
         const pricing = await calculateJobPricing({
           roleNeeded,
@@ -100,7 +106,7 @@ router.post(
           dropoffLng,
           towTruckTypeNeeded,
           vehicleType,
-          distanceKm // ✅ pass into calculateJobPricing
+          distanceKm
         });
 
         const providers = await findNearbyProviders({
@@ -114,24 +120,20 @@ router.post(
           limit: 10
         });
 
-        if (!providers || providers.length === 0) {
-          return res.status(200).json({
-            providersFound: false,
-            providerCount: 0,
-            message: "No providers online within range. Booking fee not required.",
-            preview: pricing
-          });
-        }
-
         return res.status(200).json({
-          providersFound: true,
+          providersFound: providers.length > 0,
           providerCount: providers.length,
-          message: "Providers found ✅ Please pay booking fee to proceed",
+          message:
+            providers.length > 0
+              ? "Providers found ✅ Please pay booking fee to proceed"
+              : "No providers online within range. Booking fee not required.",
           preview: pricing
         });
       }
 
-      // ✅ Otherwise: return pricing for ALL tow truck types in one API call
+      /**
+       * ✅ CASE 2: towTruckTypeNeeded missing → return pricing for ALL tow truck types
+       */
       const resultsByTowTruckType = {};
 
       for (const type of towTruckTypes) {
@@ -156,7 +158,7 @@ router.post(
         };
       }
 
-      // ✅ Providers check (no towTruckTypeNeeded filter)
+      // ✅ Providers check (no towTruckType filter so user can pick)
       const providers = await findNearbyProviders({
         roleNeeded,
         pickupLng,
@@ -168,23 +170,13 @@ router.post(
         limit: 10
       });
 
-      if (!providers || providers.length === 0) {
-        return res.status(200).json({
-          providersFound: false,
-          providerCount: 0,
-          message: "No providers online within range.",
-          preview: {
-            currency: config.currency || "ZAR",
-            distanceKm,
-            resultsByTowTruckType
-          }
-        });
-      }
-
       return res.status(200).json({
-        providersFound: true,
+        providersFound: providers.length > 0,
         providerCount: providers.length,
-        message: "Providers found ✅ Please select tow truck type",
+        message:
+          providers.length > 0
+            ? "Providers found ✅ Please select tow truck type"
+            : "No providers online within range.",
         preview: {
           currency: config.currency || "ZAR",
           distanceKm,
@@ -204,6 +196,7 @@ router.post(
 
 /**
  * ✅ CUSTOMER creates job
+ * ✅ Only allowed if providers exist nearby
  * POST /api/jobs
  */
 router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => {
@@ -257,12 +250,15 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
       });
     }
 
-    // ✅ Distance (for real pricing)
+    // ✅ Distance (for accurate pricing)
     const distanceKm =
-      roleNeeded === USER_ROLES.TOW_TRUCK && dropoffLat !== undefined && dropoffLng !== undefined
+      roleNeeded === USER_ROLES.TOW_TRUCK &&
+      dropoffLat !== undefined &&
+      dropoffLng !== undefined
         ? haversineDistanceKm(pickupLat, pickupLng, dropoffLat, dropoffLng)
         : 0;
 
+    // ✅ Pricing using calculateJobPricing()
     const pricing = await calculateJobPricing({
       roleNeeded,
       pickupLat,
@@ -281,6 +277,7 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
         ? "DIRECT_TO_PROVIDER"
         : "PAY_AFTER_SERVICE";
 
+    // ✅ CREATE JOB
     const job = await Job.create({
       title,
       description,
@@ -304,6 +301,7 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
       }
     });
 
+    // ✅ CREATE PAYMENT
     const payment = await Payment.create({
       job: job._id,
       customer: req.user._id,
