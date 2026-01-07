@@ -8,6 +8,9 @@ import providerRoutes from './routes/providers.js';
 import paymentRoutes from './routes/payments.js';
 import notificationRoutes from './routes/notifications.js';
 
+// ✅ NEW ✅ Config Routes
+import configRoutes from './routes/config.js';
+
 // ✅ Admin + Config Routes
 import pricingConfigRoutes from './routes/adminPricing.js';
 import adminProviderRoutes from './routes/adminProviders.js';
@@ -41,6 +44,9 @@ app.use('/api/jobs', jobRoutes);
 app.use('/api/providers', providerRoutes);
 app.use('/api/payments', paymentRoutes);
 app.use('/api/notifications', notificationRoutes);
+
+// ✅ ✅ ✅ CONFIG ROUTE (Vehicle Types + TowTruck Types + Pricing)
+app.use('/api/config', configRoutes);
 
 /**
  * ✅ Pricing Config Route (Your requirement ✅)
