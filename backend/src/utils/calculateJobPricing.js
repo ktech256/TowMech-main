@@ -35,7 +35,10 @@ export const calculateJobPricing = async ({
   dropoffLat,
   dropoffLng,
   towTruckTypeNeeded,
-  vehicleType
+  vehicleType,
+
+  // ✅ NEW OPTIONAL INPUT ✅
+  distanceKm
 }) => {
   // ✅ Load config
   let pricingConfig = await PricingConfig.findOne();
@@ -45,19 +48,26 @@ export const calculateJobPricing = async ({
   const perKmFee = pricingConfig.perKmFee || 0;
   const currency = pricingConfig.currency || "ZAR";
 
-  // ✅ Determine distance (TowTruck only)
+  /**
+   * ✅ Determine distance (TowTruck only)
+   * Priority:
+   * 1️⃣ use distanceKm if provided
+   * 2️⃣ else compute using Haversine
+   * 3️⃣ else fallback to 0
+   */
   let estimatedDistanceKm = 0;
-  if (
-    roleNeeded === USER_ROLES.TOW_TRUCK &&
-    dropoffLat !== undefined &&
-    dropoffLng !== undefined
-  ) {
-    estimatedDistanceKm = haversineDistanceKm(
-      pickupLat,
-      pickupLng,
-      dropoffLat,
-      dropoffLng
-    );
+
+  if (roleNeeded === USER_ROLES.TOW_TRUCK) {
+    if (distanceKm !== undefined && distanceKm !== null && !isNaN(distanceKm)) {
+      estimatedDistanceKm = Number(distanceKm);
+    } else if (dropoffLat !== undefined && dropoffLng !== undefined) {
+      estimatedDistanceKm = haversineDistanceKm(
+        pickupLat,
+        pickupLng,
+        dropoffLat,
+        dropoffLng
+      );
+    }
   }
 
   // ✅ Multipliers
@@ -71,7 +81,9 @@ export const calculateJobPricing = async ({
 
   // ✅ Surge
   const surgeEnabled = pricingConfig.surge?.enabled || false;
-  const surgeMultiplier = surgeEnabled ? pricingConfig.surge?.multiplier || 1 : 1;
+  const surgeMultiplier = surgeEnabled
+    ? pricingConfig.surge?.multiplier || 1
+    : 1;
 
   // ✅ Base total (TowTruck only)
   const estimatedTotal =
@@ -110,11 +122,14 @@ export const calculateJobPricing = async ({
     baseFee,
     perKmFee,
     estimatedDistanceKm,
+
     towTruckTypeMultiplier: towMult,
     vehicleTypeMultiplier: vehicleMult,
     surgeMultiplier,
+
     estimatedTotal: Math.round(estimatedTotal),
     bookingFee,
+
     commissionAmount,
     providerAmountDue
   };
