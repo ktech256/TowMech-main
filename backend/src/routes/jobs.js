@@ -152,7 +152,7 @@ router.post(
       }
 
       /**
-       * ✅ CASE 2: towTruckTypeNeeded missing → return pricing for ALL tow truck types
+       * ✅ CASE 2: towTruckTypeNeeded missing → return pricing + ONLINE/OFFLINE per tow truck type
        */
       const resultsByTowTruckType = {};
 
@@ -168,17 +168,33 @@ router.post(
           distanceKm
         });
 
+        // ✅ Check providers for THIS towTruckType
+        const providersForType = await findNearbyProviders({
+          roleNeeded,
+          pickupLng,
+          pickupLat,
+          towTruckTypeNeeded: type,
+          vehicleType,
+          excludedProviders: [],
+          maxDistanceMeters: 20000,
+          limit: 10
+        });
+
         resultsByTowTruckType[type] = {
           estimatedTotal: pricing.estimatedTotal,
           bookingFee: pricing.bookingFee,
           currency: pricing.currency,
           estimatedDistanceKm: pricing.estimatedDistanceKm,
           towTruckTypeMultiplier: pricing.towTruckTypeMultiplier,
-          vehicleTypeMultiplier: pricing.vehicleTypeMultiplier
+          vehicleTypeMultiplier: pricing.vehicleTypeMultiplier,
+
+          // ✅ NEW: availability
+          providersCount: providersForType.length,
+          status: providersForType.length > 0 ? "ONLINE" : "OFFLINE"
         };
       }
 
-      // ✅ Providers check (no towTruckType filter so user can pick)
+      // ✅ total providers (any towtruck type)
       const providers = await findNearbyProviders({
         roleNeeded,
         pickupLng,
