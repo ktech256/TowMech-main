@@ -86,6 +86,9 @@ router.post(
 
       const towTruckTypes = config.towTruckTypes || [];
 
+      // ✅ STEP 1 DEBUG LOG ✅✅✅
+      console.log("✅ towTruckTypes:", towTruckTypes);
+
       // ✅ Compute real distance (TowTruck jobs only)
       const distanceKm =
         roleNeeded === USER_ROLES.TOW_TRUCK &&
