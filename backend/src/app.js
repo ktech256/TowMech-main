@@ -8,6 +8,9 @@ import providerRoutes from './routes/providers.js';
 import paymentRoutes from './routes/payments.js';
 import notificationRoutes from './routes/notifications.js';
 
+// ✅ NEW: Provider Documents Upload Routes
+import providerDocumentsRoutes from "./routes/providerDocuments.js";
+
 // ✅ NEW ✅ Config Routes
 import configRoutes from './routes/config.js';
 
@@ -41,7 +44,13 @@ app.get('/health', (req, res) => {
  */
 app.use('/api/auth', authRoutes);
 app.use('/api/jobs', jobRoutes);
+
+// ✅ Public Providers Routes (existing)
 app.use('/api/providers', providerRoutes);
+
+// ✅ ✅ NEW: Provider Document Upload Endpoint
+app.use("/api/providers", providerDocumentsRoutes);
+
 app.use('/api/payments', paymentRoutes);
 app.use('/api/notifications', notificationRoutes);
 
