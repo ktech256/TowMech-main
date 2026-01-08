@@ -11,6 +11,9 @@ import notificationRoutes from './routes/notifications.js';
 // ✅ Admin Jobs Routes (NEW)
 import adminJobsRoutes from "./routes/adminJobs.js";
 
+// ✅ Admin Live Map Routes (NEW)
+import adminLiveMapRoutes from "./routes/adminLiveMap.js";
+
 // ✅ NEW: Provider Documents Upload Routes
 import providerDocumentsRoutes from "./routes/providerDocuments.js";
 
@@ -72,6 +75,9 @@ app.use('/api/pricing-config', pricingConfigRoutes);
 
 // ✅ ✅ ✅ Admin Jobs Routes
 app.use("/api/admin/jobs", adminJobsRoutes);
+
+// ✅ ✅ ✅ Admin Live Map Routes
+app.use("/api/admin/live", adminLiveMapRoutes);
 
 // ✅ Provider verification & management
 app.use('/api/admin/providers', adminProviderRoutes);
