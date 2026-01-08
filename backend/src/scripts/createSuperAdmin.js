@@ -1,6 +1,6 @@
-import dotenv from 'dotenv';
-import mongoose from 'mongoose';
-import User, { USER_ROLES } from '../models/User.js';
+import dotenv from "dotenv";
+import mongoose from "mongoose";
+import User, { USER_ROLES } from "../models/User.js";
 
 dotenv.config();
 
@@ -14,9 +14,11 @@ const run = async () => {
     await mongoose.connect(process.env.MONGO_URI);
     console.log("✅ MongoDB connected");
 
-    const email = "superadmin@test.com";
-    const password = "123456";
+    // ✅ CHANGE THESE IF YOU WANT
+    const email = "ktech256@gmail.com";      // ✅ your real email
+    const password = "12345";                // ✅ your preferred password
 
+    // ✅ Check if already exists
     const existing = await User.findOne({ email });
 
     if (existing) {
@@ -24,10 +26,17 @@ const run = async () => {
       process.exit(0);
     }
 
+    // ✅ Create SuperAdmin with REQUIRED NEW FIELDS
     const superAdmin = await User.create({
-      name: "Super Admin",
+      firstName: "Killian",
+      lastName: "Ongus",
+      phone: "0713110111",
       email,
       password,
+      birthday: "1986-05-03",
+      nationalityType: "ForeignNational",
+      passportNumber: "AK1270004",
+      country: "Other",
       role: USER_ROLES.SUPER_ADMIN
     });
 
