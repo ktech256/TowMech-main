@@ -14,19 +14,19 @@ const upload = multer({ storage: multer.memoryStorage() });
  * PATCH /api/providers/me/documents
  *
  * Upload using form-data with keys:
- * - idCard
- * - license
- * - vehiclePapers
- * - prdp
+ * - idDocumentUrl
+ * - licenseUrl
+ * - vehicleProofUrl
+ * - workshopProofUrl
  */
 router.patch(
   "/me/documents",
   auth,
   upload.fields([
-    { name: "idCard", maxCount: 1 },
-    { name: "license", maxCount: 1 },
-    { name: "vehiclePapers", maxCount: 1 },
-    { name: "prdp", maxCount: 1 },
+    { name: "idDocumentUrl", maxCount: 1 },
+    { name: "licenseUrl", maxCount: 1 },
+    { name: "vehicleProofUrl", maxCount: 1 },
+    { name: "workshopProofUrl", maxCount: 1 },
   ]),
   async (req, res) => {
     try {
@@ -63,10 +63,11 @@ router.patch(
         return url;
       };
 
-      await uploadDoc("idCard");
-      await uploadDoc("license");
-      await uploadDoc("vehiclePapers");
-      await uploadDoc("prdp");
+      // ✅ Upload each doc if provided
+      await uploadDoc("idDocumentUrl");
+      await uploadDoc("licenseUrl");
+      await uploadDoc("vehicleProofUrl");
+      await uploadDoc("workshopProofUrl");
 
       // ✅ set provider status to pending after upload
       user.providerProfile.verificationStatus = "PENDING";
