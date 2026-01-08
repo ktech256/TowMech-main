@@ -1,24 +1,24 @@
-import mongoose from 'mongoose';
+import mongoose from "mongoose";
 
 export const PAYMENT_STATUSES = {
-  PENDING: 'PENDING',
-  PAID: 'PAID',
-  FAILED: 'FAILED',
-  REFUNDED: 'REFUNDED'
+  PENDING: "PENDING",
+  PAID: "PAID",
+  FAILED: "FAILED",
+  REFUNDED: "REFUNDED",
 };
 
 const paymentSchema = new mongoose.Schema(
   {
-    job: { type: mongoose.Schema.Types.ObjectId, ref: 'Job', required: true },
-    customer: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    job: { type: mongoose.Schema.Types.ObjectId, ref: "Job", required: true },
+    customer: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
 
     amount: { type: Number, required: true },
-    currency: { type: String, default: 'ZAR' },
+    currency: { type: String, default: "ZAR" },
 
     status: {
       type: String,
       enum: Object.values(PAYMENT_STATUSES),
-      default: PAYMENT_STATUSES.PENDING
+      default: PAYMENT_STATUSES.PENDING,
     },
 
     // ✅ Placeholder fields for gateway integration
@@ -31,12 +31,12 @@ const paymentSchema = new mongoose.Schema(
 
     /**
      * ✅ Manual override audit trail
-     * Records which admin marked payment paid manually
+     * Records which Admin/SuperAdmin/Customer marked payment paid manually
      */
     manualMarkedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
     manualMarkedAt: { type: Date, default: null },
 
-    // ✅ Optional refunds
+    // ✅ Refund related
     refundedAt: { type: Date, default: null },
     refundReference: { type: String, default: null },
 
@@ -44,9 +44,9 @@ const paymentSchema = new mongoose.Schema(
      * ✅ Refund audit trail
      * Records which admin refunded payment
      */
-    refundedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null }
+    refundedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
   },
   { timestamps: true }
 );
 
-export default mongoose.model('Payment', paymentSchema);
+export default mongoose.model("Payment", paymentSchema);

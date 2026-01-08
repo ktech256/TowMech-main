@@ -129,7 +129,6 @@ router.post("/create", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, re
      */
     const generatedReference = `TM-${payment._id}`;
 
-    // ✅ Only send what ikhoka.js expects now
     const ikhInit = await initializeIKhokhaPayment({
       amount: bookingFee,
       currency: payment.currency,
@@ -145,7 +144,6 @@ router.post("/create", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, re
       });
     }
 
-    // ✅ iKhokha may return paylinkUrl OR paylinkUrlUrl (different docs)
     const paymentUrl =
       ikhInit.paylinkUrl ||
       ikhInit.paylinkUrlUrl ||
@@ -162,12 +160,10 @@ router.post("/create", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, re
       });
     }
 
-    // ✅ Store in DB
     payment.providerReference = externalTransactionID;
     payment.providerPayload = ikhInit;
     await payment.save();
 
-    // ✅ Return clean object Android expects
     return res.status(201).json({
       message: "iKhokha payment initialized ✅",
       payment,
@@ -246,7 +242,6 @@ router.get("/verify/paystack/:reference", auth, async (req, res) => {
 
 /**
  * ✅ VERIFY IKHOKHA TRANSACTION
- * (Paylink API does not provide verify endpoint)
  * GET /api/payments/verify/ikhokha/:reference
  */
 router.get("/verify/ikhokha/:reference", auth, async (req, res) => {
@@ -295,6 +290,8 @@ router.get("/job/:jobId", auth, async (req, res) => {
 /**
  * ✅ MANUAL FALLBACK
  * PATCH /api/payments/job/:jobId/mark-paid
+ * ✅ Admin + SuperAdmin + Customer can mark payment as paid
+ * ✅ Records audit trail
  */
 router.patch("/job/:jobId/mark-paid", auth, async (req, res) => {
   try {
@@ -304,10 +301,16 @@ router.patch("/job/:jobId/mark-paid", auth, async (req, res) => {
       return res.status(404).json({ message: "Payment not found for job" });
     }
 
-    if (![USER_ROLES.ADMIN, USER_ROLES.CUSTOMER].includes(req.user.role)) {
-      return res.status(403).json({ message: "Only Admin or Customer can mark payment as paid" });
+    // ✅ Allow Admin, SuperAdmin, Customer
+    if (
+      ![USER_ROLES.ADMIN, USER_ROLES.SUPER_ADMIN, USER_ROLES.CUSTOMER].includes(req.user.role)
+    ) {
+      return res.status(403).json({
+        message: "Only Admin, SuperAdmin or Customer can mark payment as paid"
+      });
     }
 
+    // ✅ Customer can only mark their own payment
     if (
       req.user.role === USER_ROLES.CUSTOMER &&
       payment.customer.toString() !== req.user._id.toString()
@@ -315,15 +318,23 @@ router.patch("/job/:jobId/mark-paid", auth, async (req, res) => {
       return res.status(403).json({ message: "Not authorized to mark this payment" });
     }
 
+    // ✅ If already paid
     if (payment.status === PAYMENT_STATUSES.PAID) {
       return res.status(200).json({ message: "Payment already PAID ✅", payment });
     }
 
+    // ✅ Mark paid
     payment.status = PAYMENT_STATUSES.PAID;
     payment.paidAt = new Date();
     payment.providerReference = `MANUAL-${Date.now()}`;
+
+    // ✅ AUDIT TRAIL (Admin or SuperAdmin OR even customer)
+    payment.manualMarkedBy = req.user._id;
+    payment.manualMarkedAt = new Date();
+
     await payment.save();
 
+    // ✅ Update job pricing status
     const job = await Job.findById(payment.job);
     if (!job) return res.status(404).json({ message: "Job not found" });
 
@@ -331,6 +342,7 @@ router.patch("/job/:jobId/mark-paid", auth, async (req, res) => {
     job.pricing.bookingFeePaidAt = new Date();
     await job.save();
 
+    // ✅ Broadcast job to providers
     const broadcastResult = await broadcastJobToProviders(job._id);
 
     return res.status(200).json({
