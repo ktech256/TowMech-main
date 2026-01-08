@@ -8,6 +8,9 @@ import providerRoutes from './routes/providers.js';
 import paymentRoutes from './routes/payments.js';
 import notificationRoutes from './routes/notifications.js';
 
+// ✅ Admin Jobs Routes (NEW)
+import adminJobsRoutes from "./routes/adminJobs.js";
+
 // ✅ NEW: Provider Documents Upload Routes
 import providerDocumentsRoutes from "./routes/providerDocuments.js";
 
@@ -48,7 +51,7 @@ app.use('/api/jobs', jobRoutes);
 // ✅ Public Providers Routes (existing)
 app.use('/api/providers', providerRoutes);
 
-// ✅ ✅ NEW: Provider Document Upload Endpoint
+// ✅ ✅ Provider Document Upload Endpoint
 app.use("/api/providers", providerDocumentsRoutes);
 
 app.use('/api/payments', paymentRoutes);
@@ -66,7 +69,14 @@ app.use('/api/pricing-config', pricingConfigRoutes);
 /**
  * ✅ ADMIN ROUTES
  */
+
+// ✅ ✅ ✅ Admin Jobs Routes
+app.use("/api/admin/jobs", adminJobsRoutes);
+
+// ✅ Provider verification & management
 app.use('/api/admin/providers', adminProviderRoutes);
+
+// ✅ Statistics
 app.use('/api/admin/statistics', adminStatisticsRoutes);
 
 // ✅ Admin User Management (Suspend/Ban/Unban/Unsuspend)
