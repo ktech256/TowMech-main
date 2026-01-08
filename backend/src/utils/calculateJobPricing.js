@@ -23,6 +23,21 @@ const haversineDistanceKm = (lat1, lng1, lat2, lng2) => {
 };
 
 /**
+ * ✅ Night / Weekend checker
+ * Night: 20:00 - 06:00
+ * Weekend: Saturday & Sunday
+ */
+const isNightTime = () => {
+  const hour = new Date().getHours();
+  return hour >= 20 || hour < 6;
+};
+
+const isWeekend = () => {
+  const day = new Date().getDay();
+  return day === 0 || day === 6; // Sunday or Saturday
+};
+
+/**
  * ✅ MAIN PRICING FUNCTION
  */
 export const calculateJobPricing = async ({
@@ -33,14 +48,25 @@ export const calculateJobPricing = async ({
   dropoffLng,
   towTruckTypeNeeded,
   vehicleType,
-  distanceKm // ✅ NEW
+  distanceKm
 }) => {
   let pricingConfig = await PricingConfig.findOne();
   if (!pricingConfig) pricingConfig = await PricingConfig.create({});
 
-  const baseFee = pricingConfig.baseFee || 0;
-  const perKmFee = pricingConfig.perKmFee || 0;
   const currency = pricingConfig.currency || "ZAR";
+
+  // ✅ Determine provider pricing based on role
+  const providerPricing =
+    roleNeeded === USER_ROLES.TOW_TRUCK
+      ? pricingConfig.providerBasePricing?.towTruck
+      : pricingConfig.providerBasePricing?.mechanic;
+
+  // ✅ fallback to legacy pricing if provider pricing missing
+  const baseFee = providerPricing?.baseFee ?? pricingConfig.baseFee ?? 0;
+  const perKmFee = providerPricing?.perKmFee ?? pricingConfig.perKmFee ?? 0;
+
+  const nightFee = providerPricing?.nightFee ?? 0;
+  const weekendFee = providerPricing?.weekendFee ?? 0;
 
   // ✅ Use provided distanceKm if exists, else compute fallback
   let estimatedDistanceKm = 0;
@@ -63,27 +89,35 @@ export const calculateJobPricing = async ({
   }
 
   // ✅ Multipliers
-  const towMult = towTruckTypeNeeded
-    ? pricingConfig.towTruckTypeMultipliers?.[towTruckTypeNeeded] || 1
-    : 1;
+  const towMult =
+    towTruckTypeNeeded
+      ? pricingConfig.towTruckTypeMultipliers?.[towTruckTypeNeeded] || 1
+      : 1;
 
-  const vehicleMult = vehicleType
-    ? pricingConfig.vehicleTypeMultipliers?.[vehicleType] || 1
-    : 1;
+  const vehicleMult =
+    vehicleType
+      ? pricingConfig.vehicleTypeMultipliers?.[vehicleType] || 1
+      : 1;
 
   // ✅ Surge
-  const surgeEnabled = pricingConfig.surge?.enabled || false;
-  const surgeMultiplier = surgeEnabled
-    ? pricingConfig.surge?.multiplier || 1
-    : 1;
+  const surgeEnabled = pricingConfig.surgePricing?.enabled || false;
+  const surgeMultiplier =
+    roleNeeded === USER_ROLES.TOW_TRUCK
+      ? pricingConfig.surgePricing?.towTruckMultiplier || 1
+      : pricingConfig.surgePricing?.mechanicMultiplier || 1;
 
+  // ✅ Night / Weekend bonuses
+  const applyNightFee = isNightTime() ? nightFee : 0;
+  const applyWeekendFee = isWeekend() ? weekendFee : 0;
+
+  // ✅ Estimated total fare
   const estimatedTotal =
     roleNeeded === USER_ROLES.TOW_TRUCK
-      ? (baseFee + perKmFee * estimatedDistanceKm) *
+      ? (baseFee + perKmFee * estimatedDistanceKm + applyNightFee + applyWeekendFee) *
         towMult *
         vehicleMult *
         surgeMultiplier
-      : 0;
+      : baseFee + applyNightFee + applyWeekendFee; // mechanic can still have base fee + bonuses
 
   // ✅ Booking fees
   const towBookingPercent = pricingConfig.bookingFees?.towTruckPercent || 15;
@@ -92,9 +126,9 @@ export const calculateJobPricing = async ({
   const bookingFee =
     roleNeeded === USER_ROLES.TOW_TRUCK
       ? Math.round((estimatedTotal * towBookingPercent) / 100)
-      : mechanicFixedFee;
+      : Math.round(mechanicFixedFee * (pricingConfig.surgePricing?.mechanicBookingFeeMultiplier || 1));
 
-  // ✅ Commission + provider share
+  // ✅ Commission + provider share (TowTruck only)
   const towTruckCompanyPercent =
     pricingConfig.payoutSplit?.towTruckCompanyPercent || 15;
 
@@ -112,6 +146,8 @@ export const calculateJobPricing = async ({
     currency,
     baseFee,
     perKmFee,
+    nightFeeApplied: applyNightFee,
+    weekendFeeApplied: applyWeekendFee,
     estimatedDistanceKm,
     towTruckTypeMultiplier: towMult,
     vehicleTypeMultiplier: vehicleMult,

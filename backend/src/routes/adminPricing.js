@@ -50,6 +50,10 @@ router.patch(
         'currency',
         'baseFee',
         'perKmFee',
+
+        // ✅ NEW ✅ provider type base pricing
+        'providerBasePricing',
+
         'towTruckTypeMultipliers',
         'vehicleTypeMultipliers',
         'bookingFees',
