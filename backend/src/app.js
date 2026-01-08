@@ -7,6 +7,7 @@ import jobRoutes from './routes/jobs.js';
 import providerRoutes from './routes/providers.js';
 import paymentRoutes from './routes/payments.js';
 import notificationRoutes from './routes/notifications.js';
+import adminPaymentsRoutes from "./routes/adminPayments.js";
 
 // ✅ Admin Jobs Routes (NEW)
 import adminJobsRoutes from "./routes/adminJobs.js";
@@ -75,6 +76,9 @@ app.use('/api/pricing-config', pricingConfigRoutes);
 
 // ✅ ✅ ✅ Admin Jobs Routes
 app.use("/api/admin/jobs", adminJobsRoutes);
+
+// ✅ ✅ ✅ Admin Payments Routes ✅✅✅ (NEW)
+app.use("/api/admin/payments", adminPaymentsRoutes);
 
 // ✅ ✅ ✅ Admin Live Map Routes
 app.use("/api/admin/live", adminLiveMapRoutes);

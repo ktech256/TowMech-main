@@ -22,16 +22,29 @@ const paymentSchema = new mongoose.Schema(
     },
 
     // ✅ Placeholder fields for gateway integration
-    provider: { type: String, default: "PAYSTACK" }, // Paystack, Stripe, etc
-    providerReference: { type: String, default: null }, // Paystack reference
-    providerPayload: { type: Object, default: null }, // Store full Paystack callback response
+    provider: { type: String, default: "PAYSTACK" },
+    providerReference: { type: String, default: null },
+    providerPayload: { type: Object, default: null },
 
-    // ✅ NEW ✅ Payment timestamps
+    // ✅ Payment timestamps
     paidAt: { type: Date, default: null },
 
-    // ✅ NEW ✅ Optional for refunds / disputes
+    /**
+     * ✅ Manual override audit trail
+     * Records which admin marked payment paid manually
+     */
+    manualMarkedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+    manualMarkedAt: { type: Date, default: null },
+
+    // ✅ Optional refunds
     refundedAt: { type: Date, default: null },
-    refundReference: { type: String, default: null }
+    refundReference: { type: String, default: null },
+
+    /**
+     * ✅ Refund audit trail
+     * Records which admin refunded payment
+     */
+    refundedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null }
   },
   { timestamps: true }
 );
