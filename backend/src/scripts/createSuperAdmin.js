@@ -14,11 +14,9 @@ const run = async () => {
     await mongoose.connect(process.env.MONGO_URI);
     console.log("✅ MongoDB connected");
 
-    // ✅ CHANGE THESE IF YOU WANT
-    const email = "ktech256@gmail.com";      // ✅ your real email
-    const password = "12345";                // ✅ your preferred password
+    const email = "ktech256@gmail.com"; // ✅ your real email
+    const password = "12345";
 
-    // ✅ Check if already exists
     const existing = await User.findOne({ email });
 
     if (existing) {
@@ -26,21 +24,23 @@ const run = async () => {
       process.exit(0);
     }
 
-    // ✅ Create SuperAdmin with REQUIRED NEW FIELDS
     const superAdmin = await User.create({
+      name: "Killian Ongus", // ✅ required
       firstName: "Killian",
       lastName: "Ongus",
       phone: "0713110111",
+      birthday: "1986-05-03",
+
+      nationalityType: "ForeignNational",
+      country: "Other",
+      passportNumber: "AK1270004",
+
       email,
       password,
-      birthday: "1986-05-03",
-      nationalityType: "ForeignNational",
-      passportNumber: "AK1270004",
-      country: "Other",
       role: USER_ROLES.SUPER_ADMIN
     });
 
-    console.log("✅ SuperAdmin created successfully");
+    console.log("✅ SuperAdmin created successfully ✅");
     console.log({
       id: superAdmin._id.toString(),
       email: superAdmin.email,
