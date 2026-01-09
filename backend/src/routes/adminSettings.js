@@ -1,8 +1,8 @@
 import express from "express";
 import auth from "../middleware/auth.js";
 import authorizeRoles from "../middleware/role.js";
-import SystemSettings from "../models/SystemSettings.js";
 import User, { USER_ROLES } from "../models/User.js";
+import SystemSettings from "../models/SystemSettings.js";
 
 const router = express.Router();
 
@@ -10,10 +10,8 @@ const router = express.Router();
  * ✅ Permission enforcement helper
  */
 const requirePermission = (req, res, permissionKey) => {
-  // ✅ SuperAdmin bypass
   if (req.user.role === USER_ROLES.SUPER_ADMIN) return true;
 
-  // ✅ Admin must have required permission
   if (req.user.role === USER_ROLES.ADMIN) {
     if (!req.user.permissions || req.user.permissions[permissionKey] !== true) {
       res.status(403).json({
@@ -42,15 +40,16 @@ router.get(
 
       let settings = await SystemSettings.findOne();
 
-      // ✅ auto create settings if none exists
       if (!settings) {
-        settings = await SystemSettings.create({});
+        settings = await SystemSettings.create({
+          updatedBy: req.user._id,
+        });
       }
 
       return res.status(200).json({ settings });
     } catch (err) {
       return res.status(500).json({
-        message: "Failed to fetch settings ❌",
+        message: "Failed to fetch system settings ❌",
         error: err.message,
       });
     }
@@ -58,7 +57,7 @@ router.get(
 );
 
 /**
- * ✅ PATCH system settings
+ * ✅ UPDATE system settings
  * PATCH /api/admin/settings
  */
 router.patch(
@@ -69,17 +68,14 @@ router.patch(
     try {
       if (!requirePermission(req, res, "canManageSettings")) return;
 
-      const { zones, serviceCategories, peakSchedule, integrations } = req.body;
-
       let settings = await SystemSettings.findOne();
+      if (!settings) settings = new SystemSettings();
 
-      if (!settings) settings = await SystemSettings.create({});
+      const payload = req.body;
 
-      // ✅ Only update if provided
-      if (zones) settings.zones = zones;
-      if (serviceCategories) settings.serviceCategories = serviceCategories;
-      if (peakSchedule) settings.peakSchedule = peakSchedule;
-      if (integrations) settings.integrations = integrations;
+      // ✅ merge safe
+      Object.assign(settings, payload);
+      settings.updatedBy = req.user._id;
 
       await settings.save();
 

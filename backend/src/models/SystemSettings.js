@@ -1,60 +1,51 @@
 import mongoose from "mongoose";
 
-const ZoneSchema = new mongoose.Schema(
-  {
-    name: { type: String, required: true }, // e.g Johannesburg Central
-    description: { type: String, default: "" },
-    isActive: { type: Boolean, default: true },
-  },
-  { _id: false }
-);
-
-const ServiceCategorySchema = new mongoose.Schema(
-  {
-    name: { type: String, required: true }, // e.g Flatbed Tow
-    providerType: {
-      type: String,
-      enum: ["TOW_TRUCK", "MECHANIC"],
-      required: true,
-    },
-    isActive: { type: Boolean, default: true },
-  },
-  { _id: false }
-);
-
-const PeakScheduleSchema = new mongoose.Schema(
-  {
-    nightFeePercentage: { type: Number, default: 0 }, // e.g 15%
-    weekendFeePercentage: { type: Number, default: 0 }, // e.g 20%
-    nightStartHour: { type: Number, default: 20 }, // 8PM
-    nightEndHour: { type: Number, default: 6 }, // 6AM
-    weekendDays: {
-      type: [String],
-      default: ["SATURDAY", "SUNDAY"],
-    },
-  },
-  { _id: false }
-);
-
-const IntegrationSchema = new mongoose.Schema(
-  {
-    paymentProvider: { type: String, default: "" }, // e.g PAYSTACK
-    paymentApiKey: { type: String, default: "" },
-
-    smsProvider: { type: String, default: "" }, // e.g TWILIO
-    smsApiKey: { type: String, default: "" },
-
-    googleMapsKey: { type: String, default: "" },
-  },
-  { _id: false }
-);
-
 const SystemSettingsSchema = new mongoose.Schema(
   {
-    zones: { type: [ZoneSchema], default: [] },
-    serviceCategories: { type: [ServiceCategorySchema], default: [] },
-    peakSchedule: { type: PeakScheduleSchema, default: {} },
-    integrations: { type: IntegrationSchema, default: {} },
+    // ✅ GENERAL
+    platformName: { type: String, default: "TowMech" },
+    supportEmail: { type: String, default: "" },
+    supportPhone: { type: String, default: "" },
+
+    // ✅ PEAK SETTINGS
+    nightFeeEnabled: { type: Boolean, default: false },
+    nightFeePercentage: { type: Number, default: 0 },
+
+    weekendFeeEnabled: { type: Boolean, default: false },
+    weekendFeePercentage: { type: Number, default: 0 },
+
+    // ✅ INTEGRATIONS (ALL KEYS LIVE HERE ✅)
+    integrations: {
+      paymentGateway: {
+        type: String,
+        default: "YOCO",
+        enum: [
+          "YOCO",
+          "PAYFAST",
+          "PAYGATE",
+          "PEACH_PAYMENTS",
+          "PAYU",
+          "IKHOKHA",
+          "DPO_GROUP",
+          "OZOW",
+          "SNAPSCAN",
+          "ZAPPER",
+          "PAYFLEX",
+        ],
+      },
+
+      paymentPublicKey: { type: String, default: "" },
+      paymentSecretKey: { type: String, default: "" },
+      paymentWebhookSecret: { type: String, default: "" },
+
+      googleMapsKey: { type: String, default: "" },
+
+      smsProvider: { type: String, default: "" },
+      smsApiKey: { type: String, default: "" },
+    },
+
+    // ✅ AUDIT
+    updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
   },
   { timestamps: true }
 );
