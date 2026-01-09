@@ -9,11 +9,11 @@ import paymentRoutes from "./routes/payments.js";
 import notificationRoutes from "./routes/notifications.js";
 import providerDocumentsRoutes from "./routes/providerDocuments.js";
 
-// ✅ ✅ ✅ SAFETY ROUTES (NEW)
+// ✅ ✅ ✅ SAFETY ROUTES
 import safetyRoutes from "./routes/safety.js";
 import adminSafetyRoutes from "./routes/adminSafety.js";
 
-// ✅ NEW ✅ Config Routes
+// ✅ Config Routes
 import configRoutes from "./routes/config.js";
 
 // ✅ Admin + Config Routes
@@ -23,19 +23,20 @@ import adminStatisticsRoutes from "./routes/adminStatistics.js";
 import adminJobsRoutes from "./routes/adminJobs.js";
 import adminLiveMapRoutes from "./routes/adminLiveMap.js";
 import adminPaymentsRoutes from "./routes/adminPayments.js";
-
-// ✅ ✅ ✅ ANALYTICS ROUTE
 import adminAnalyticsRoutes from "./routes/adminAnalytics.js";
 
-// ✅ NEW ROUTES (SuperAdmin + Admin User Management)
+// ✅ ✅ ✅ NEW ✅ SYSTEM SETTINGS ROUTE
+import adminSettingsRoutes from "./routes/adminSettings.js";
+
+// ✅ SuperAdmin + Admin User Management
 import superAdminRoutes from "./routes/superAdmin.js";
 import adminUsersRoutes from "./routes/adminUsers.js";
 
-// ✅ ✅ ✅ SUPPORT ROUTES
+// ✅ Support Routes
 import supportRoutes from "./routes/support.js";
 import adminSupportRoutes from "./routes/adminSupport.js";
 
-// ✅ ✅ ✅ NOTIFICATIONS ROUTES (Broadcast + Logs)
+// ✅ Notifications Routes
 import adminNotificationsRoutes from "./routes/adminNotifications.js";
 
 const app = express();
@@ -65,17 +66,17 @@ app.use("/api/notifications", notificationRoutes);
 app.use("/api/providers", providerDocumentsRoutes);
 
 /**
- * ✅ ✅ ✅ SAFETY ROUTES (PUBLIC)
- * /api/safety/panic
+ * ✅ SAFETY ROUTES (PUBLIC)
  */
 app.use("/api/safety", safetyRoutes);
 
-// ✅ ✅ ✅ CONFIG ROUTE (Vehicle Types + TowTruck Types + Pricing)
+/**
+ * ✅ CONFIG ROUTE
+ */
 app.use("/api/config", configRoutes);
 
 /**
  * ✅ Pricing Config Route
- * /api/pricing-config
  */
 app.use("/api/pricing-config", pricingConfigRoutes);
 
@@ -92,20 +93,23 @@ app.use("/api/admin/statistics", adminStatisticsRoutes);
 app.use("/api/admin/jobs", adminJobsRoutes);
 app.use("/api/admin/live", adminLiveMapRoutes);
 app.use("/api/admin/payments", adminPaymentsRoutes);
-
-// ✅ ✅ ✅ ADMIN ANALYTICS ROUTE
 app.use("/api/admin/analytics", adminAnalyticsRoutes);
-
-// ✅ ✅ ✅ ADMIN SUPPORT ROUTES
 app.use("/api/admin/support", adminSupportRoutes);
-
-// ✅ ✅ ✅ ADMIN NOTIFICATIONS ROUTES
 app.use("/api/admin/notifications", adminNotificationsRoutes);
 
-// ✅ ✅ ✅ ADMIN SAFETY ROUTES
+/**
+ * ✅ ✅ ✅ SYSTEM SETTINGS ADMIN ROUTE (NEW)
+ */
+app.use("/api/admin/settings", adminSettingsRoutes);
+
+/**
+ * ✅ ADMIN SAFETY ROUTES
+ */
 app.use("/api/admin/safety", adminSafetyRoutes);
 
-// ✅ Admin User Management
+/**
+ * ✅ Admin User Management
+ */
 app.use("/api/admin", adminUsersRoutes);
 
 /**
