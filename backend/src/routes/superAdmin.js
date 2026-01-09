@@ -49,15 +49,15 @@ router.post(
         canVerifyProviders: true,
       };
 
-      // ✅ Safe defaults for required User schema fields
+      // ✅ Use same required fields pattern as current logged-in SuperAdmin
+      const creator = await User.findById(req.user._id);
+
+      if (!creator) {
+        return res.status(403).json({ message: "Invalid creator account ❌" });
+      }
+
       const firstName = name.split(" ")[0] || name;
       const lastName = name.split(" ").slice(1).join(" ") || "Admin";
-
-      // ✅ FIX: Use valid nationality enum
-      const validNationality =
-        Array.isArray(User.NATIONALITY_TYPES) && User.NATIONALITY_TYPES.length > 0
-          ? User.NATIONALITY_TYPES[0]
-          : "SOUTH_AFRICAN";
 
       const admin = new User({
         name,
@@ -66,14 +66,18 @@ router.post(
         role: chosenRole,
         permissions: permissions || defaultPermissions,
 
-        // ✅ REQUIRED FIELDS (SAFE DEFAULTS)
+        // ✅ REQUIRED FIELDS: copy from creator (SuperAdmin)
         firstName,
         lastName,
-        phone: "0000000000",
-        birthday: new Date("1990-01-01"),
 
-        // ✅ MUST MATCH ENUM
-        nationalityType: validNationality,
+        phone: creator.phone || "0000000000",
+        birthday: creator.birthday || new Date("1990-01-01"),
+
+        nationalityType: creator.nationalityType || "ForeignNational",
+
+        saIdNumber: creator.saIdNumber || null,
+        passportNumber: creator.passportNumber || null,
+        country: creator.country || "Other",
       });
 
       await admin.save();
