@@ -1,34 +1,32 @@
-import express from 'express';
-import cors from 'cors';
+import express from "express";
+import cors from "cors";
 
 // ✅ Routes
-import authRoutes from './routes/auth.js';
-import jobRoutes from './routes/jobs.js';
-import providerRoutes from './routes/providers.js';
-import paymentRoutes from './routes/payments.js';
-import notificationRoutes from './routes/notifications.js';
-import adminPaymentsRoutes from "./routes/adminPayments.js";
-
-// ✅ Admin Jobs Routes (NEW)
-import adminJobsRoutes from "./routes/adminJobs.js";
-
-// ✅ Admin Live Map Routes (NEW)
-import adminLiveMapRoutes from "./routes/adminLiveMap.js";
-
-// ✅ NEW: Provider Documents Upload Routes
+import authRoutes from "./routes/auth.js";
+import jobRoutes from "./routes/jobs.js";
+import providerRoutes from "./routes/providers.js";
+import paymentRoutes from "./routes/payments.js";
+import notificationRoutes from "./routes/notifications.js";
 import providerDocumentsRoutes from "./routes/providerDocuments.js";
 
 // ✅ NEW ✅ Config Routes
-import configRoutes from './routes/config.js';
+import configRoutes from "./routes/config.js";
 
 // ✅ Admin + Config Routes
-import pricingConfigRoutes from './routes/adminPricing.js';
-import adminProviderRoutes from './routes/adminProviders.js';
-import adminStatisticsRoutes from './routes/adminStatistics.js';
+import pricingConfigRoutes from "./routes/adminPricing.js";
+import adminProviderRoutes from "./routes/adminProviders.js";
+import adminStatisticsRoutes from "./routes/adminStatistics.js";
+import adminJobsRoutes from "./routes/adminJobs.js";
+import adminLiveMapRoutes from "./routes/adminLiveMap.js";
+import adminPaymentsRoutes from "./routes/adminPayments.js";
 
 // ✅ NEW ROUTES (SuperAdmin + Admin User Management)
-import superAdminRoutes from './routes/superAdmin.js';
-import adminUsersRoutes from './routes/adminUsers.js';
+import superAdminRoutes from "./routes/superAdmin.js";
+import adminUsersRoutes from "./routes/adminUsers.js";
+
+// ✅ ✅ ✅ SUPPORT ROUTES (NEW)
+import supportRoutes from "./routes/support.js";
+import adminSupportRoutes from "./routes/adminSupport.js";
 
 const app = express();
 
@@ -42,70 +40,62 @@ app.use(express.urlencoded({ extended: true }));
 /**
  * ✅ Health Check
  */
-app.get('/health', (req, res) => {
-  return res.status(200).json({ status: 'ok ✅' });
+app.get("/health", (req, res) => {
+  return res.status(200).json({ status: "ok ✅" });
 });
 
 /**
  * ✅ PUBLIC ROUTES
  */
-app.use('/api/auth', authRoutes);
-app.use('/api/jobs', jobRoutes);
-
-// ✅ Public Providers Routes (existing)
-app.use('/api/providers', providerRoutes);
-
-// ✅ ✅ Provider Document Upload Endpoint
+app.use("/api/auth", authRoutes);
+app.use("/api/jobs", jobRoutes);
+app.use("/api/providers", providerRoutes);
+app.use("/api/payments", paymentRoutes);
+app.use("/api/notifications", notificationRoutes);
 app.use("/api/providers", providerDocumentsRoutes);
 
-app.use('/api/payments', paymentRoutes);
-app.use('/api/notifications', notificationRoutes);
-
 // ✅ ✅ ✅ CONFIG ROUTE (Vehicle Types + TowTruck Types + Pricing)
-app.use('/api/config', configRoutes);
+app.use("/api/config", configRoutes);
 
 /**
- * ✅ Pricing Config Route (Your requirement ✅)
+ * ✅ Pricing Config Route
  * /api/pricing-config
  */
-app.use('/api/pricing-config', pricingConfigRoutes);
+app.use("/api/pricing-config", pricingConfigRoutes);
+
+/**
+ * ✅ SUPPORT ROUTES ✅
+ */
+app.use("/api/support", supportRoutes);
 
 /**
  * ✅ ADMIN ROUTES
  */
-
-// ✅ ✅ ✅ Admin Jobs Routes
+app.use("/api/admin/providers", adminProviderRoutes);
+app.use("/api/admin/statistics", adminStatisticsRoutes);
 app.use("/api/admin/jobs", adminJobsRoutes);
-
-// ✅ ✅ ✅ Admin Payments Routes ✅✅✅ (NEW)
+app.use("/api/admin/live", adminLiveMapRoutes);
 app.use("/api/admin/payments", adminPaymentsRoutes);
 
-// ✅ ✅ ✅ Admin Live Map Routes
-app.use("/api/admin/live", adminLiveMapRoutes);
+// ✅ Admin User Management
+app.use("/api/admin", adminUsersRoutes);
 
-// ✅ Provider verification & management
-app.use('/api/admin/providers', adminProviderRoutes);
-
-// ✅ Statistics
-app.use('/api/admin/statistics', adminStatisticsRoutes);
-
-// ✅ Admin User Management (Suspend/Ban/Unban/Unsuspend)
-app.use('/api/admin', adminUsersRoutes);
+// ✅ ✅ ✅ ADMIN SUPPORT ROUTES ✅
+app.use("/api/admin/support", adminSupportRoutes);
 
 /**
  * ✅ SUPER ADMIN ROUTES
- * ✅ MUST BE /api/superadmin ✅
  */
-app.use('/api/superadmin', superAdminRoutes);
+app.use("/api/superadmin", superAdminRoutes);
 
 /**
- * ✅ 404 Handler (Routes not found)
+ * ✅ 404 Handler
  */
 app.use((req, res) => {
   return res.status(404).json({
-    message: 'Route not found ❌',
+    message: "Route not found ❌",
     method: req.method,
-    path: req.originalUrl
+    path: req.originalUrl,
   });
 });
 
@@ -113,11 +103,11 @@ app.use((req, res) => {
  * ✅ Global Error Handler
  */
 app.use((err, req, res, next) => {
-  console.error('🔥 INTERNAL ERROR:', err);
+  console.error("🔥 INTERNAL ERROR:", err);
 
   return res.status(err.statusCode || 500).json({
-    message: err.message || 'Internal Server Error',
-    ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
+    message: err.message || "Internal Server Error",
+    ...(process.env.NODE_ENV === "development" && { stack: err.stack }),
   });
 });
 
