@@ -1,14 +1,17 @@
-import express from 'express';
-import crypto from 'crypto';
-import jwt from 'jsonwebtoken';
-import auth from '../middleware/auth.js';
-import User, { USER_ROLES } from '../models/User.js';
+import express from "express";
+import crypto from "crypto";
+import jwt from "jsonwebtoken";
+import auth from "../middleware/auth.js";
+import User, { USER_ROLES } from "../models/User.js";
 
 const router = express.Router();
 
+// ✅ FORCE LOG TO CONFIRM THIS FILE LOADS (RENDER LOGS)
+console.log("✅ auth.js loaded ✅");
+
 // ✅ Helper: Generate JWT token
 const generateToken = (userId, role) =>
-  jwt.sign({ id: userId, role }, process.env.JWT_SECRET, { expiresIn: '7d' });
+  jwt.sign({ id: userId, role }, process.env.JWT_SECRET, { expiresIn: "7d" });
 
 /**
  * ✅ Helper: Validate South African ID (Luhn algorithm)
@@ -48,9 +51,9 @@ function isValidPassport(passport) {
  * ✅ Register user
  * POST /api/auth/register
  */
-router.post('/register', async (req, res) => {
+router.post("/register", async (req, res) => {
   try {
-    console.log("🟦 REGISTER HIT");
+    console.log("🟦 REGISTER HIT ✅");
     console.log("📩 REGISTER BODY:", req.body);
 
     const {
@@ -61,15 +64,14 @@ router.post('/register', async (req, res) => {
       password,
       birthday,
 
-      nationalityType, // "SouthAfrican" or "ForeignNational"
+      nationalityType,
       saIdNumber,
       passportNumber,
       country,
 
       role = USER_ROLES.CUSTOMER,
 
-      // TowTruck extra
-      towTruckTypes // array
+      towTruckTypes,
     } = req.body;
 
     // ✅ ROLE VALIDATION FIRST
@@ -80,7 +82,9 @@ router.post('/register', async (req, res) => {
 
     // ✅ ✅ IMPORTANT: Skip strict validation for SuperAdmin/Admin
     if (role === USER_ROLES.SUPER_ADMIN || role === USER_ROLES.ADMIN) {
-      console.log("🟨 REGISTER: Admin/SuperAdmin detected → skipping strict validation");
+      console.log(
+        "🟨 REGISTER: Admin/SuperAdmin detected → skipping strict validation"
+      );
 
       const existing = await User.findOne({ email });
       if (existing) {
@@ -95,7 +99,7 @@ router.post('/register', async (req, res) => {
         email,
         password,
         birthday: birthday || null,
-        role
+        role,
       });
 
       return res.status(201).json({
@@ -104,8 +108,8 @@ router.post('/register', async (req, res) => {
           id: user._id,
           name: user.name,
           email: user.email,
-          role: user.role
-        }
+          role: user.role,
+        },
       });
     }
 
@@ -113,39 +117,46 @@ router.post('/register', async (req, res) => {
     if (!firstName || !lastName || !phone || !email || !password || !birthday) {
       console.log("🟥 REGISTER FAIL: Missing required fields");
       return res.status(400).json({
-        message: "firstName, lastName, phone, email, password, birthday are required"
+        message: "firstName, lastName, phone, email, password, birthday are required",
       });
     }
 
     // ✅ NATIONALITY VALIDATION
-    if (!nationalityType || !["SouthAfrican", "ForeignNational"].includes(nationalityType)) {
+    if (
+      !nationalityType ||
+      !["SouthAfrican", "ForeignNational"].includes(nationalityType)
+    ) {
       return res.status(400).json({
-        message: "nationalityType must be SouthAfrican or ForeignNational"
+        message: "nationalityType must be SouthAfrican or ForeignNational",
       });
     }
 
-    // ✅ South African validation rules
+    // ✅ South African rules
     if (nationalityType === "SouthAfrican") {
       if (!saIdNumber) {
-        return res.status(400).json({ message: "saIdNumber is required for SouthAfrican" });
+        return res.status(400).json({
+          message: "saIdNumber is required for SouthAfrican",
+        });
       }
 
       if (!isValidSouthAfricanID(saIdNumber)) {
-        return res.status(400).json({ message: "Invalid South African ID number" });
+        return res.status(400).json({
+          message: "Invalid South African ID number",
+        });
       }
     }
 
-    // ✅ Foreign National validation rules
+    // ✅ Foreign National rules
     if (nationalityType === "ForeignNational") {
       if (!passportNumber || !country) {
         return res.status(400).json({
-          message: "passportNumber and country are required for ForeignNational"
+          message: "passportNumber and country are required for ForeignNational",
         });
       }
 
       if (!isValidPassport(passportNumber)) {
         return res.status(400).json({
-          message: "passportNumber must be 8 to 11 alphanumeric characters"
+          message: "passportNumber must be 8 to 11 alphanumeric characters",
         });
       }
     }
@@ -154,22 +165,19 @@ router.post('/register', async (req, res) => {
     if (role === USER_ROLES.TOW_TRUCK) {
       if (!towTruckTypes || !Array.isArray(towTruckTypes) || towTruckTypes.length === 0) {
         return res.status(400).json({
-          message: "TowTruck providers must select at least 1 towTruckType"
+          message: "TowTruck providers must select at least 1 towTruckType",
         });
       }
     }
 
-    // ✅ check duplicate email
     const existing = await User.findOne({ email });
     if (existing) {
       console.log("🟨 REGISTER FAIL: user already exists");
       return res.status(409).json({ message: "User already exists" });
     }
 
-    // ✅ Build name
     const name = `${firstName.trim()} ${lastName.trim()}`;
 
-    // ✅ Create user
     const user = await User.create({
       name,
       firstName,
@@ -186,11 +194,14 @@ router.post('/register', async (req, res) => {
 
       role,
 
-      providerProfile: role !== USER_ROLES.CUSTOMER ? {
-        towTruckTypes: role === USER_ROLES.TOW_TRUCK ? towTruckTypes : [],
-        isOnline: false,
-        verificationStatus: "PENDING"
-      } : undefined
+      providerProfile:
+        role !== USER_ROLES.CUSTOMER
+          ? {
+              towTruckTypes: role === USER_ROLES.TOW_TRUCK ? towTruckTypes : [],
+              isOnline: false,
+              verificationStatus: "PENDING",
+            }
+          : undefined,
     });
 
     console.log("✅ REGISTER SUCCESS:", user.email, user.role);
@@ -201,17 +212,14 @@ router.post('/register', async (req, res) => {
         id: user._id,
         name: user.name,
         email: user.email,
-        role: user.role
-      }
+        role: user.role,
+      },
     });
-
   } catch (err) {
-    console.error("❌ REGISTER ERROR MESSAGE:", err.message);
-    console.error("❌ REGISTER ERROR STACK:", err.stack);
-
+    console.error("❌ REGISTER ERROR:", err.message);
     return res.status(500).json({
       message: "Registration failed",
-      error: err.message
+      error: err.message,
     });
   }
 });
@@ -220,26 +228,28 @@ router.post('/register', async (req, res) => {
  * ✅ Login user → generates OTP
  * POST /api/auth/login
  */
-router.post('/login', async (req, res) => {
+router.post("/login", async (req, res) => {
   try {
+    console.log("✅ LOGIN ROUTE HIT ✅", req.body);
+
     const { email, password } = req.body;
 
-    console.log('🟦 LOGIN HIT:', email);
+    console.log("🟦 LOGIN HIT:", email);
 
     if (!email || !password) {
-      return res.status(400).json({ message: 'Email and password are required' });
+      return res.status(400).json({ message: "Email and password are required" });
     }
 
     const user = await User.findOne({ email });
 
     if (!user) {
-      return res.status(401).json({ message: 'Invalid credentials' });
+      return res.status(401).json({ message: "Invalid credentials" });
     }
 
     const isMatch = await user.matchPassword(password);
 
     if (!isMatch) {
-      return res.status(401).json({ message: 'Invalid credentials' });
+      return res.status(401).json({ message: "Invalid credentials" });
     }
 
     const otpCode = crypto.randomInt(100000, 999999).toString();
@@ -247,15 +257,21 @@ router.post('/login', async (req, res) => {
     user.otpExpiresAt = new Date(Date.now() + 10 * 60 * 1000);
     await user.save();
 
-    console.log('✅ OTP GENERATED:', otpCode);
+    // ✅ OTP DEBUG LOG FOR RENDER
+    if (process.env.OTP_DEBUG === "true") {
+      console.log("✅ OTP GENERATED:", otpCode, "| EMAIL:", email);
+    }
 
     return res.status(200).json({
-      message: 'OTP generated ✅ (placeholder - no SMS integration)',
-      otp: process.env.ENABLE_OTP_DEBUG === 'true' ? otpCode : undefined
+      message: "OTP generated ✅",
+      otp: process.env.OTP_DEBUG === "true" ? otpCode : undefined,
     });
   } catch (err) {
-    console.error('❌ LOGIN ERROR:', err);
-    return res.status(500).json({ message: 'Login failed', error: err.message });
+    console.error("❌ LOGIN ERROR:", err.message);
+    return res.status(500).json({
+      message: "Login failed",
+      error: err.message,
+    });
   }
 });
 
@@ -263,24 +279,28 @@ router.post('/login', async (req, res) => {
  * ✅ Verify OTP → returns token
  * POST /api/auth/verify-otp
  */
-router.post('/verify-otp', async (req, res) => {
+router.post("/verify-otp", async (req, res) => {
   try {
+    console.log("✅ VERIFY OTP HIT ✅", req.body.email);
+
     const { email, otp } = req.body;
 
     if (!email || !otp) {
-      return res.status(400).json({ message: 'Email and OTP are required' });
+      return res.status(400).json({ message: "Email and OTP are required" });
     }
 
     const user = await User.findOne({ email });
 
     if (!user || !user.otpCode) {
-      return res.status(400).json({ message: 'OTP not requested or user not found' });
+      return res.status(400).json({
+        message: "OTP not requested or user not found",
+      });
     }
 
     const isExpired = user.otpExpiresAt && user.otpExpiresAt < new Date();
 
     if (isExpired || user.otpCode !== otp) {
-      return res.status(401).json({ message: 'Invalid or expired OTP' });
+      return res.status(401).json({ message: "Invalid or expired OTP" });
     }
 
     user.otpCode = null;
@@ -290,18 +310,21 @@ router.post('/verify-otp', async (req, res) => {
     const token = generateToken(user._id, user.role);
 
     return res.status(200).json({
-      message: 'OTP verified ✅',
+      message: "OTP verified ✅",
       token,
       user: {
         id: user._id,
         name: user.name,
         email: user.email,
-        role: user.role
-      }
+        role: user.role,
+      },
     });
   } catch (err) {
-    console.error('❌ OTP VERIFY ERROR:', err);
-    return res.status(500).json({ message: 'OTP verification failed', error: err.message });
+    console.error("❌ OTP VERIFY ERROR:", err.message);
+    return res.status(500).json({
+      message: "OTP verification failed",
+      error: err.message,
+    });
   }
 });
 
@@ -309,23 +332,28 @@ router.post('/verify-otp', async (req, res) => {
  * ✅ Get logged-in user profile
  * GET /api/auth/me
  */
-router.get('/me', auth, async (req, res) => {
+router.get("/me", auth, async (req, res) => {
   try {
-    const user = await User.findById(req.user._id).select('-password -otpCode -otpExpiresAt');
+    const user = await User.findById(req.user._id).select(
+      "-password -otpCode -otpExpiresAt"
+    );
 
     if (!user) {
-      return res.status(404).json({ message: 'User not found' });
+      return res.status(404).json({ message: "User not found" });
     }
 
     return res.status(200).json({
       user: {
         ...user.toObject(),
-        providerProfile: user.providerProfile || null
-      }
+        providerProfile: user.providerProfile || null,
+      },
     });
   } catch (err) {
-    console.error('❌ ME ERROR:', err);
-    return res.status(500).json({ message: 'Could not fetch profile', error: err.message });
+    console.error("❌ ME ERROR:", err.message);
+    return res.status(500).json({
+      message: "Could not fetch profile",
+      error: err.message,
+    });
   }
 });
 
