@@ -1,7 +1,7 @@
-import express from 'express';
-import auth from '../middleware/auth.js';
-import authorizeRoles from '../middleware/role.js';
-import User, { USER_ROLES } from '../models/User.js';
+import express from "express";
+import auth from "../middleware/auth.js";
+import authorizeRoles from "../middleware/role.js";
+import User, { USER_ROLES } from "../models/User.js";
 
 const router = express.Router();
 
@@ -9,8 +9,8 @@ const router = express.Router();
  * ✅ TEST route
  * GET /api/superadmin/test
  */
-router.get('/test', (req, res) => {
-  return res.status(200).json({ message: 'SuperAdmin route working ✅' });
+router.get("/test", (req, res) => {
+  return res.status(200).json({ message: "SuperAdmin route working ✅" });
 });
 
 /**
@@ -18,7 +18,7 @@ router.get('/test', (req, res) => {
  * POST /api/superadmin/create-admin
  */
 router.post(
-  '/create-admin',
+  "/create-admin",
   auth,
   authorizeRoles(USER_ROLES.SUPER_ADMIN),
   async (req, res) => {
@@ -27,13 +27,13 @@ router.post(
 
       if (!name || !email || !password) {
         return res.status(400).json({
-          message: 'name, email, password are required'
+          message: "name, email, password are required",
         });
       }
 
       const exists = await User.findOne({ email });
       if (exists) {
-        return res.status(409).json({ message: 'User already exists ❌' });
+        return res.status(409).json({ message: "User already exists ❌" });
       }
 
       // ✅ Default permissions if none supplied
@@ -41,7 +41,7 @@ router.post(
         canManageUsers: true,
         canManagePricing: true,
         canViewStats: true,
-        canVerifyProviders: true
+        canVerifyProviders: true,
       };
 
       const admin = await User.create({
@@ -49,17 +49,17 @@ router.post(
         email,
         password,
         role: USER_ROLES.ADMIN,
-        permissions: permissions || defaultPermissions
+        permissions: permissions || defaultPermissions,
       });
 
       return res.status(201).json({
-        message: 'Admin created successfully ✅',
-        admin: admin.toSafeJSON(USER_ROLES.SUPER_ADMIN)
+        message: "Admin created successfully ✅",
+        admin: admin.toSafeJSON(USER_ROLES.SUPER_ADMIN),
       });
     } catch (err) {
       return res.status(500).json({
-        message: 'Could not create admin',
-        error: err.message
+        message: "Could not create admin",
+        error: err.message,
       });
     }
   }
@@ -70,34 +70,34 @@ router.post(
  * PATCH /api/superadmin/admin/:id/permissions
  */
 router.patch(
-  '/admin/:id/permissions',
+  "/admin/:id/permissions",
   auth,
   authorizeRoles(USER_ROLES.SUPER_ADMIN),
   async (req, res) => {
     try {
       const admin = await User.findById(req.params.id);
 
-      if (!admin) return res.status(404).json({ message: 'Admin not found' });
+      if (!admin) return res.status(404).json({ message: "Admin not found" });
 
       if (admin.role !== USER_ROLES.ADMIN) {
-        return res.status(400).json({ message: 'Target user is not an Admin ❌' });
+        return res.status(400).json({ message: "Target user is not an Admin ❌" });
       }
 
       admin.permissions = {
         ...admin.permissions,
-        ...req.body
+        ...req.body,
       };
 
       await admin.save();
 
       return res.status(200).json({
-        message: 'Admin permissions updated ✅',
-        admin: admin.toSafeJSON(USER_ROLES.SUPER_ADMIN)
+        message: "Admin permissions updated ✅",
+        admin: admin.toSafeJSON(USER_ROLES.SUPER_ADMIN),
       });
     } catch (err) {
       return res.status(500).json({
-        message: 'Could not update permissions',
-        error: err.message
+        message: "Could not update permissions",
+        error: err.message,
       });
     }
   }
@@ -108,21 +108,24 @@ router.patch(
  * GET /api/superadmin/admins
  */
 router.get(
-  '/admins',
+  "/admins",
   auth,
   authorizeRoles(USER_ROLES.SUPER_ADMIN),
   async (req, res) => {
     try {
+      // ✅ FIXED: chain sort correctly
       const admins = await User.find({
-  role: { $in: [USER_ROLES.ADMIN, USER_ROLES.SUPER_ADMIN] }
-});
-.sort({ createdAt: -1 });
+        role: { $in: [USER_ROLES.ADMIN, USER_ROLES.SUPER_ADMIN] },
+      }).sort({ createdAt: -1 });
 
       return res.status(200).json({
-        admins: admins.map((a) => a.toSafeJSON(USER_ROLES.SUPER_ADMIN))
+        admins: admins.map((a) => a.toSafeJSON(USER_ROLES.SUPER_ADMIN)),
       });
     } catch (err) {
-      return res.status(500).json({ message: 'Could not fetch admins', error: err.message });
+      return res.status(500).json({
+        message: "Could not fetch admins",
+        error: err.message,
+      });
     }
   }
 );
@@ -132,23 +135,23 @@ router.get(
  * PATCH /api/superadmin/admin/:id/archive
  */
 router.patch(
-  '/admin/:id/archive',
+  "/admin/:id/archive",
   auth,
   authorizeRoles(USER_ROLES.SUPER_ADMIN),
   async (req, res) => {
     try {
       const admin = await User.findById(req.params.id);
 
-      if (!admin) return res.status(404).json({ message: 'Admin not found' });
+      if (!admin) return res.status(404).json({ message: "Admin not found" });
 
       // ✅ Must be Admin only
       if (admin.role !== USER_ROLES.ADMIN) {
-        return res.status(400).json({ message: 'Target user is not an Admin ❌' });
+        return res.status(400).json({ message: "Target user is not an Admin ❌" });
       }
 
-      // ✅ Prevent archiving self (extra safety)
+      // ✅ Prevent archiving self
       if (admin._id.toString() === req.user._id.toString()) {
-        return res.status(400).json({ message: 'You cannot archive your own account ❌' });
+        return res.status(400).json({ message: "You cannot archive your own account ❌" });
       }
 
       if (!admin.accountStatus) admin.accountStatus = {};
@@ -160,11 +163,14 @@ router.patch(
       await admin.save();
 
       return res.status(200).json({
-        message: 'Admin archived ✅',
-        admin: admin.toSafeJSON(USER_ROLES.SUPER_ADMIN)
+        message: "Admin archived ✅",
+        admin: admin.toSafeJSON(USER_ROLES.SUPER_ADMIN),
       });
     } catch (err) {
-      return res.status(500).json({ message: 'Could not archive admin', error: err.message });
+      return res.status(500).json({
+        message: "Could not archive admin",
+        error: err.message,
+      });
     }
   }
 );
