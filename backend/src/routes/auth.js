@@ -82,9 +82,7 @@ router.post("/register", async (req, res) => {
 
     // ✅ ✅ IMPORTANT: Skip strict validation for SuperAdmin/Admin
     if (role === USER_ROLES.SUPER_ADMIN || role === USER_ROLES.ADMIN) {
-      console.log(
-        "🟨 REGISTER: Admin/SuperAdmin detected → skipping strict validation"
-      );
+      console.log("🟨 REGISTER: Admin/SuperAdmin detected → skipping strict validation");
 
       const existing = await User.findOne({ email });
       if (existing) {
@@ -122,10 +120,7 @@ router.post("/register", async (req, res) => {
     }
 
     // ✅ NATIONALITY VALIDATION
-    if (
-      !nationalityType ||
-      !["SouthAfrican", "ForeignNational"].includes(nationalityType)
-    ) {
+    if (!nationalityType || !["SouthAfrican", "ForeignNational"].includes(nationalityType)) {
       return res.status(400).json({
         message: "nationalityType must be SouthAfrican or ForeignNational",
       });
@@ -235,6 +230,7 @@ router.post("/login", async (req, res) => {
     const { email, password } = req.body;
 
     console.log("🟦 LOGIN HIT:", email);
+    console.log("🟦 ENABLE_OTP_DEBUG:", process.env.ENABLE_OTP_DEBUG);
 
     if (!email || !password) {
       return res.status(400).json({ message: "Email and password are required" });
@@ -243,12 +239,14 @@ router.post("/login", async (req, res) => {
     const user = await User.findOne({ email });
 
     if (!user) {
+      console.log("🟥 LOGIN FAIL: user not found");
       return res.status(401).json({ message: "Invalid credentials" });
     }
 
     const isMatch = await user.matchPassword(password);
 
     if (!isMatch) {
+      console.log("🟥 LOGIN FAIL: wrong password");
       return res.status(401).json({ message: "Invalid credentials" });
     }
 
@@ -257,14 +255,15 @@ router.post("/login", async (req, res) => {
     user.otpExpiresAt = new Date(Date.now() + 10 * 60 * 1000);
     await user.save();
 
-    // ✅ OTP DEBUG LOG FOR RENDER
-    if (process.env.OTP_DEBUG === "true") {
-      console.log("✅ OTP GENERATED:", otpCode, "| EMAIL:", email);
-    }
+    // ✅ ALWAYS LOG OTP to Render Logs (BEST FOR TESTING)
+    console.log("✅ OTP GENERATED FOR:", email, "| OTP:", otpCode);
+
+    // ✅ Return OTP only if debug enabled
+    const debugEnabled = String(process.env.ENABLE_OTP_DEBUG).toLowerCase() === "true";
 
     return res.status(200).json({
       message: "OTP generated ✅",
-      otp: process.env.OTP_DEBUG === "true" ? otpCode : undefined,
+      otp: debugEnabled ? otpCode : undefined,
     });
   } catch (err) {
     console.error("❌ LOGIN ERROR:", err.message);
@@ -334,9 +333,7 @@ router.post("/verify-otp", async (req, res) => {
  */
 router.get("/me", auth, async (req, res) => {
   try {
-    const user = await User.findById(req.user._id).select(
-      "-password -otpCode -otpExpiresAt"
-    );
+    const user = await User.findById(req.user._id).select("-password -otpCode -otpExpiresAt");
 
     if (!user) {
       return res.status(404).json({ message: "User not found" });
