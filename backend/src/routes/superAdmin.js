@@ -113,7 +113,10 @@ router.get(
   authorizeRoles(USER_ROLES.SUPER_ADMIN),
   async (req, res) => {
     try {
-      const admins = await User.find({ role: USER_ROLES.ADMIN }).sort({ createdAt: -1 });
+      const admins = await User.find({
+  role: { $in: [USER_ROLES.ADMIN, USER_ROLES.SUPER_ADMIN] }
+});
+.sort({ createdAt: -1 });
 
       return res.status(200).json({
         admins: admins.map((a) => a.toSafeJSON(USER_ROLES.SUPER_ADMIN))

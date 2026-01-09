@@ -20,6 +20,9 @@ import adminJobsRoutes from "./routes/adminJobs.js";
 import adminLiveMapRoutes from "./routes/adminLiveMap.js";
 import adminPaymentsRoutes from "./routes/adminPayments.js";
 
+// ✅ ✅ ✅ ANALYTICS ROUTES (NEW)
+import adminAnalyticsRoutes from "./routes/adminAnalytics.js";
+
 // ✅ NEW ROUTES (SuperAdmin + Admin User Management)
 import superAdminRoutes from "./routes/superAdmin.js";
 import adminUsersRoutes from "./routes/adminUsers.js";
@@ -79,6 +82,9 @@ app.use("/api/admin/statistics", adminStatisticsRoutes);
 app.use("/api/admin/jobs", adminJobsRoutes);
 app.use("/api/admin/live", adminLiveMapRoutes);
 app.use("/api/admin/payments", adminPaymentsRoutes);
+
+// ✅ ✅ ✅ ADMIN ANALYTICS ROUTES (NEW)
+app.use("/api/admin/analytics", adminAnalyticsRoutes);
 
 // ✅ ✅ ✅ ADMIN SUPPORT ROUTES
 app.use("/api/admin/support", adminSupportRoutes);
