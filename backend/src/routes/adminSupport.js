@@ -1,7 +1,7 @@
 import express from "express";
 import auth from "../middleware/auth.js";
 import authorizeRoles from "../middleware/role.js";
-import SupportTicket, { TICKET_STATUSES } from "../models/SupportTicket.js";
+import SupportTicket from "../models/SupportTicket.js";
 import { USER_ROLES } from "../models/User.js";
 
 const router = express.Router();
@@ -9,10 +9,6 @@ const router = express.Router();
 /**
  * ✅ Admin fetches all support tickets
  * GET /api/admin/support/tickets
- * Optional query:
- *  - status=OPEN
- *  - type=PAYMENT
- *  - priority=HIGH
  */
 router.get(
   "/tickets",
@@ -22,8 +18,11 @@ router.get(
     try {
       const { status, type, priority } = req.query;
 
-      const filter = {};
+      // ✅ DEBUG: Count all documents in DB
+      const count = await SupportTicket.countDocuments();
+      console.log("✅ TOTAL SUPPORT TICKETS:", count);
 
+      const filter = {};
       if (status) filter.status = status;
       if (type) filter.type = type;
       if (priority) filter.priority = priority;
@@ -35,38 +34,13 @@ router.get(
         .populate("assignedTo", "name email role")
         .populate("job");
 
-      return res.status(200).json({ tickets });
+      return res.status(200).json({
+        count,
+        tickets,
+      });
     } catch (err) {
       return res.status(500).json({
         message: "Failed to fetch support tickets ❌",
-        error: err.message,
-      });
-    }
-  }
-);
-
-/**
- * ✅ Admin fetches single ticket
- * GET /api/admin/support/tickets/:id
- */
-router.get(
-  "/tickets/:id",
-  auth,
-  authorizeRoles(USER_ROLES.ADMIN, USER_ROLES.SUPER_ADMIN),
-  async (req, res) => {
-    try {
-      const ticket = await SupportTicket.findById(req.params.id)
-        .populate("createdBy", "name email role")
-        .populate("provider", "name email role")
-        .populate("assignedTo", "name email role")
-        .populate("job");
-
-      if (!ticket) return res.status(404).json({ message: "Ticket not found ❌" });
-
-      return res.status(200).json({ ticket });
-    } catch (err) {
-      return res.status(500).json({
-        message: "Failed to fetch ticket ❌",
         error: err.message,
       });
     }
@@ -89,7 +63,7 @@ router.patch(
       if (!ticket) return res.status(404).json({ message: "Ticket not found ❌" });
 
       ticket.assignedTo = adminId || req.user._id;
-      ticket.status = TICKET_STATUSES.IN_PROGRESS;
+      ticket.status = "IN_PROGRESS";
 
       ticket.auditLogs.push({
         action: "TICKET_ASSIGNED",
