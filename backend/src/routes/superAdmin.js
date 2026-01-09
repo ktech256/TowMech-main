@@ -31,12 +31,13 @@ router.post(
         });
       }
 
+      // ✅ Check if user exists
       const exists = await User.findOne({ email });
       if (exists) {
         return res.status(409).json({ message: "User already exists ❌" });
       }
 
-      // ✅ Allow creating both Admin and SuperAdmin
+      // ✅ Allow Admin or SuperAdmin creation
       const chosenRole =
         role === "SuperAdmin" ? USER_ROLES.SUPER_ADMIN : USER_ROLES.ADMIN;
 
@@ -48,31 +49,38 @@ router.post(
         canVerifyProviders: true,
       };
 
-      // ✅ IMPORTANT: Your User model requires fields like firstName, lastName, phone, birthday, nationalityType
-      // ✅ So we auto-fill safe defaults so admin creation NEVER fails.
-      const admin = await User.create({
+      // ✅ Safe defaults for required User schema fields
+      const firstName = name.split(" ")[0] || name;
+      const lastName = name.split(" ").slice(1).join(" ") || "Admin";
+
+      const admin = new User({
         name,
         email,
         password,
         role: chosenRole,
         permissions: permissions || defaultPermissions,
 
-        // ✅ REQUIRED USER MODEL FIELDS (AUTO DEFAULTS)
-        firstName: name.split(" ")[0] || name,
-        lastName: name.split(" ").slice(1).join(" ") || "Admin",
+        // ✅ REQUIRED FIELDS (SAFE DEFAULTS)
+        firstName,
+        lastName,
         phone: "0000000000",
         birthday: new Date("1990-01-01"),
         nationalityType: "OTHER",
       });
+
+      // ✅ Save with schema validation
+      await admin.save();
 
       return res.status(201).json({
         message: `${chosenRole} created successfully ✅`,
         admin: admin.toSafeJSON(USER_ROLES.SUPER_ADMIN),
       });
     } catch (err) {
+      console.log("❌ CREATE ADMIN ERROR:", err);
+
       return res.status(500).json({
-        message: "Could not create admin",
-        error: err.message,
+        message: err.message || "Could not create admin",
+        error: err?.errors || err,
       });
     }
   }
@@ -92,16 +100,16 @@ router.patch(
 
       if (!admin) return res.status(404).json({ message: "Admin not found" });
 
-      // ✅ allow editing both Admin + SuperAdmin
       if (![USER_ROLES.ADMIN, USER_ROLES.SUPER_ADMIN].includes(admin.role)) {
-        return res
-          .status(400)
-          .json({ message: "Target user must be Admin or SuperAdmin ❌" });
+        return res.status(400).json({ message: "Target user is not Admin/SuperAdmin ❌" });
       }
+
+      // ✅ FIX: permissions should be inside body.permissions
+      const incomingPermissions = req.body.permissions || {};
 
       admin.permissions = {
         ...admin.permissions,
-        ...(req.body.permissions || req.body),
+        ...incomingPermissions,
       };
 
       await admin.save();
@@ -111,9 +119,11 @@ router.patch(
         admin: admin.toSafeJSON(USER_ROLES.SUPER_ADMIN),
       });
     } catch (err) {
+      console.log("❌ UPDATE PERMISSIONS ERROR:", err);
+
       return res.status(500).json({
-        message: "Could not update permissions",
-        error: err.message,
+        message: err.message || "Could not update permissions",
+        error: err?.errors || err,
       });
     }
   }
@@ -137,9 +147,11 @@ router.get(
         admins: admins.map((a) => a.toSafeJSON(USER_ROLES.SUPER_ADMIN)),
       });
     } catch (err) {
+      console.log("❌ FETCH ADMINS ERROR:", err);
+
       return res.status(500).json({
-        message: "Could not fetch admins",
-        error: err.message,
+        message: err.message || "Could not fetch admins",
+        error: err?.errors || err,
       });
     }
   }
@@ -159,18 +171,9 @@ router.patch(
 
       if (!admin) return res.status(404).json({ message: "Admin not found" });
 
-      // ✅ Must be Admin only (prevent archiving SuperAdmin)
-      if (admin.role !== USER_ROLES.ADMIN) {
-        return res
-          .status(400)
-          .json({ message: "Only Admin accounts can be archived ❌" });
-      }
-
       // ✅ Prevent archiving self
       if (admin._id.toString() === req.user._id.toString()) {
-        return res
-          .status(400)
-          .json({ message: "You cannot archive your own account ❌" });
+        return res.status(400).json({ message: "You cannot archive your own account ❌" });
       }
 
       if (!admin.accountStatus) admin.accountStatus = {};
@@ -186,9 +189,11 @@ router.patch(
         admin: admin.toSafeJSON(USER_ROLES.SUPER_ADMIN),
       });
     } catch (err) {
+      console.log("❌ ARCHIVE ERROR:", err);
+
       return res.status(500).json({
-        message: "Could not archive admin",
-        error: err.message,
+        message: err.message || "Could not archive admin",
+        error: err?.errors || err,
       });
     }
   }
