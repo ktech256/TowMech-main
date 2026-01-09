@@ -1,13 +1,13 @@
 import express from "express";
 import PricingConfig from "../models/PricingConfig.js";
 import User from "../models/User.js";
-import SystemSettings from "../models/SystemSettings.js"; // ✅ NEW
+import ServiceCategory from "../models/ServiceCategory.js";
+import SystemSettings from "../models/SystemSettings.js";
 
 const router = express.Router();
 
 /**
  * ✅ GET VEHICLE TYPES + TOW TRUCK TYPES
- * Frontend uses this to populate dropdowns
  * GET /api/config/types
  */
 router.get("/types", async (req, res) => {
@@ -27,17 +27,13 @@ router.get("/types", async (req, res) => {
 });
 
 /**
- * ✅ GET PRICING CONFIG (FROM DATABASE ✅)
+ * ✅ GET PRICING CONFIG
  * GET /api/config/pricing
  */
 router.get("/pricing", async (req, res) => {
   try {
     const pricing = await PricingConfig.findOne();
-
-    return res.json({
-      success: true,
-      pricing: pricing || null,
-    });
+    return res.json({ success: true, pricing: pricing || null });
   } catch (err) {
     return res.status(500).json({
       success: false,
@@ -48,69 +44,80 @@ router.get("/pricing", async (req, res) => {
 });
 
 /**
- * ✅ GET EVERYTHING AT ONCE (FROM DATABASE ✅)
- * GET /api/config/all
+ * ✅ SAFE ANDROID FETCH
+ * GET /api/config/mobile
+ * ✅ Android app fetches keys/config without exposing secrets
  */
-router.get("/all", async (req, res) => {
+router.get("/mobile", async (req, res) => {
   try {
-    const pricing = await PricingConfig.findOne();
+    const settings = await SystemSettings.findOne();
 
     return res.json({
       success: true,
-      vehicleTypes: User.VEHICLE_TYPES || [],
-      towTruckTypes: User.TOW_TRUCK_TYPES || [],
-      pricing: pricing || null,
+
+      // ✅ Mobile safe values
+      platformName: settings?.platformName || "TowMech",
+      supportEmail: settings?.supportEmail || "",
+      supportPhone: settings?.supportPhone || "",
+
+      // ✅ Google Maps Key (allowed for app)
+      googleMapsKey: settings?.integrations?.googleMapsKey || "",
+
+      // ✅ Active payment gateway (app can know)
+      paymentGateway: settings?.integrations?.paymentGateway || "YOCO",
     });
   } catch (err) {
     return res.status(500).json({
       success: false,
-      message: "Failed to load config",
+      message: "Failed to load mobile settings",
       error: err.message,
     });
   }
 });
 
 /**
- * ✅ ✅ ✅ ANDROID SAFE INTEGRATIONS FETCH
- * ✅ Mobile App should never hardcode keys
- *
- * GET /api/config/integrations
- *
- * Returns ONLY SAFE values:
- * ✅ paymentGateway
- * ✅ paymentPublicKey
- * ✅ googleMapsKey
- *
- * ❌ Never returns secret keys
+ * ✅ PUBLIC SERVICE CATEGORIES
+ * GET /api/config/service-categories
  */
-router.get("/integrations", async (req, res) => {
+router.get("/service-categories", async (req, res) => {
   try {
-    const settings = await SystemSettings.findOne();
+    const categories = await ServiceCategory.find({ active: true }).sort({
+      createdAt: -1,
+    });
 
-    // ✅ Default response if settings not yet created
-    if (!settings) {
-      return res.status(200).json({
-        success: true,
-        integrations: {
-          paymentGateway: "YOCO",
-          paymentPublicKey: "",
-          googleMapsKey: "",
-        },
-      });
-    }
-
-    return res.status(200).json({
+    return res.json({
       success: true,
-      integrations: {
-        paymentGateway: settings.integrations?.paymentGateway || "YOCO",
-        paymentPublicKey: settings.integrations?.paymentPublicKey || "",
-        googleMapsKey: settings.integrations?.googleMapsKey || "",
-      },
+      categories,
     });
   } catch (err) {
     return res.status(500).json({
       success: false,
-      message: "Failed to fetch integrations ❌",
+      message: "Failed to load service categories",
+      error: err.message,
+    });
+  }
+});
+
+/**
+ * ✅ GET EVERYTHING AT ONCE
+ * GET /api/config/all
+ */
+router.get("/all", async (req, res) => {
+  try {
+    const pricing = await PricingConfig.findOne();
+    const categories = await ServiceCategory.find({ active: true });
+
+    return res.json({
+      success: true,
+      vehicleTypes: User.VEHICLE_TYPES || [],
+      towTruckTypes: User.TOW_TRUCK_TYPES || [],
+      pricing: pricing || null,
+      categories,
+    });
+  } catch (err) {
+    return res.status(500).json({
+      success: false,
+      message: "Failed to load config",
       error: err.message,
     });
   }

@@ -24,8 +24,11 @@ import adminJobsRoutes from "./routes/adminJobs.js";
 import adminLiveMapRoutes from "./routes/adminLiveMap.js";
 import adminPaymentsRoutes from "./routes/adminPayments.js";
 import adminAnalyticsRoutes from "./routes/adminAnalytics.js";
-import adminSettingsRoutes from "./routes/adminSettings.js"; // ✅ Settings
-import adminZonesRoutes from "./routes/adminZones.js"; // ✅ NEW ZONES ROUTE ✅
+import adminSettingsRoutes from "./routes/adminSettings.js";
+import adminZonesRoutes from "./routes/adminZones.js";
+
+// ✅ ✅ ✅ NEW ✅ SERVICE CATEGORIES ROUTE
+import adminServiceCategoriesRoutes from "./routes/adminServiceCategories.js";
 
 // ✅ SuperAdmin + Admin User Management
 import superAdminRoutes from "./routes/superAdmin.js";
@@ -107,9 +110,14 @@ app.use("/api/admin/notifications", adminNotificationsRoutes);
 app.use("/api/admin/settings", adminSettingsRoutes);
 
 /**
- * ✅ ✅ ✅ ZONES ADMIN ROUTE (NEW ✅)
+ * ✅ ZONES ADMIN ROUTE
  */
 app.use("/api/admin/zones", adminZonesRoutes);
+
+/**
+ * ✅ ✅ ✅ SERVICE CATEGORIES ADMIN ROUTE
+ */
+app.use("/api/admin/service-categories", adminServiceCategoriesRoutes);
 
 /**
  * ✅ ADMIN SAFETY ROUTES
