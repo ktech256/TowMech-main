@@ -88,17 +88,32 @@ router.get(
       ]);
 
       const todayRevenueAgg = await Payment.aggregate([
-        { $match: { status: PAYMENT_STATUSES.PAID, createdAt: { $gte: startOfToday } } },
+        {
+          $match: {
+            status: PAYMENT_STATUSES.PAID,
+            createdAt: { $gte: startOfToday },
+          },
+        },
         { $group: { _id: null, total: { $sum: "$amount" } } },
       ]);
 
       const weekRevenueAgg = await Payment.aggregate([
-        { $match: { status: PAYMENT_STATUSES.PAID, createdAt: { $gte: startOfWeek } } },
+        {
+          $match: {
+            status: PAYMENT_STATUSES.PAID,
+            createdAt: { $gte: startOfWeek },
+          },
+        },
         { $group: { _id: null, total: { $sum: "$amount" } } },
       ]);
 
       const monthRevenueAgg = await Payment.aggregate([
-        { $match: { status: PAYMENT_STATUSES.PAID, createdAt: { $gte: startOfMonth } } },
+        {
+          $match: {
+            status: PAYMENT_STATUSES.PAID,
+            createdAt: { $gte: startOfMonth },
+          },
+        },
         { $group: { _id: null, total: { $sum: "$amount" } } },
       ]);
 
@@ -107,22 +122,43 @@ router.get(
       const revenueWeek = weekRevenueAgg?.[0]?.total || 0;
       const revenueMonth = monthRevenueAgg?.[0]?.total || 0;
 
-      const paymentsPaid = await Payment.countDocuments({ status: PAYMENT_STATUSES.PAID });
-      const paymentsPending = await Payment.countDocuments({ status: PAYMENT_STATUSES.PENDING });
-      const paymentsRefunded = await Payment.countDocuments({ status: PAYMENT_STATUSES.REFUNDED });
+      const paymentsPaid = await Payment.countDocuments({
+        status: PAYMENT_STATUSES.PAID,
+      });
+
+      const paymentsPending = await Payment.countDocuments({
+        status: PAYMENT_STATUSES.PENDING,
+      });
+
+      const paymentsRefunded = await Payment.countDocuments({
+        status: PAYMENT_STATUSES.REFUNDED,
+      });
 
       const totalJobs = await Job.countDocuments({});
-      const jobsToday = await Job.countDocuments({ createdAt: { $gte: startOfToday } });
-      const jobsWeek = await Job.countDocuments({ createdAt: { $gte: startOfWeek } });
-      const jobsMonth = await Job.countDocuments({ createdAt: { $gte: startOfMonth } });
+      const jobsToday = await Job.countDocuments({
+        createdAt: { $gte: startOfToday },
+      });
+      const jobsWeek = await Job.countDocuments({
+        createdAt: { $gte: startOfWeek },
+      });
+      const jobsMonth = await Job.countDocuments({
+        createdAt: { $gte: startOfMonth },
+      });
 
-      const jobsCompleted = await Job.countDocuments({ status: JOB_STATUSES.COMPLETED });
-      const jobsCancelled = await Job.countDocuments({ status: JOB_STATUSES.CANCELLED });
+      const jobsCompleted = await Job.countDocuments({
+        status: JOB_STATUSES.COMPLETED,
+      });
+
+      const jobsCancelled = await Job.countDocuments({
+        status: JOB_STATUSES.CANCELLED,
+      });
 
       /**
        * ✅ OPERATIONAL METRICS
        */
-      const totalCustomers = await User.countDocuments({ role: USER_ROLES.CUSTOMER });
+      const totalCustomers = await User.countDocuments({
+        role: USER_ROLES.CUSTOMER,
+      });
 
       const totalProviders = await User.countDocuments({
         role: { $in: [USER_ROLES.TOW_TRUCK, USER_ROLES.MECHANIC] },
@@ -156,17 +192,18 @@ router.get(
       }, {});
 
       /**
-       * ✅ Average completion time (if timestamps exist)
-       * We estimate using: createdAt → updatedAt for COMPLETED jobs.
+       * ✅ Average completion time (based on createdAt → updatedAt)
        */
       const completedJobs = await Job.find({ status: JOB_STATUSES.COMPLETED })
         .select("createdAt updatedAt")
         .limit(200);
 
       let avgCompletionMinutes = 0;
+
       if (completedJobs.length > 0) {
         const totalMinutes = completedJobs.reduce((sum, j) => {
-          const diff = new Date(j.updatedAt).getTime() - new Date(j.createdAt).getTime();
+          const diff =
+            new Date(j.updatedAt).getTime() - new Date(j.createdAt).getTime();
           return sum + diff / 60000;
         }, 0);
 
