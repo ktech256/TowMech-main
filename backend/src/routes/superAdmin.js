@@ -53,6 +53,12 @@ router.post(
       const firstName = name.split(" ")[0] || name;
       const lastName = name.split(" ").slice(1).join(" ") || "Admin";
 
+      // ✅ FIX: Use valid nationality enum
+      const validNationality =
+        Array.isArray(User.NATIONALITY_TYPES) && User.NATIONALITY_TYPES.length > 0
+          ? User.NATIONALITY_TYPES[0]
+          : "SOUTH_AFRICAN";
+
       const admin = new User({
         name,
         email,
@@ -65,10 +71,11 @@ router.post(
         lastName,
         phone: "0000000000",
         birthday: new Date("1990-01-01"),
-        nationalityType: "OTHER",
+
+        // ✅ MUST MATCH ENUM
+        nationalityType: validNationality,
       });
 
-      // ✅ Save with schema validation
       await admin.save();
 
       return res.status(201).json({
@@ -101,10 +108,11 @@ router.patch(
       if (!admin) return res.status(404).json({ message: "Admin not found" });
 
       if (![USER_ROLES.ADMIN, USER_ROLES.SUPER_ADMIN].includes(admin.role)) {
-        return res.status(400).json({ message: "Target user is not Admin/SuperAdmin ❌" });
+        return res
+          .status(400)
+          .json({ message: "Target user is not Admin/SuperAdmin ❌" });
       }
 
-      // ✅ FIX: permissions should be inside body.permissions
       const incomingPermissions = req.body.permissions || {};
 
       admin.permissions = {
@@ -173,7 +181,9 @@ router.patch(
 
       // ✅ Prevent archiving self
       if (admin._id.toString() === req.user._id.toString()) {
-        return res.status(400).json({ message: "You cannot archive your own account ❌" });
+        return res
+          .status(400)
+          .json({ message: "You cannot archive your own account ❌" });
       }
 
       if (!admin.accountStatus) admin.accountStatus = {};
