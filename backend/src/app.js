@@ -24,9 +24,12 @@ import adminPaymentsRoutes from "./routes/adminPayments.js";
 import superAdminRoutes from "./routes/superAdmin.js";
 import adminUsersRoutes from "./routes/adminUsers.js";
 
-// ✅ ✅ ✅ SUPPORT ROUTES (NEW)
+// ✅ ✅ ✅ SUPPORT ROUTES
 import supportRoutes from "./routes/support.js";
 import adminSupportRoutes from "./routes/adminSupport.js";
+
+// ✅ ✅ ✅ NOTIFICATIONS ROUTES (NEW ADMIN BROADCAST + LOGS)
+import adminNotificationsRoutes from "./routes/adminNotifications.js";
 
 const app = express();
 
@@ -64,7 +67,7 @@ app.use("/api/config", configRoutes);
 app.use("/api/pricing-config", pricingConfigRoutes);
 
 /**
- * ✅ SUPPORT ROUTES ✅
+ * ✅ SUPPORT ROUTES
  */
 app.use("/api/support", supportRoutes);
 
@@ -77,11 +80,14 @@ app.use("/api/admin/jobs", adminJobsRoutes);
 app.use("/api/admin/live", adminLiveMapRoutes);
 app.use("/api/admin/payments", adminPaymentsRoutes);
 
+// ✅ ✅ ✅ ADMIN SUPPORT ROUTES
+app.use("/api/admin/support", adminSupportRoutes);
+
+// ✅ ✅ ✅ ADMIN NOTIFICATIONS ROUTES (Broadcast + Logs)
+app.use("/api/admin/notifications", adminNotificationsRoutes);
+
 // ✅ Admin User Management
 app.use("/api/admin", adminUsersRoutes);
-
-// ✅ ✅ ✅ ADMIN SUPPORT ROUTES ✅
-app.use("/api/admin/support", adminSupportRoutes);
 
 /**
  * ✅ SUPER ADMIN ROUTES
