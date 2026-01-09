@@ -26,9 +26,7 @@ import adminPaymentsRoutes from "./routes/adminPayments.js";
 import adminAnalyticsRoutes from "./routes/adminAnalytics.js";
 import adminSettingsRoutes from "./routes/adminSettings.js";
 import adminZonesRoutes from "./routes/adminZones.js";
-
-// ✅ ✅ ✅ NEW ✅ SERVICE CATEGORIES ROUTE
-import adminServiceCategoriesRoutes from "./routes/adminServiceCategories.js";
+import adminOverviewRoutes from "./routes/adminOverview.js"; // ✅ ✅ ✅ NEW OVERVIEW ROUTE ✅
 
 // ✅ SuperAdmin + Admin User Management
 import superAdminRoutes from "./routes/superAdmin.js";
@@ -65,11 +63,6 @@ app.use("/api/jobs", jobRoutes);
 app.use("/api/providers", providerRoutes);
 app.use("/api/payments", paymentRoutes);
 app.use("/api/notifications", notificationRoutes);
-
-/**
- * ✅ Provider uploads documents
- * PATCH /api/providers/me/documents
- */
 app.use("/api/providers", providerDocumentsRoutes);
 
 /**
@@ -104,34 +97,22 @@ app.use("/api/admin/analytics", adminAnalyticsRoutes);
 app.use("/api/admin/support", adminSupportRoutes);
 app.use("/api/admin/notifications", adminNotificationsRoutes);
 
-/**
- * ✅ SYSTEM SETTINGS ADMIN ROUTE
- */
+// ✅ SYSTEM SETTINGS ADMIN ROUTE
 app.use("/api/admin/settings", adminSettingsRoutes);
 
-/**
- * ✅ ZONES ADMIN ROUTE
- */
+// ✅ ZONES ADMIN ROUTE
 app.use("/api/admin/zones", adminZonesRoutes);
 
-/**
- * ✅ ✅ ✅ SERVICE CATEGORIES ADMIN ROUTE
- */
-app.use("/api/admin/service-categories", adminServiceCategoriesRoutes);
+// ✅ ✅ ✅ OVERVIEW ADMIN ROUTE ✅
+app.use("/api/admin/overview", adminOverviewRoutes);
 
-/**
- * ✅ ADMIN SAFETY ROUTES
- */
+// ✅ ADMIN SAFETY ROUTES
 app.use("/api/admin/safety", adminSafetyRoutes);
 
-/**
- * ✅ Admin User Management
- */
+// ✅ Admin User Management
 app.use("/api/admin", adminUsersRoutes);
 
-/**
- * ✅ SUPER ADMIN ROUTES
- */
+// ✅ SUPER ADMIN ROUTES
 app.use("/api/superadmin", superAdminRoutes);
 
 /**
