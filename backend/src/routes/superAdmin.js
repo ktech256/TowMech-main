@@ -14,7 +14,7 @@ router.get("/test", (req, res) => {
 });
 
 /**
- * ✅ SuperAdmin creates new Admin (with permissions)
+ * ✅ SuperAdmin creates new Admin OR SuperAdmin (with permissions)
  * POST /api/superadmin/create-admin
  */
 router.post(
@@ -23,42 +23,65 @@ router.post(
   authorizeRoles(USER_ROLES.SUPER_ADMIN),
   async (req, res) => {
     try {
-      const { name, email, password, permissions } = req.body;
+      const { name, email, password, role, permissions } = req.body;
 
       if (!name || !email || !password) {
         return res.status(400).json({
-          message: "name, email, password are required",
+          success: false,
+          message: "name, email, password are required ❌",
         });
       }
 
+      // ✅ Ensure role is valid
+      const chosenRole =
+        role === "SuperAdmin" || role === USER_ROLES.SUPER_ADMIN
+          ? USER_ROLES.SUPER_ADMIN
+          : USER_ROLES.ADMIN;
+
       const exists = await User.findOne({ email });
       if (exists) {
-        return res.status(409).json({ message: "User already exists ❌" });
+        return res.status(409).json({
+          success: false,
+          message: "User already exists ❌",
+        });
       }
 
-      // ✅ Default permissions if none supplied
+      // ✅ Default permissions
       const defaultPermissions = {
+        canViewOverview: true,
         canManageUsers: true,
         canManagePricing: true,
-        canViewStats: true,
         canVerifyProviders: true,
+        canApprovePayments: true,
+        canRefundPayments: true,
+        canManageJobs: true,
+        canBroadcastNotifications: true,
+        canManageSafety: true,
+        canManageSettings: true,
+        canManageZones: true,
+        canManageServiceCategories: true,
+        canViewAnalytics: true,
       };
 
       const admin = await User.create({
         name,
         email,
         password,
-        role: USER_ROLES.ADMIN,
+        role: chosenRole,
         permissions: permissions || defaultPermissions,
       });
 
       return res.status(201).json({
-        message: "Admin created successfully ✅",
+        success: true,
+        message: `${chosenRole} created successfully ✅`,
         admin: admin.toSafeJSON(USER_ROLES.SUPER_ADMIN),
       });
     } catch (err) {
+      console.error("❌ CREATE ADMIN ERROR:", err);
+
       return res.status(500).json({
-        message: "Could not create admin",
+        success: false,
+        message: err.message || "Could not create admin ❌",
         error: err.message,
       });
     }
@@ -75,28 +98,46 @@ router.patch(
   authorizeRoles(USER_ROLES.SUPER_ADMIN),
   async (req, res) => {
     try {
+      const { permissions } = req.body;
+
+      if (!permissions || typeof permissions !== "object") {
+        return res.status(400).json({
+          success: false,
+          message: "permissions object is required ❌",
+        });
+      }
+
       const admin = await User.findById(req.params.id);
 
-      if (!admin) return res.status(404).json({ message: "Admin not found" });
+      if (!admin)
+        return res.status(404).json({ success: false, message: "Admin not found ❌" });
 
-      if (admin.role !== USER_ROLES.ADMIN) {
-        return res.status(400).json({ message: "Target user is not an Admin ❌" });
+      // ✅ allow updating Admin or SuperAdmin
+      if (![USER_ROLES.ADMIN, USER_ROLES.SUPER_ADMIN].includes(admin.role)) {
+        return res.status(400).json({
+          success: false,
+          message: "Target user is not an Admin or SuperAdmin ❌",
+        });
       }
 
       admin.permissions = {
-        ...admin.permissions,
-        ...req.body,
+        ...(admin.permissions || {}),
+        ...permissions,
       };
 
       await admin.save();
 
       return res.status(200).json({
-        message: "Admin permissions updated ✅",
+        success: true,
+        message: "Permissions updated ✅",
         admin: admin.toSafeJSON(USER_ROLES.SUPER_ADMIN),
       });
     } catch (err) {
+      console.error("❌ UPDATE PERMISSIONS ERROR:", err);
+
       return res.status(500).json({
-        message: "Could not update permissions",
+        success: false,
+        message: err.message || "Could not update permissions ❌",
         error: err.message,
       });
     }
@@ -104,7 +145,7 @@ router.patch(
 );
 
 /**
- * ✅ SuperAdmin fetches all admins
+ * ✅ SuperAdmin fetches all admins + superadmins
  * GET /api/superadmin/admins
  */
 router.get(
@@ -113,17 +154,20 @@ router.get(
   authorizeRoles(USER_ROLES.SUPER_ADMIN),
   async (req, res) => {
     try {
-      // ✅ FIXED: chain sort correctly
       const admins = await User.find({
         role: { $in: [USER_ROLES.ADMIN, USER_ROLES.SUPER_ADMIN] },
       }).sort({ createdAt: -1 });
 
       return res.status(200).json({
+        success: true,
         admins: admins.map((a) => a.toSafeJSON(USER_ROLES.SUPER_ADMIN)),
       });
     } catch (err) {
+      console.error("❌ FETCH ADMINS ERROR:", err);
+
       return res.status(500).json({
-        message: "Could not fetch admins",
+        success: false,
+        message: err.message || "Could not fetch admins ❌",
         error: err.message,
       });
     }
@@ -142,16 +186,23 @@ router.patch(
     try {
       const admin = await User.findById(req.params.id);
 
-      if (!admin) return res.status(404).json({ message: "Admin not found" });
+      if (!admin)
+        return res.status(404).json({ success: false, message: "Admin not found ❌" });
 
-      // ✅ Must be Admin only
+      // ✅ Must be Admin only (SuperAdmin cannot be archived)
       if (admin.role !== USER_ROLES.ADMIN) {
-        return res.status(400).json({ message: "Target user is not an Admin ❌" });
+        return res.status(400).json({
+          success: false,
+          message: "Only Admin accounts can be archived ❌",
+        });
       }
 
       // ✅ Prevent archiving self
       if (admin._id.toString() === req.user._id.toString()) {
-        return res.status(400).json({ message: "You cannot archive your own account ❌" });
+        return res.status(400).json({
+          success: false,
+          message: "You cannot archive your own account ❌",
+        });
       }
 
       if (!admin.accountStatus) admin.accountStatus = {};
@@ -163,12 +214,16 @@ router.patch(
       await admin.save();
 
       return res.status(200).json({
+        success: true,
         message: "Admin archived ✅",
         admin: admin.toSafeJSON(USER_ROLES.SUPER_ADMIN),
       });
     } catch (err) {
+      console.error("❌ ARCHIVE ADMIN ERROR:", err);
+
       return res.status(500).json({
-        message: "Could not archive admin",
+        success: false,
+        message: err.message || "Could not archive admin ❌",
         error: err.message,
       });
     }
