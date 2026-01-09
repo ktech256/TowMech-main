@@ -1,17 +1,19 @@
 import express from "express";
 import auth from "../middleware/auth.js";
 import authorizeRoles from "../middleware/role.js";
-import User, { USER_ROLES } from "../models/User.js";
 import SystemSettings from "../models/SystemSettings.js";
+import User, { USER_ROLES } from "../models/User.js";
 
 const router = express.Router();
 
 /**
- * ✅ Permission helper
+ * ✅ Permission enforcement helper
  */
 const requirePermission = (req, res, permissionKey) => {
+  // ✅ SuperAdmin bypass
   if (req.user.role === USER_ROLES.SUPER_ADMIN) return true;
 
+  // ✅ Admin must have required permission
   if (req.user.role === USER_ROLES.ADMIN) {
     if (!req.user.permissions || req.user.permissions[permissionKey] !== true) {
       res.status(403).json({
@@ -27,7 +29,7 @@ const requirePermission = (req, res, permissionKey) => {
 };
 
 /**
- * ✅ Get current settings
+ * ✅ GET system settings
  * GET /api/admin/settings
  */
 router.get(
@@ -40,21 +42,15 @@ router.get(
 
       let settings = await SystemSettings.findOne();
 
-      // ✅ Create default settings on first run
+      // ✅ auto create settings if none exists
       if (!settings) {
-        settings = await SystemSettings.create({
-          enableTowTrucks: true,
-          enableMechanics: true,
-          forceUpdateVersion: "",
-          terms: "",
-          privacyPolicy: "",
-        });
+        settings = await SystemSettings.create({});
       }
 
       return res.status(200).json({ settings });
     } catch (err) {
       return res.status(500).json({
-        message: "Failed to fetch system settings ❌",
+        message: "Failed to fetch settings ❌",
         error: err.message,
       });
     }
@@ -62,7 +58,7 @@ router.get(
 );
 
 /**
- * ✅ Update system settings
+ * ✅ PATCH system settings
  * PATCH /api/admin/settings
  */
 router.patch(
@@ -73,32 +69,17 @@ router.patch(
     try {
       if (!requirePermission(req, res, "canManageSettings")) return;
 
+      const { zones, serviceCategories, peakSchedule, integrations } = req.body;
+
       let settings = await SystemSettings.findOne();
 
-      if (!settings) {
-        settings = await SystemSettings.create({});
-      }
+      if (!settings) settings = await SystemSettings.create({});
 
-      const {
-        enableTowTrucks,
-        enableMechanics,
-        forceUpdateVersion,
-        terms,
-        privacyPolicy,
-        zones,
-      } = req.body;
-
-      if (enableTowTrucks !== undefined) settings.enableTowTrucks = enableTowTrucks;
-      if (enableMechanics !== undefined) settings.enableMechanics = enableMechanics;
-
-      if (forceUpdateVersion !== undefined) settings.forceUpdateVersion = forceUpdateVersion;
-
-      if (terms !== undefined) settings.terms = terms;
-      if (privacyPolicy !== undefined) settings.privacyPolicy = privacyPolicy;
-
-      if (zones !== undefined) settings.zones = zones;
-
-      settings.updatedBy = req.user._id;
+      // ✅ Only update if provided
+      if (zones) settings.zones = zones;
+      if (serviceCategories) settings.serviceCategories = serviceCategories;
+      if (peakSchedule) settings.peakSchedule = peakSchedule;
+      if (integrations) settings.integrations = integrations;
 
       await settings.save();
 
@@ -108,7 +89,7 @@ router.patch(
       });
     } catch (err) {
       return res.status(500).json({
-        message: "Failed to update system settings ❌",
+        message: "Failed to update settings ❌",
         error: err.message,
       });
     }

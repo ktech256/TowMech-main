@@ -9,14 +9,14 @@ import paymentRoutes from "./routes/payments.js";
 import notificationRoutes from "./routes/notifications.js";
 import providerDocumentsRoutes from "./routes/providerDocuments.js";
 
-// ✅ ✅ ✅ SAFETY ROUTES
+// ✅ SAFETY ROUTES
 import safetyRoutes from "./routes/safety.js";
 import adminSafetyRoutes from "./routes/adminSafety.js";
 
 // ✅ Config Routes
 import configRoutes from "./routes/config.js";
 
-// ✅ Admin + Config Routes
+// ✅ Admin Routes
 import pricingConfigRoutes from "./routes/adminPricing.js";
 import adminProviderRoutes from "./routes/adminProviders.js";
 import adminStatisticsRoutes from "./routes/adminStatistics.js";
@@ -24,9 +24,8 @@ import adminJobsRoutes from "./routes/adminJobs.js";
 import adminLiveMapRoutes from "./routes/adminLiveMap.js";
 import adminPaymentsRoutes from "./routes/adminPayments.js";
 import adminAnalyticsRoutes from "./routes/adminAnalytics.js";
-
-// ✅ ✅ ✅ NEW ✅ SYSTEM SETTINGS ROUTE
-import adminSettingsRoutes from "./routes/adminSettings.js";
+import adminSettingsRoutes from "./routes/adminSettings.js"; // ✅ Settings
+import adminZonesRoutes from "./routes/adminZones.js"; // ✅ NEW ZONES ROUTE ✅
 
 // ✅ SuperAdmin + Admin User Management
 import superAdminRoutes from "./routes/superAdmin.js";
@@ -63,6 +62,11 @@ app.use("/api/jobs", jobRoutes);
 app.use("/api/providers", providerRoutes);
 app.use("/api/payments", paymentRoutes);
 app.use("/api/notifications", notificationRoutes);
+
+/**
+ * ✅ Provider uploads documents
+ * PATCH /api/providers/me/documents
+ */
 app.use("/api/providers", providerDocumentsRoutes);
 
 /**
@@ -71,7 +75,7 @@ app.use("/api/providers", providerDocumentsRoutes);
 app.use("/api/safety", safetyRoutes);
 
 /**
- * ✅ CONFIG ROUTE
+ * ✅ CONFIG ROUTES
  */
 app.use("/api/config", configRoutes);
 
@@ -98,9 +102,14 @@ app.use("/api/admin/support", adminSupportRoutes);
 app.use("/api/admin/notifications", adminNotificationsRoutes);
 
 /**
- * ✅ ✅ ✅ SYSTEM SETTINGS ADMIN ROUTE (NEW)
+ * ✅ SYSTEM SETTINGS ADMIN ROUTE
  */
 app.use("/api/admin/settings", adminSettingsRoutes);
+
+/**
+ * ✅ ✅ ✅ ZONES ADMIN ROUTE (NEW ✅)
+ */
+app.use("/api/admin/zones", adminZonesRoutes);
 
 /**
  * ✅ ADMIN SAFETY ROUTES
