@@ -1,106 +1,162 @@
 import express from "express";
 import auth from "../middleware/auth.js";
-import SupportTicket, { TICKET_TYPES, TICKET_STATUSES } from "../models/SupportTicket.js";
+import authorizeRoles from "../middleware/role.js";
+import SupportTicket, { TICKET_STATUSES } from "../models/SupportTicket.js";
 import { USER_ROLES } from "../models/User.js";
 
 const router = express.Router();
 
 /**
- * ✅ Customer creates support ticket
- * POST /api/support/tickets
+ * ✅ Admin fetches all support tickets
+ * GET /api/admin/support/tickets
+ * Optional query:
+ *  - status=OPEN
+ *  - type=PAYMENT
+ *  - priority=HIGH
  */
-router.post("/tickets", auth, async (req, res) => {
-  try {
-    // ✅ Only customers/providers can create tickets (admins should use admin panel)
-    if ([USER_ROLES.ADMIN, USER_ROLES.SUPER_ADMIN].includes(req.user.role)) {
-      return res.status(403).json({
-        message: "Admins should create/manage tickets via Admin dashboard ❌",
+router.get(
+  "/tickets",
+  auth,
+  authorizeRoles(USER_ROLES.ADMIN, USER_ROLES.SUPER_ADMIN),
+  async (req, res) => {
+    try {
+      const { status, type, priority } = req.query;
+
+      const filter = {};
+
+      if (status) filter.status = status;
+      if (type) filter.type = type;
+      if (priority) filter.priority = priority;
+
+      const tickets = await SupportTicket.find(filter)
+        .sort({ createdAt: -1 })
+        .populate("createdBy", "name email role")
+        .populate("provider", "name email role")
+        .populate("assignedTo", "name email role")
+        .populate("job");
+
+      return res.status(200).json({ tickets });
+    } catch (err) {
+      return res.status(500).json({
+        message: "Failed to fetch support tickets ❌",
+        error: err.message,
       });
     }
+  }
+);
 
-    const { subject, message, type, priority, jobId, providerId } = req.body;
+/**
+ * ✅ Admin fetches single ticket
+ * GET /api/admin/support/tickets/:id
+ */
+router.get(
+  "/tickets/:id",
+  auth,
+  authorizeRoles(USER_ROLES.ADMIN, USER_ROLES.SUPER_ADMIN),
+  async (req, res) => {
+    try {
+      const ticket = await SupportTicket.findById(req.params.id)
+        .populate("createdBy", "name email role")
+        .populate("provider", "name email role")
+        .populate("assignedTo", "name email role")
+        .populate("job");
 
-    if (!subject || !message) {
-      return res.status(400).json({
-        message: "subject and message are required ❌",
+      if (!ticket) return res.status(404).json({ message: "Ticket not found ❌" });
+
+      return res.status(200).json({ ticket });
+    } catch (err) {
+      return res.status(500).json({
+        message: "Failed to fetch ticket ❌",
+        error: err.message,
       });
     }
+  }
+);
 
-    const ticket = await SupportTicket.create({
-      createdBy: req.user._id,
-      job: jobId || null,
-      provider: providerId || null,
-      subject,
-      message,
-      type: type || TICKET_TYPES.OTHER,
-      priority: priority || "MEDIUM",
-      status: TICKET_STATUSES.OPEN,
-      auditLogs: [
-        {
-          action: "TICKET_CREATED",
+/**
+ * ✅ Admin assigns ticket to an admin
+ * PATCH /api/admin/support/tickets/:id/assign
+ */
+router.patch(
+  "/tickets/:id/assign",
+  auth,
+  authorizeRoles(USER_ROLES.ADMIN, USER_ROLES.SUPER_ADMIN),
+  async (req, res) => {
+    try {
+      const { adminId } = req.body;
+
+      const ticket = await SupportTicket.findById(req.params.id);
+      if (!ticket) return res.status(404).json({ message: "Ticket not found ❌" });
+
+      ticket.assignedTo = adminId || req.user._id;
+      ticket.status = TICKET_STATUSES.IN_PROGRESS;
+
+      ticket.auditLogs.push({
+        action: "TICKET_ASSIGNED",
+        by: req.user._id,
+        meta: { assignedTo: ticket.assignedTo },
+      });
+
+      await ticket.save();
+
+      return res.status(200).json({
+        message: "Ticket assigned ✅",
+        ticket,
+      });
+    } catch (err) {
+      return res.status(500).json({
+        message: "Failed to assign ticket ❌",
+        error: err.message,
+      });
+    }
+  }
+);
+
+/**
+ * ✅ Admin updates ticket status + adds note
+ * PATCH /api/admin/support/tickets/:id/update
+ */
+router.patch(
+  "/tickets/:id/update",
+  auth,
+  authorizeRoles(USER_ROLES.ADMIN, USER_ROLES.SUPER_ADMIN),
+  async (req, res) => {
+    try {
+      const { status, adminNote } = req.body;
+
+      const ticket = await SupportTicket.findById(req.params.id);
+      if (!ticket) return res.status(404).json({ message: "Ticket not found ❌" });
+
+      if (status) {
+        ticket.status = status;
+        ticket.auditLogs.push({
+          action: "STATUS_CHANGED",
           by: req.user._id,
-          meta: { subject, type },
-        },
-      ],
-    });
+          meta: { status },
+        });
+      }
 
-    return res.status(201).json({
-      message: "Support ticket created ✅",
-      ticket,
-    });
-  } catch (err) {
-    return res.status(500).json({
-      message: "Failed to create support ticket ❌",
-      error: err.message,
-    });
-  }
-});
+      if (adminNote !== undefined) {
+        ticket.adminNote = adminNote;
+        ticket.auditLogs.push({
+          action: "NOTE_ADDED",
+          by: req.user._id,
+        });
+      }
 
-/**
- * ✅ Customer fetches own tickets
- * GET /api/support/tickets
- */
-router.get("/tickets", auth, async (req, res) => {
-  try {
-    const tickets = await SupportTicket.find({ createdBy: req.user._id })
-      .sort({ createdAt: -1 })
-      .populate("job")
-      .populate("provider", "name email role");
+      await ticket.save();
 
-    return res.status(200).json({ tickets });
-  } catch (err) {
-    return res.status(500).json({
-      message: "Failed to fetch tickets ❌",
-      error: err.message,
-    });
-  }
-});
-
-/**
- * ✅ Customer fetches single ticket
- * GET /api/support/tickets/:id
- */
-router.get("/tickets/:id", auth, async (req, res) => {
-  try {
-    const ticket = await SupportTicket.findById(req.params.id)
-      .populate("job")
-      .populate("provider", "name email role")
-      .populate("assignedTo", "name email role");
-
-    if (!ticket) return res.status(404).json({ message: "Ticket not found ❌" });
-
-    // ✅ Only owner can view
-    if (ticket.createdBy.toString() !== req.user._id.toString()) {
-      return res.status(403).json({ message: "Not authorized ❌" });
+      return res.status(200).json({
+        message: "Ticket updated ✅",
+        ticket,
+      });
+    } catch (err) {
+      return res.status(500).json({
+        message: "Failed to update ticket ❌",
+        error: err.message,
+      });
     }
-
-    return res.status(200).json({ ticket });
-  } catch (err) {
-    return res.status(500).json({
-      message: "Failed to fetch ticket ❌",
-      error: err.message,
-    });
   }
-});
+);
 
 export default router;
