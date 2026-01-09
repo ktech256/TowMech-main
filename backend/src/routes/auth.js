@@ -70,7 +70,6 @@ router.post("/register", async (req, res) => {
       country,
 
       role = USER_ROLES.CUSTOMER,
-
       towTruckTypes,
     } = req.body;
 
@@ -80,7 +79,7 @@ router.post("/register", async (req, res) => {
       return res.status(400).json({ message: "Invalid role provided" });
     }
 
-    // ✅ ✅ IMPORTANT: Skip strict validation for SuperAdmin/Admin
+    // ✅ Skip strict validation for SuperAdmin/Admin
     if (role === USER_ROLES.SUPER_ADMIN || role === USER_ROLES.ADMIN) {
       console.log("🟨 REGISTER: Admin/SuperAdmin detected → skipping strict validation");
 
@@ -188,7 +187,6 @@ router.post("/register", async (req, res) => {
       country: nationalityType === "ForeignNational" ? country : null,
 
       role,
-
       providerProfile:
         role !== USER_ROLES.CUSTOMER
           ? {
@@ -229,8 +227,11 @@ router.post("/login", async (req, res) => {
 
     const { email, password } = req.body;
 
+    // ✅ IMPORTANT FIX: This makes DEBUG work even if env is missing
+    const debugEnabled = String(process.env.ENABLE_OTP_DEBUG || "false").toLowerCase() === "true";
+
     console.log("🟦 LOGIN HIT:", email);
-    console.log("🟦 ENABLE_OTP_DEBUG:", process.env.ENABLE_OTP_DEBUG);
+    console.log("🟦 ENABLE_OTP_DEBUG:", debugEnabled);
 
     if (!email || !password) {
       return res.status(400).json({ message: "Email and password are required" });
@@ -255,11 +256,8 @@ router.post("/login", async (req, res) => {
     user.otpExpiresAt = new Date(Date.now() + 10 * 60 * 1000);
     await user.save();
 
-    // ✅ ALWAYS LOG OTP to Render Logs (BEST FOR TESTING)
+    // ✅ ALWAYS LOG OTP in Render logs
     console.log("✅ OTP GENERATED FOR:", email, "| OTP:", otpCode);
-
-    // ✅ Return OTP only if debug enabled
-    const debugEnabled = String(process.env.ENABLE_OTP_DEBUG).toLowerCase() === "true";
 
     return res.status(200).json({
       message: "OTP generated ✅",
