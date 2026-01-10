@@ -3,10 +3,7 @@ import User, { USER_ROLES } from "../models/User.js";
 /**
  * ✅ Find nearby matching providers within range
  * ✅ FIXED:
- * - towTruckTypeNeeded default = undefined
- * - ignores null/"null"/""/"undefined"
- * - trims towTruckTypeNeeded
- * - validates pickup coordinates
+ * - supports all vehicles if providerProfile.carTypesSupported is empty
  */
 export const findNearbyProviders = async ({
   roleNeeded,
@@ -18,7 +15,6 @@ export const findNearbyProviders = async ({
   maxDistanceMeters = 20000,
   limit = 10,
 }) => {
-  // ✅ Safety check: must have coordinates
   if (pickupLat === undefined || pickupLng === undefined) {
     console.log("❌ findNearbyProviders: Missing pickup coordinates");
     return [];
@@ -32,16 +28,14 @@ export const findNearbyProviders = async ({
   };
 
   /**
-   * ✅ TowTruck extra filters
+   * ✅ TowTruck type filter
    */
   if (roleNeeded === USER_ROLES.TOW_TRUCK) {
-    // ✅ normalize towTruckTypeNeeded input
     const normalizedTowTruckType =
       typeof towTruckTypeNeeded === "string"
         ? towTruckTypeNeeded.trim()
         : towTruckTypeNeeded;
 
-    // ✅ Only apply filter if valid string is provided
     if (
       normalizedTowTruckType &&
       normalizedTowTruckType !== "null" &&
@@ -50,13 +44,19 @@ export const findNearbyProviders = async ({
       providerQuery["providerProfile.towTruckTypes"] = normalizedTowTruckType;
     }
 
-    // ✅ Optional filter for supported vehicle types
+    /**
+     * ✅ FIX: VehicleType filter should not exclude providers who didn't configure carTypesSupported.
+     * ✅ If provider has empty carTypesSupported, treat it as "supports all"
+     */
     if (vehicleType) {
-      providerQuery["providerProfile.carTypesSupported"] = vehicleType;
+      providerQuery["$or"] = [
+        { "providerProfile.carTypesSupported": vehicleType },
+        { "providerProfile.carTypesSupported": { $exists: false } },
+        { "providerProfile.carTypesSupported": { $size: 0 } },
+      ];
     }
   }
 
-  // ✅ DEBUG LOG
   console.log("✅ findNearbyProviders QUERY:", providerQuery);
 
   const providers = await User.find(providerQuery)
@@ -67,6 +67,8 @@ export const findNearbyProviders = async ({
       spherical: true,
     })
     .limit(limit);
+
+  console.log("✅ Providers found:", providers.length);
 
   return providers;
 };
