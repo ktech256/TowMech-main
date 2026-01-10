@@ -9,7 +9,7 @@ const PAYFAST_LIVE_URL = "https://www.payfast.co.za/eng/process";
 
 /**
  * ✅ Generate PayFast signature
- * PayFast requires MD5 hash of query string in original order
+ * PayFast requires MD5 hash of query string
  */
 function generatePayfastSignature(params, passphrase) {
   const queryString = Object.entries(params)
@@ -24,36 +24,45 @@ function generatePayfastSignature(params, passphrase) {
 }
 
 /**
- * ✅ Load PayFast config (DB first, fallback generic dashboard keys, fallback ENV)
+ * ✅ Load PayFast config
+ * DB fields first, but PAYFAST_MODE ALWAYS comes from ENV (if set)
  */
 async function getPayfastConfig() {
   const settings = await SystemSettings.findOne();
   const i = settings?.integrations || {};
 
+  // ✅ Merchant ID
+  const merchantId =
+    i.payfastMerchantId ||
+    i.paymentPublicKey ||
+    process.env.PAYFAST_MERCHANT_ID ||
+    "";
+
+  // ✅ Merchant Key
+  const merchantKey =
+    i.payfastMerchantKey ||
+    i.paymentSecretKey ||
+    process.env.PAYFAST_MERCHANT_KEY ||
+    "";
+
+  // ✅ Passphrase
+  const passphrase =
+    i.payfastPassphrase ||
+    i.paymentWebhookSecret ||
+    process.env.PAYFAST_PASSPHRASE ||
+    "";
+
+  // ✅ MODE MUST FOLLOW ENV FIRST (because PayFast dashboard doesn't supply sandbox)
+  const mode =
+    process.env.PAYFAST_MODE ||
+    i.payfastMode ||
+    "LIVE";
+
   return {
-    // ✅ 1️⃣ DB PayFast fields (if available)
-    // ✅ 2️⃣ fallback to generic dashboard keys
-    // ✅ 3️⃣ fallback ENV variables
-
-    merchantId:
-      i.payfastMerchantId ||
-      i.paymentPublicKey ||
-      process.env.PAYFAST_MERCHANT_ID ||
-      "",
-
-    merchantKey:
-      i.payfastMerchantKey ||
-      i.paymentSecretKey ||
-      process.env.PAYFAST_MERCHANT_KEY ||
-      "",
-
-    passphrase:
-      i.payfastPassphrase ||
-      i.paymentWebhookSecret ||
-      process.env.PAYFAST_PASSPHRASE ||
-      "",
-
-    mode: i.payfastMode || process.env.PAYFAST_MODE || "SANDBOX",
+    merchantId,
+    merchantKey,
+    passphrase,
+    mode: mode.toUpperCase(),
   };
 }
 
@@ -75,14 +84,18 @@ async function createPayment({
     throw new Error("PayFast Merchant details missing ❌");
   }
 
-  const baseURL = config.mode === "LIVE" ? PAYFAST_LIVE_URL : PAYFAST_SANDBOX_URL;
+  const baseURL =
+    config.mode === "LIVE"
+      ? PAYFAST_LIVE_URL
+      : PAYFAST_SANDBOX_URL;
 
   console.log("✅ PayFast MODE:", config.mode);
+  console.log("✅ PayFast Base URL:", baseURL);
   console.log("✅ PayFast MerchantId:", config.merchantId);
   console.log("✅ PayFast MerchantKey:", config.merchantKey);
   console.log("✅ PayFast Passphrase:", config.passphrase ? "✅ present" : "❌ missing");
 
-  // ✅ IMPORTANT: PayFast signature relies on this EXACT ORDER
+  // ✅ IMPORTANT: PayFast signature relies on consistent param order
   const params = {
     merchant_id: config.merchantId,
     merchant_key: config.merchantKey,
@@ -104,10 +117,10 @@ async function createPayment({
       .map(([k, v]) => `${k}=${encodeURIComponent(v)}`)
       .join("&");
 
-  // ✅ FIX: return BOTH url + paymentUrl
+  console.log("✅ PAYMENT URL GENERATED:", fullUrl);
+
   return {
-    url: fullUrl,           // ✅ Android expects this
-    paymentUrl: fullUrl,    // ✅ backend expects this
+    paymentUrl: fullUrl,
     reference,
     gateway: "PAYFAST",
     signature,
