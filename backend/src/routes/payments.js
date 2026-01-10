@@ -1,35 +1,16 @@
 import express from "express";
-import crypto from "crypto";
-
 import Payment, { PAYMENT_STATUSES } from "../models/Payment.js";
 import Job, { JOB_STATUSES } from "../models/Job.js";
-
 import auth from "../middleware/auth.js";
 import authorizeRoles from "../middleware/role.js";
 import { USER_ROLES } from "../models/User.js";
-
 import { broadcastJobToProviders } from "../utils/broadcastJob.js";
+
 import { getGatewayAdapter, getActivePaymentGateway } from "../services/payments/index.js";
 
 const router = express.Router();
 
 console.log("✅ payments.js loaded ✅");
-
-/**
- * ✅ PayFast Signature Verification
- */
-function generatePayfastSignature(params, passphrase) {
-  const sortedKeys = Object.keys(params).sort();
-  const queryString = sortedKeys
-    .map((k) => `${k}=${encodeURIComponent(params[k]).replace(/%20/g, "+")}`)
-    .join("&");
-
-  const finalString = passphrase
-    ? `${queryString}&passphrase=${encodeURIComponent(passphrase).replace(/%20/g, "+")}`
-    : queryString;
-
-  return crypto.createHash("md5").update(finalString).digest("hex");
-}
 
 /**
  * ✅ Customer creates booking fee payment for a Job
@@ -116,14 +97,26 @@ router.post(
         customerEmail: req.user.email,
       });
 
+      // ✅ Save gateway response
       payment.providerReference = reference;
       payment.providerPayload = initResponse;
       await payment.save();
 
+      // ✅ Extract payment URL from initResponse
+      const paymentUrl =
+        initResponse.paymentUrl ||
+        initResponse.url ||
+        initResponse.payment_url ||
+        null;
+
+      console.log("✅ PAYMENT URL GENERATED:", paymentUrl);
+
       return res.status(201).json({
         message: `${activeGateway} payment initialized ✅`,
-        payment,
         gateway: activeGateway,
+        payment,
+        paymentUrl, // ✅ NOW AT TOP LEVEL
+        url: paymentUrl, // ✅ ALSO TOP LEVEL FOR MOBILE APP
         initResponse,
       });
     } catch (err) {
@@ -132,75 +125,6 @@ router.post(
         message: "Could not create payment",
         error: err.message,
       });
-    }
-  }
-);
-
-/**
- * ✅ PayFast ITN Notify Route
- * POST /api/payments/notify/payfast
- * ✅ Called by PayFast after payment
- */
-router.post(
-  "/notify/payfast",
-  express.urlencoded({ extended: false }), // ✅ PayFast sends form-urlencoded
-  async (req, res) => {
-    console.log("✅ PAYFAST ITN HIT ✅");
-    console.log("✅ BODY:", req.body);
-
-    try {
-      const pfData = { ...req.body };
-
-      const signatureFromPayFast = pfData.signature;
-      delete pfData.signature;
-
-      // ✅ Generate signature again
-      const passphrase = process.env.PAYFAST_PASSPHRASE || "";
-      const generatedSignature = generatePayfastSignature(pfData, passphrase);
-
-      if (generatedSignature !== signatureFromPayFast) {
-        console.log("❌ PAYFAST SIGNATURE MISMATCH ❌");
-        return res.status(400).send("Invalid signature");
-      }
-
-      console.log("✅ PAYFAST SIGNATURE VERIFIED ✅");
-
-      const reference = pfData.m_payment_id; // TM-xxxx
-      if (!reference) return res.status(400).send("Missing reference");
-
-      // ✅ Find payment by providerReference
-      const payment = await Payment.findOne({ providerReference: reference });
-      if (!payment) return res.status(404).send("Payment not found");
-
-      // ✅ Already PAID
-      if (payment.status === PAYMENT_STATUSES.PAID) {
-        console.log("✅ Payment already PAID");
-        return res.status(200).send("OK");
-      }
-
-      // ✅ Update Payment
-      payment.status = PAYMENT_STATUSES.PAID;
-      payment.paidAt = new Date();
-      payment.providerPayload = pfData;
-      await payment.save();
-
-      // ✅ Update Job
-      const job = await Job.findById(payment.job);
-      if (!job) return res.status(404).send("Job not found");
-
-      job.pricing.bookingFeeStatus = "PAID";
-      job.pricing.bookingFeePaidAt = new Date();
-      await job.save();
-
-      console.log("✅ Payment marked PAID ✅ Broadcasting job...");
-
-      // ✅ Broadcast to providers
-      await broadcastJobToProviders(job._id);
-
-      return res.status(200).send("OK ✅");
-    } catch (err) {
-      console.log("❌ PAYFAST ITN ERROR:", err.message);
-      return res.status(500).send("ERROR");
     }
   }
 );
@@ -223,10 +147,7 @@ router.patch("/job/:jobId/mark-paid", auth, async (req, res) => {
       });
     }
 
-    if (
-      req.user.role === USER_ROLES.CUSTOMER &&
-      payment.customer.toString() !== req.user._id.toString()
-    ) {
+    if (req.user.role === USER_ROLES.CUSTOMER && payment.customer.toString() !== req.user._id.toString()) {
       return res.status(403).json({ message: "Not authorized to mark this payment" });
     }
 
@@ -237,6 +158,11 @@ router.patch("/job/:jobId/mark-paid", auth, async (req, res) => {
     payment.status = PAYMENT_STATUSES.PAID;
     payment.paidAt = new Date();
     payment.providerReference = `MANUAL-${Date.now()}`;
+
+    // ✅ Audit
+    payment.manualMarkedBy = req.user._id;
+    payment.manualMarkedAt = new Date();
+
     await payment.save();
 
     const job = await Job.findById(payment.job);
