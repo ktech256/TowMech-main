@@ -53,10 +53,7 @@ async function getPayfastConfig() {
       process.env.PAYFAST_PASSPHRASE ||
       "",
 
-    mode:
-      i.payfastMode ||
-      process.env.PAYFAST_MODE ||
-      "SANDBOX",
+    mode: i.payfastMode || process.env.PAYFAST_MODE || "SANDBOX",
   };
 }
 
@@ -107,8 +104,10 @@ async function createPayment({
       .map(([k, v]) => `${k}=${encodeURIComponent(v)}`)
       .join("&");
 
+  // ✅ FIX: return BOTH url + paymentUrl
   return {
-    paymentUrl: fullUrl,
+    url: fullUrl,           // ✅ Android expects this
+    paymentUrl: fullUrl,    // ✅ backend expects this
     reference,
     gateway: "PAYFAST",
     signature,
