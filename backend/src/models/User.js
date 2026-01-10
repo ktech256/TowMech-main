@@ -14,14 +14,15 @@ export const USER_ROLES = {
 
 /**
  * ✅ PROVIDER TYPES (TowTruck types)
+ * ✅ MUST MATCH PRICING LOGIC EXACTLY
  */
 export const TOW_TRUCK_TYPES = [
-  "Flatbed",
-  "Wheel-Lift",
-  "Hook and Chain",
-  "Heavy Duty Tow Truck",
-  "Pickup with tow hitch",
-  "Tow Dolly",
+  "TowTruck",
+  "Rollback",
+  "TowTruck-XL",
+  "TowTruck-XXL",
+  "Recovery",
+  "Flatbed", // ✅ keep flatbed for backward support
 ];
 
 export const VEHICLE_TYPES = [
@@ -36,44 +37,34 @@ export const VEHICLE_TYPES = [
 
 /**
  * ✅ Admin Permissions Schema (ONLY for Admin role)
- * ✅ MUST match frontend PERMISSION_KEYS
+ * ✅ MUST MATCH DASHBOARD PERMISSION KEYS
  */
 const permissionsSchema = new mongoose.Schema(
   {
-    // ✅ OVERVIEW
+    // ✅ Overview
     canViewOverview: { type: Boolean, default: false },
 
-    // ✅ PROVIDERS
+    // ✅ Core admin
     canVerifyProviders: { type: Boolean, default: false },
-
-    // ✅ PAYMENTS
     canApprovePayments: { type: Boolean, default: false },
     canRefundPayments: { type: Boolean, default: false },
-
-    // ✅ USERS / JOBS
     canManageUsers: { type: Boolean, default: false },
     canManageJobs: { type: Boolean, default: false },
-
-    // ✅ NOTIFICATIONS
     canBroadcastNotifications: { type: Boolean, default: false },
 
-    // ✅ SAFETY
+    // ✅ Safety + settings
     canManageSafety: { type: Boolean, default: false },
-
-    // ✅ SETTINGS
     canManageSettings: { type: Boolean, default: false },
 
-    // ✅ ZONES
+    // ✅ Zones + Service Categories
     canManageZones: { type: Boolean, default: false },
-
-    // ✅ SERVICE CATEGORIES
     canManageServiceCategories: { type: Boolean, default: false },
 
-    // ✅ ANALYTICS + PRICING
+    // ✅ Analytics + pricing
     canViewAnalytics: { type: Boolean, default: false },
     canManagePricing: { type: Boolean, default: false },
 
-    // ✅ OPTIONAL OLD KEY (kept for backward compatibility)
+    // ✅ Legacy keys (safe to keep)
     canViewStats: { type: Boolean, default: false },
   },
   { _id: false }
@@ -81,22 +72,36 @@ const permissionsSchema = new mongoose.Schema(
 
 /**
  * ✅ Account Status Schema
+ * Only visible by SuperAdmin
+ * Admin sees limited version via toSafeJSON()
  */
 const accountStatusSchema = new mongoose.Schema(
   {
     isSuspended: { type: Boolean, default: false },
     suspendedAt: { type: Date, default: null },
-    suspendedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+    suspendedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
     suspendReason: { type: String, default: null },
 
     isBanned: { type: Boolean, default: false },
     bannedAt: { type: Date, default: null },
-    bannedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+    bannedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
     banReason: { type: String, default: null },
 
     isArchived: { type: Boolean, default: false },
     archivedAt: { type: Date, default: null },
-    archivedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+    archivedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
     archiveReason: { type: String, default: null },
   },
   { _id: false }
@@ -115,7 +120,10 @@ const providerProfileSchema = new mongoose.Schema(
       coordinates: { type: [Number], default: [0, 0] },
     },
 
+    // ✅ TowTruck providers select from these
     towTruckTypes: [{ type: String, enum: TOW_TRUCK_TYPES }],
+
+    // ✅ Mechanic providers may use this later
     carTypesSupported: [{ type: String, enum: VEHICLE_TYPES }],
 
     fcmToken: { type: String, default: null },
@@ -134,7 +142,11 @@ const providerProfileSchema = new mongoose.Schema(
     },
 
     verifiedAt: { type: Date, default: null },
-    verifiedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+    verifiedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
   },
   { _id: false }
 );
@@ -144,12 +156,14 @@ const providerProfileSchema = new mongoose.Schema(
  */
 const userSchema = new mongoose.Schema(
   {
+    // ✅ Basic identity
     name: { type: String, required: true },
 
     firstName: { type: String, required: true },
     lastName: { type: String, required: true },
 
     phone: { type: String, required: true },
+
     birthday: { type: Date, required: true },
 
     nationalityType: {
@@ -162,6 +176,7 @@ const userSchema = new mongoose.Schema(
     passportNumber: { type: String, default: null },
     country: { type: String, default: null },
 
+    // ✅ Auth
     email: { type: String, required: true, unique: true, lowercase: true },
     password: { type: String, required: true },
 
@@ -176,8 +191,7 @@ const userSchema = new mongoose.Schema(
 
     providerProfile: { type: providerProfileSchema, default: null },
 
-    // ✅ ✅ permissions only used for Admin role
-    permissions: { type: permissionsSchema, default: () => ({}) },
+    permissions: { type: permissionsSchema, default: null },
 
     accountStatus: { type: accountStatusSchema, default: () => ({}) },
   },
@@ -206,6 +220,9 @@ userSchema.methods.matchPassword = async function (enteredPassword) {
 
 /**
  * ✅ Safe JSON output with role-based visibility
+ * - Customers/providers see NO accountStatus
+ * - Admin sees limited status + reasons
+ * - SuperAdmin sees FULL accountStatus
  */
 userSchema.methods.toSafeJSON = function (viewerRole) {
   const obj = this.toObject();
@@ -216,11 +233,13 @@ userSchema.methods.toSafeJSON = function (viewerRole) {
 
   const status = obj.accountStatus || {};
 
+  // ❌ Customers and Providers see no accountStatus
   if (![USER_ROLES.ADMIN, USER_ROLES.SUPER_ADMIN].includes(viewerRole)) {
     delete obj.accountStatus;
     return obj;
   }
 
+  // ✅ Admin sees LIMITED fields + reasons
   if (viewerRole === USER_ROLES.ADMIN) {
     obj.accountStatus = {
       isSuspended: status.isSuspended,
@@ -234,6 +253,7 @@ userSchema.methods.toSafeJSON = function (viewerRole) {
     return obj;
   }
 
+  // ✅ SuperAdmin sees FULL accountStatus
   obj.accountStatus = status;
   return obj;
 };
