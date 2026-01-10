@@ -193,7 +193,6 @@ router.post("/register", async (req, res) => {
         });
       }
 
-      // ✅ validate against official enum list
       const invalid = normalizedTypes.filter((t) => !TOW_TRUCK_TYPES.includes(t));
 
       if (invalid.length > 0) {
@@ -213,10 +212,8 @@ router.post("/register", async (req, res) => {
       return res.status(409).json({ message: "User already exists" });
     }
 
-    // ✅ Build name
     const name = `${firstName.trim()} ${lastName.trim()}`;
 
-    // ✅ Create user
     const user = await User.create({
       name,
       firstName,
@@ -308,6 +305,60 @@ router.post("/login", async (req, res) => {
     console.error("❌ LOGIN ERROR:", err.message);
     return res.status(500).json({
       message: "Login failed",
+      error: err.message,
+    });
+  }
+});
+
+/**
+ * ✅ VERIFY OTP ✅✅✅
+ * POST /api/auth/verify-otp
+ */
+router.post("/verify-otp", async (req, res) => {
+  try {
+    console.log("✅ VERIFY OTP HIT ✅", req.body);
+
+    const { email, otp } = req.body;
+
+    if (!email || !otp) {
+      return res.status(400).json({
+        message: "email and otp are required",
+      });
+    }
+
+    const user = await User.findOne({ email });
+
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    // ✅ OTP check
+    if (!user.otpCode || user.otpCode !== otp) {
+      return res.status(401).json({ message: "Invalid OTP" });
+    }
+
+    // ✅ Expiry check
+    if (!user.otpExpiresAt || user.otpExpiresAt < new Date()) {
+      return res.status(401).json({ message: "OTP expired" });
+    }
+
+    // ✅ Clear OTP after success
+    user.otpCode = null;
+    user.otpExpiresAt = null;
+    await user.save();
+
+    // ✅ Generate token
+    const token = generateToken(user._id, user.role);
+
+    return res.status(200).json({
+      message: "OTP verified ✅",
+      token,
+      user: user.toSafeJSON(user.role),
+    });
+  } catch (err) {
+    console.error("❌ VERIFY OTP ERROR:", err.message);
+    return res.status(500).json({
+      message: "OTP verification failed",
       error: err.message,
     });
   }
