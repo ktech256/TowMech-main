@@ -1,117 +1,102 @@
-import crypto from "crypto";
 import axios from "axios";
+import crypto from "crypto";
 import SystemSettings from "../../models/SystemSettings.js";
 
-/**
- * ✅ iKhokha base URLs
- */
-const IKHOKHA_SANDBOX_URL = "https://api.ikhokha.com/public-api/v1";
-const IKHOKHA_LIVE_URL = "https://api.ikhokha.com/public-api/v1";
+// ✅ Correct iKhokha Public API Base URL
+const IKHOKHA_BASE_URL =
+  process.env.IKHOKHA_BASE_URL || "https://api.ikhokha.com/public-api/v1";
+
+// ✅ ENDPOINT
+const CREATE_PAYLINK_ENDPOINT = `${IKHOKHA_BASE_URL}/api/payment`;
 
 /**
- * ✅ Generate iKhokha signature using HMAC-SHA256 HEX DIGEST
- * ⚠️ NOT BASE64 ❌
+ * ✅ Generate iKhokha Signature
+ * signature = base64(sha512(payload + secret))
  */
-function generateSignature(secretKey, payloadString) {
+const generateSignature = (payload, secret) => {
+  const payloadString = JSON.stringify(payload);
+
   return crypto
-    .createHmac("sha256", secretKey)
-    .update(payloadString)
-    .digest("hex");
-}
+    .createHash("sha512")
+    .update(payloadString + secret)
+    .digest("base64");
+};
 
 /**
- * ✅ Load iKhokha config from SystemSettings
+ * ✅ Load iKhokha keys from DB first
+ * ✅ fallback to ENV if DB empty
  */
-async function getIkhokhaConfig() {
+async function loadIKhokhaKeys() {
   const settings = await SystemSettings.findOne();
 
-  const integrations = settings?.integrations || {};
+  const dbKey = settings?.integrations?.ikhApiKey?.trim();
+  const dbSecret = settings?.integrations?.ikhSecretKey?.trim();
 
-  return {
-    entityId: integrations.ikhEntityId || "", // optional ✅
-    apiKey: integrations.ikhApiKey || "",
-    secretKey: integrations.ikhSecretKey || "",
-    mode: integrations.ikhokhaMode || "SANDBOX",
-  };
+  const envKey = process.env.IKHOKHA_APP_KEY?.trim();
+  const envSecret = process.env.IKHOKHA_APP_SECRET?.trim();
+
+  const APP_KEY = dbKey || envKey;
+  const APP_SECRET = dbSecret || envSecret;
+
+  return { APP_KEY, APP_SECRET };
 }
 
 /**
- * ✅ Initialize iKhokha Paylink Payment
+ * ✅ MAIN PAYMENT METHOD EXPECTED BY payments.js
+ * This matches:
+ * gatewayAdapter.createPayment(...)
  */
-async function createPayment({ amount, currency, reference, successUrl, cancelUrl }) {
-  const config = await getIkhokhaConfig();
-  if (!config.apiKey || !config.secretKey) {
+async function createPayment({
+  amount,
+  currency,
+  reference
+}) {
+  const { APP_KEY, APP_SECRET } = await loadIKhokhaKeys();
+
+  if (!APP_KEY || !APP_SECRET) {
+    console.log("❌ iKhokha keys missing in both DB and ENV");
     throw new Error("iKhokha API keys missing ❌ Please update dashboard integrations");
   }
 
-  const baseURL = config.mode === "LIVE" ? IKHOKHA_LIVE_URL : IKHOKHA_SANDBOX_URL;
+  // ✅ Convert amount to cents
+  const amountInCents = Math.round(Number(amount) * 100);
 
   const payload = {
-    amount: amount.toFixed(2),
+    amount: amountInCents,
     currency: currency || "ZAR",
-    reference,
-    description: "TowMech Booking Fee",
-    successUrl,
-    cancelUrl,
+    requesterUrl: process.env.BACKEND_URL || "https://towmech-main.onrender.com",
+    mode: "live", // or "test"
+    externalTransactionID: reference,
+    description: `TowMech Booking Fee - ${reference}`,
+    urls: {
+      callbackUrl: `${process.env.BACKEND_URL || "https://towmech-main.onrender.com"}/api/payments/verify/ikhokha/${reference}`,
+      successPageUrl: `${process.env.FRONTEND_URL || "https://towmech.com"}/payment-success`,
+      failurePageUrl: `${process.env.FRONTEND_URL || "https://towmech.com"}/payment-failed`,
+      cancelUrl: `${process.env.FRONTEND_URL || "https://towmech.com"}/payment-cancelled`
+    }
   };
 
-  /**
-   * ✅ Build signature payload string
-   * This is what iKhokha signs.
-   * Must be consistent with their docs.
-   */
-  const payloadString = JSON.stringify(payload);
+  console.log("✅ iKhokha PAYLINK REQUEST:", JSON.stringify(payload, null, 2));
 
-  const signature = generateSignature(config.secretKey, payloadString);
+  const signature = generateSignature(payload, APP_SECRET);
 
-  const headers = {
-    "Content-Type": "application/json",
-    "IKHOKHA-API-KEY": config.apiKey,
-    "IKHOKHA-SIGNATURE": signature,
-  };
+  const response = await axios.post(CREATE_PAYLINK_ENDPOINT, payload, {
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      "IK-APPID": APP_KEY,
+      "IK-SIGN": signature
+    }
+  });
 
-  // ✅ entityId is optional (only attach if present)
-  if (config.entityId) {
-    headers["IKHOKHA-ENTITY-ID"] = config.entityId;
-  }
-
-  const response = await axios.post(`${baseURL}/paylink/create`, payload, { headers });
+  console.log("✅ iKhokha RESPONSE:", JSON.stringify(response.data, null, 2));
 
   return response.data;
 }
 
 /**
- * ✅ Verify iKhokha Payment (Paylink verification is limited)
+ * ✅ Export adapter expected by index.js
  */
-async function verifyPayment(reference) {
-  const config = await getIkhokhaConfig();
-  if (!config.apiKey || !config.secretKey) {
-    throw new Error("iKhokha API keys missing ❌");
-  }
-
-  const baseURL = config.mode === "LIVE" ? IKHOKHA_LIVE_URL : IKHOKHA_SANDBOX_URL;
-
-  const payload = { reference };
-  const payloadString = JSON.stringify(payload);
-  const signature = generateSignature(config.secretKey, payloadString);
-
-  const headers = {
-    "Content-Type": "application/json",
-    "IKHOKHA-API-KEY": config.apiKey,
-    "IKHOKHA-SIGNATURE": signature,
-  };
-
-  if (config.entityId) {
-    headers["IKHOKHA-ENTITY-ID"] = config.entityId;
-  }
-
-  const response = await axios.post(`${baseURL}/paylink/verify`, payload, { headers });
-
-  return response.data;
-}
-
 export default {
-  provider: "IKHOKHA",
-  createPayment,
-  verifyPayment,
+  createPayment
 };

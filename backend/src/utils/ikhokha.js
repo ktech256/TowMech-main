@@ -1,29 +1,49 @@
 import axios from "axios";
 import crypto from "crypto";
-
-// ✅ Correct iKhokha Public API Base URL
-const IKHOKHA_BASE_URL =
-  process.env.IKHOKHA_BASE_URL || "https://api.ikhokha.com/public-api/v1";
-
-// ✅ ENV Vars (must exist in Render)
-const APP_KEY = process.env.IKHOKHA_APP_KEY;
-const APP_SECRET = process.env.IKHOKHA_APP_SECRET;
-
-// ✅ ENDPOINT
-const CREATE_PAYLINK_ENDPOINT = `${IKHOKHA_BASE_URL}/api/payment`;
+import SystemSettings from "../../models/SystemSettings.js"; // ✅ adjust if filename differs
 
 /**
  * ✅ Generate iKhokha Signature (IK-SIGN)
  * signature = base64(sha512(payload + APP_SECRET))
  */
-const generateSignature = (payload) => {
+const generateSignature = (payload, secret) => {
   const payloadString = JSON.stringify(payload);
 
   return crypto
     .createHash("sha512")
-    .update(payloadString + APP_SECRET)
+    .update(payloadString + secret)
     .digest("base64");
 };
+
+/**
+ * ✅ Load iKhokha keys from DB (SystemSettings) with ENV fallback
+ */
+async function loadIKhokhaConfig() {
+  const settings = await SystemSettings.findOne();
+
+  // ✅ DB first
+  const dbKey = settings?.integrations?.ikhokha?.appKey || settings?.ikhokhaAppKey;
+  const dbSecret = settings?.integrations?.ikhokha?.appSecret || settings?.ikhokhaAppSecret;
+  const dbBaseUrl = settings?.integrations?.ikhokha?.baseUrl || settings?.ikhokhaBaseUrl;
+  const dbMode = settings?.integrations?.ikhokha?.mode || settings?.ikhokhaMode;
+
+  // ✅ fallback to ENV
+  const APP_KEY = dbKey || process.env.IKHOKHA_APP_KEY;
+  const APP_SECRET = dbSecret || process.env.IKHOKHA_APP_SECRET;
+  const IKHOKHA_BASE_URL =
+    dbBaseUrl || process.env.IKHOKHA_BASE_URL || "https://api.ikhokha.com/public-api/v1";
+  const MODE = dbMode || process.env.IKHOKHA_MODE || "live";
+
+  console.log("✅ iKhokha CONFIG LOADED:", {
+    APP_KEY: APP_KEY ? "✅ present" : "❌ missing",
+    APP_SECRET: APP_SECRET ? "✅ present" : "❌ missing",
+    MODE,
+    IKHOKHA_BASE_URL,
+    source: dbKey && dbSecret ? "MongoDB ✅" : "ENV ⚠️"
+  });
+
+  return { APP_KEY, APP_SECRET, IKHOKHA_BASE_URL, MODE };
+}
 
 /**
  * ✅ CREATE PAYMENT LINK (PAYLINK)
@@ -35,25 +55,24 @@ export const initializeIKhokhaPayment = async ({
   reference
 }) => {
   try {
-    // ✅ ENV CHECK (ENTITY REMOVED)
-    if (!APP_KEY || !APP_SECRET) {
-      console.log("❌ iKhokha ENV Missing:", {
-        APP_KEY: APP_KEY ? "✅ present" : "❌ missing",
-        APP_SECRET: APP_SECRET ? "✅ present" : "❌ missing"
-      });
+    const { APP_KEY, APP_SECRET, IKHOKHA_BASE_URL, MODE } = await loadIKhokhaConfig();
 
-      throw new Error("Missing iKhokha ENV variables");
+    // ✅ SAFETY CHECK
+    if (!APP_KEY || !APP_SECRET) {
+      throw new Error("iKhokha keys missing — please add in Admin Settings or Render ENV");
     }
 
-    // ✅ Convert amount to cents (smallest unit)
+    const CREATE_PAYLINK_ENDPOINT = `${IKHOKHA_BASE_URL}/api/payment`;
+
+    // ✅ Convert amount to cents
     const amountInCents = Math.round(Number(amount) * 100);
 
-    // ✅ PAYLOAD (ENTITY ID REMOVED)
+    // ✅ PAYLOAD
     const payload = {
       amount: amountInCents,
       currency: currency || "ZAR",
       requesterUrl: "https://towmech-main.onrender.com",
-      mode: "live", // or "test"
+      mode: MODE, // ✅ DB/ENV mode
       externalTransactionID: reference,
       description: `TowMech Booking Fee - ${reference}`,
       urls: {
@@ -64,13 +83,10 @@ export const initializeIKhokhaPayment = async ({
       }
     };
 
-    console.log(
-      "✅ iKhokha PAYLINK REQUEST PAYLOAD:",
-      JSON.stringify(payload, null, 2)
-    );
+    console.log("✅ iKhokha PAYLINK REQUEST PAYLOAD:", JSON.stringify(payload, null, 2));
 
-    // ✅ Generate signature
-    const signature = generateSignature(payload);
+    // ✅ Signature uses secret from DB/ENV
+    const signature = generateSignature(payload, APP_SECRET);
 
     const response = await axios.post(CREATE_PAYLINK_ENDPOINT, payload, {
       headers: {
@@ -81,13 +97,9 @@ export const initializeIKhokhaPayment = async ({
       }
     });
 
-    console.log(
-      "✅ iKhokha PAYLINK RAW RESPONSE:",
-      JSON.stringify(response.data, null, 2)
-    );
+    console.log("✅ iKhokha PAYLINK RAW RESPONSE:", JSON.stringify(response.data, null, 2));
 
     return response.data;
-
   } catch (err) {
     console.log("❌ iKhokha INIT ERROR:", err.response?.data || err.message);
     throw err;
