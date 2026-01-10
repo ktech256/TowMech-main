@@ -9,12 +9,11 @@ const PAYFAST_LIVE_URL = "https://www.payfast.co.za/eng/process";
 
 /**
  * ✅ Generate PayFast signature
- * PayFast uses MD5 signature of query string
+ * PayFast requires MD5 hash of query string in original order
  */
 function generatePayfastSignature(params, passphrase) {
-  const sortedKeys = Object.keys(params).sort();
-  const queryString = sortedKeys
-    .map((k) => `${k}=${encodeURIComponent(params[k]).replace(/%20/g, "+")}`)
+  const queryString = Object.entries(params)
+    .map(([k, v]) => `${k}=${encodeURIComponent(v).replace(/%20/g, "+")}`)
     .join("&");
 
   const finalString = passphrase
@@ -25,24 +24,31 @@ function generatePayfastSignature(params, passphrase) {
 }
 
 /**
- * ✅ Load PayFast config from DB
+ * ✅ Load PayFast config (DB first, fallback ENV)
  */
 async function getPayfastConfig() {
   const settings = await SystemSettings.findOne();
   const i = settings?.integrations || {};
 
   return {
-    merchantId: i.payfastMerchantId || "",
-    merchantKey: i.payfastMerchantKey || "",
-    passphrase: i.payfastPassphrase || "",
-    mode: i.payfastMode || "SANDBOX",
+    merchantId: i.payfastMerchantId || process.env.PAYFAST_MERCHANT_ID || "",
+    merchantKey: i.payfastMerchantKey || process.env.PAYFAST_MERCHANT_KEY || "",
+    passphrase: i.payfastPassphrase || process.env.PAYFAST_PASSPHRASE || "",
+    mode: i.payfastMode || process.env.PAYFAST_MODE || "SANDBOX",
   };
 }
 
 /**
  * ✅ Create PayFast Payment URL
  */
-async function createPayment({ amount, reference, successUrl, cancelUrl, notifyUrl, customerEmail }) {
+async function createPayment({
+  amount,
+  reference,
+  successUrl,
+  cancelUrl,
+  notifyUrl,
+  customerEmail,
+}) {
   const config = await getPayfastConfig();
 
   if (!config.merchantId || !config.merchantKey) {
@@ -51,6 +57,7 @@ async function createPayment({ amount, reference, successUrl, cancelUrl, notifyU
 
   const baseURL = config.mode === "LIVE" ? PAYFAST_LIVE_URL : PAYFAST_SANDBOX_URL;
 
+  // ✅ IMPORTANT: PayFast signature relies on this EXACT ORDER
   const params = {
     merchant_id: config.merchantId,
     merchant_key: config.merchantKey,
@@ -59,7 +66,7 @@ async function createPayment({ amount, reference, successUrl, cancelUrl, notifyU
     notify_url: notifyUrl,
     email_address: customerEmail,
     m_payment_id: reference,
-    amount: amount.toFixed(2),
+    amount: Number(amount).toFixed(2),
     item_name: "TowMech Booking Fee",
   };
 
@@ -75,15 +82,16 @@ async function createPayment({ amount, reference, successUrl, cancelUrl, notifyU
   return {
     paymentUrl: fullUrl,
     reference,
+    gateway: "PAYFAST",
+    signature,
   };
 }
 
 /**
- * ✅ Verify PayFast is handled by webhook notify endpoint
- * We'll implement notify endpoint later.
+ * ✅ PayFast verification happens via ITN notify_url callback
  */
 async function verifyPayment() {
-  return { message: "PayFast verification handled via notify_url webhook ✅" };
+  return { message: "PayFast verification handled via notify_url ITN ✅" };
 }
 
 export default {
