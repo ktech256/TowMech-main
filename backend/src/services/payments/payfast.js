@@ -24,17 +24,39 @@ function generatePayfastSignature(params, passphrase) {
 }
 
 /**
- * ✅ Load PayFast config (DB first, fallback ENV)
+ * ✅ Load PayFast config (DB first, fallback generic dashboard keys, fallback ENV)
  */
 async function getPayfastConfig() {
   const settings = await SystemSettings.findOne();
   const i = settings?.integrations || {};
 
   return {
-    merchantId: i.payfastMerchantId || process.env.PAYFAST_MERCHANT_ID || "",
-    merchantKey: i.payfastMerchantKey || process.env.PAYFAST_MERCHANT_KEY || "",
-    passphrase: i.payfastPassphrase || process.env.PAYFAST_PASSPHRASE || "",
-    mode: i.payfastMode || process.env.PAYFAST_MODE || "SANDBOX",
+    // ✅ 1️⃣ DB PayFast fields (if available)
+    // ✅ 2️⃣ fallback to generic dashboard keys
+    // ✅ 3️⃣ fallback ENV variables
+
+    merchantId:
+      i.payfastMerchantId ||
+      i.paymentPublicKey ||
+      process.env.PAYFAST_MERCHANT_ID ||
+      "",
+
+    merchantKey:
+      i.payfastMerchantKey ||
+      i.paymentSecretKey ||
+      process.env.PAYFAST_MERCHANT_KEY ||
+      "",
+
+    passphrase:
+      i.payfastPassphrase ||
+      i.paymentWebhookSecret ||
+      process.env.PAYFAST_PASSPHRASE ||
+      "",
+
+    mode:
+      i.payfastMode ||
+      process.env.PAYFAST_MODE ||
+      "SANDBOX",
   };
 }
 
@@ -52,10 +74,16 @@ async function createPayment({
   const config = await getPayfastConfig();
 
   if (!config.merchantId || !config.merchantKey) {
+    console.log("❌ PayFast config missing:", config);
     throw new Error("PayFast Merchant details missing ❌");
   }
 
   const baseURL = config.mode === "LIVE" ? PAYFAST_LIVE_URL : PAYFAST_SANDBOX_URL;
+
+  console.log("✅ PayFast MODE:", config.mode);
+  console.log("✅ PayFast MerchantId:", config.merchantId);
+  console.log("✅ PayFast MerchantKey:", config.merchantKey);
+  console.log("✅ PayFast Passphrase:", config.passphrase ? "✅ present" : "❌ missing");
 
   // ✅ IMPORTANT: PayFast signature relies on this EXACT ORDER
   const params = {
