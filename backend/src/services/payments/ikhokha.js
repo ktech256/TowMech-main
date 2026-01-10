@@ -10,15 +10,16 @@ const IKHOKHA_BASE_URL =
 const CREATE_PAYLINK_ENDPOINT = `${IKHOKHA_BASE_URL}/api/payment`;
 
 /**
- * ✅ Generate Signature
+ * ✅ Correct iKhokha Signature
+ * ✅ HMAC-SHA256(payload, secret) -> HEX
  */
 const generateSignature = (payload, secret) => {
   const payloadString = JSON.stringify(payload);
 
   return crypto
-    .createHash("sha512")
-    .update(payloadString + secret)
-    .digest("base64");
+    .createHmac("sha256", secret)
+    .update(payloadString)
+    .digest("hex");
 };
 
 /**
@@ -79,20 +80,28 @@ async function createPayment({ amount, currency, reference }) {
 
   console.log("✅ iKhokha PAYLINK REQUEST:", JSON.stringify(payload, null, 2));
 
+  // ✅ Correct Signature
   const signature = generateSignature(payload, APP_SECRET);
 
-  const response = await axios.post(CREATE_PAYLINK_ENDPOINT, payload, {
-    headers: {
-      Accept: "application/json",
-      "Content-Type": "application/json",
-      "IK-APPID": APP_KEY,
-      "IK-SIGN": signature,
-    },
-  });
+  console.log("✅ iKhokha SIGNATURE (hex):", signature);
 
-  console.log("✅ iKhokha RESPONSE:", JSON.stringify(response.data, null, 2));
+  try {
+    const response = await axios.post(CREATE_PAYLINK_ENDPOINT, payload, {
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        "IK-APPID": APP_KEY,
+        "IK-SIGN": signature,
+      },
+    });
 
-  return response.data;
+    console.log("✅ iKhokha RESPONSE:", JSON.stringify(response.data, null, 2));
+    return response.data;
+
+  } catch (err) {
+    console.log("❌ iKhokha API ERROR:", err.response?.data || err.message);
+    throw err;
+  }
 }
 
 export default {
