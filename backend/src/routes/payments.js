@@ -9,38 +9,46 @@ import authorizeRoles from "../middleware/role.js";
 import { USER_ROLES } from "../models/User.js";
 
 import { broadcastJobToProviders } from "../utils/broadcastJob.js";
-import { getGatewayAdapter, getActivePaymentGateway } from "../services/payments/index.js";
+import {
+  getGatewayAdapter,
+  getActivePaymentGateway,
+} from "../services/payments/index.js";
 
 const router = express.Router();
 
 console.log("✅ payments.js loaded ✅");
 
 /**
- * ✅ PayFast ITN signature rules:
- * - Build string of ALL received fields (except "signature")
- * - Sort keys alphabetically (ITN safest approach)
- * - Encode values using encodeURIComponent + spaces => "+"
- * - Append passphrase if configured
+ * ✅ PayFast ITN signature rules (IMPORTANT):
+ * - Remove "signature"
+ * - Sort keys alphabetically
+ * - Build query string with encodeURIComponent + spaces as "+"
+ * - DO NOT drop empty-string fields (PayFast often includes them)
+ * - Append passphrase (encoded) if set
  * - MD5 hash
  */
 function encodePayfast(value) {
-  return encodeURIComponent(value).replace(/%20/g, "+");
+  return encodeURIComponent(String(value)).replace(/%20/g, "+");
 }
 
-function generatePayfastItnSignature(params, passphrase = "") {
-  const keys = Object.keys(params)
-    .filter((k) => k !== "signature")
-    .sort();
+function generatePayfastItnSignature(body, passphrase = "") {
+  const data = { ...(body || {}) };
+  delete data.signature;
 
-  const paramString = keys
-    .filter((k) => params[k] !== undefined && params[k] !== null && params[k] !== "")
-    .map((k) => `${k}=${encodePayfast(params[k].toString().trim())}`)
+  const sortedKeys = Object.keys(data).sort();
+
+  const queryString = sortedKeys
+    .map((key) => {
+      // Include empty strings too (PayFast ITN commonly posts custom_* as "")
+      const value = data[key] ?? "";
+      return `${key}=${encodePayfast(value)}`;
+    })
     .join("&");
 
   const finalString =
     passphrase && passphrase.trim() !== ""
-      ? `${paramString}&passphrase=${encodePayfast(passphrase.trim())}`
-      : paramString;
+      ? `${queryString}&passphrase=${encodePayfast(passphrase.trim())}`
+      : queryString;
 
   return crypto.createHash("md5").update(finalString).digest("hex");
 }
@@ -51,19 +59,17 @@ function generatePayfastItnSignature(params, passphrase = "") {
  *
  * IMPORTANT:
  * - Must be urlencoded parser (PayFast sends x-www-form-urlencoded)
- * - Must return 200 quickly
+ * - Return 200 quickly (PayFast retries aggressively)
  */
 router.post(
   "/notify/payfast",
   express.urlencoded({ extended: false }),
   async (req, res) => {
-    // ✅ Always respond 200 unless you want PayFast to keep retrying forever
-    // We'll still do verification and logging properly.
     try {
       console.log("✅ PAYFAST ITN RECEIVED ✅", req.body);
 
       const data = req.body || {};
-      const reference = data.m_payment_id; // should be like TM-<paymentId>
+      const reference = data.m_payment_id; // TM-<paymentId>
       const paymentStatus = (data.payment_status || "").toUpperCase();
 
       if (!reference) {
@@ -71,19 +77,24 @@ router.post(
         return res.status(200).send("Missing reference");
       }
 
-      // ✅ Get PayFast passphrase (from ENV)
-      const passphrase = process.env.PAYFAST_PASSPHRASE || "";
+      // ✅ Passphrase (must match PayFast dashboard exactly)
+      const passphrase = (process.env.PAYFAST_PASSPHRASE || "").trim();
 
       // ✅ Verify signature
-      const generatedSignature = generatePayfastItnSignature(data, passphrase);
+      const generatedSignature = generatePayfastItnSignature(data, passphrase).toLowerCase();
       const receivedSignature = (data.signature || "").toLowerCase();
 
       console.log("✅ ITN generatedSignature:", generatedSignature);
       console.log("✅ ITN receivedSignature :", receivedSignature);
 
+      if (!receivedSignature) {
+        console.log("❌ ITN missing signature");
+        return res.status(200).send("Missing signature");
+      }
+
       if (generatedSignature !== receivedSignature) {
         console.log("❌ PAYFAST ITN SIGNATURE MISMATCH ❌");
-        // Return 200 so PayFast doesn't spam retries; you can still inspect logs.
+        // Return 200 to avoid endless retries while you debug
         return res.status(200).send("Signature mismatch");
       }
 
@@ -95,8 +106,7 @@ router.post(
         return res.status(200).send("Payment not complete");
       }
 
-      // ✅ Find payment in DB
-      // Your create route sets: providerReference = `TM-${payment._id}`
+      // ✅ Find payment in DB (your create route sets providerReference = TM-<paymentId>)
       const payment = await Payment.findOne({ providerReference: reference });
 
       if (!payment) {
@@ -114,10 +124,8 @@ router.post(
       payment.paidAt = new Date();
       payment.providerPayload = data;
 
-      // Store PayFast pf_payment_id if you want
-      if (data.pf_payment_id) {
-        payment.providerReference = reference; // keep same
-      }
+      // Optional: store pf_payment_id somewhere if your schema supports it
+      // payment.providerTransactionId = data.pf_payment_id;
 
       await payment.save();
       console.log("✅ Payment marked PAID ✅", payment._id.toString());
@@ -130,13 +138,9 @@ router.post(
         return res.status(200).send("Job not found");
       }
 
-      // ✅ Ensure pricing exists
       if (!job.pricing) job.pricing = {};
-
       job.pricing.bookingFeeStatus = "PAID";
       job.pricing.bookingFeePaidAt = new Date();
-
-      // optional: broadcast status is set in broadcastJobToProviders
       await job.save();
 
       console.log("✅ Job bookingFee marked PAID ✅", job._id.toString());
@@ -151,7 +155,7 @@ router.post(
       return res.status(200).send("ITN Processed ✅");
     } catch (err) {
       console.error("❌ PAYFAST ITN ERROR:", err);
-      // Still return 200 to prevent endless retries
+      // Return 200 to prevent PayFast retry spam
       return res.status(200).send("ITN error handled");
     }
   }
@@ -175,10 +179,12 @@ router.post(
       const job = await Job.findById(jobId);
       if (!job) return res.status(404).json({ message: "Job not found" });
 
+      // ✅ Customer must own job
       if (job.customer.toString() !== req.user._id.toString()) {
         return res.status(403).json({ message: "Not authorized to pay for this job" });
       }
 
+      // ✅ Cannot pay cancelled/completed jobs
       if ([JOB_STATUSES.CANCELLED, JOB_STATUSES.COMPLETED].includes(job.status)) {
         return res.status(400).json({ message: `Cannot pay for job in status ${job.status}` });
       }
@@ -193,8 +199,10 @@ router.post(
       const activeGateway = await getActivePaymentGateway();
       const gatewayAdapter = await getGatewayAdapter();
 
+      // ✅ Check if payment already exists
       let payment = await Payment.findOne({ job: job._id });
 
+      // ✅ If already paid
       if (payment && payment.status === PAYMENT_STATUSES.PAID) {
         return res.status(200).json({
           message: "Payment already PAID ✅",
@@ -202,6 +210,7 @@ router.post(
         });
       }
 
+      // ✅ Create payment if missing
       if (!payment) {
         payment = await Payment.create({
           job: job._id,
@@ -218,9 +227,11 @@ router.post(
 
       const reference = `TM-${payment._id}`;
 
+      // ✅ Success + Cancel URLs (mobile/web)
       const successUrl = `${process.env.FRONTEND_URL || "https://towmech.com"}/payment-success`;
       const cancelUrl = `${process.env.FRONTEND_URL || "https://towmech.com"}/payment-cancel`;
 
+      // ✅ Create gateway payment session
       const initResponse = await gatewayAdapter.createPayment({
         amount: bookingFee,
         currency: payment.currency,
@@ -231,6 +242,7 @@ router.post(
         customerEmail: req.user.email,
       });
 
+      // ✅ Save gateway response
       payment.providerReference = reference;
       payment.providerPayload = initResponse;
       await payment.save();
@@ -291,6 +303,7 @@ router.patch("/job/:jobId/mark-paid", auth, async (req, res) => {
     payment.paidAt = new Date();
     payment.providerReference = `MANUAL-${Date.now()}`;
 
+    // ✅ Audit
     payment.manualMarkedBy = req.user._id;
     payment.manualMarkedAt = new Date();
 
