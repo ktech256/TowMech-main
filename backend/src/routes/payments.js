@@ -1,16 +1,118 @@
 import express from "express";
+import crypto from "crypto";
+
 import Payment, { PAYMENT_STATUSES } from "../models/Payment.js";
 import Job, { JOB_STATUSES } from "../models/Job.js";
+
 import auth from "../middleware/auth.js";
 import authorizeRoles from "../middleware/role.js";
 import { USER_ROLES } from "../models/User.js";
-import { broadcastJobToProviders } from "../utils/broadcastJob.js";
 
+import { broadcastJobToProviders } from "../utils/broadcastJob.js";
 import { getGatewayAdapter, getActivePaymentGateway } from "../services/payments/index.js";
 
 const router = express.Router();
 
 console.log("✅ payments.js loaded ✅");
+
+/**
+ * ✅ PayFast Signature verification
+ */
+function generatePayfastSignature(params, passphrase) {
+  const sortedKeys = Object.keys(params)
+    .filter((k) => k !== "signature")
+    .sort();
+
+  const queryString = sortedKeys
+    .map((k) => `${k}=${encodeURIComponent(params[k]).replace(/%20/g, "+")}`)
+    .join("&");
+
+  const finalString = passphrase
+    ? `${queryString}&passphrase=${encodeURIComponent(passphrase).replace(/%20/g, "+")}`
+    : queryString;
+
+  return crypto.createHash("md5").update(finalString).digest("hex");
+}
+
+/**
+ * ✅ PayFast ITN Webhook
+ * POST /api/payments/notify/payfast
+ */
+router.post(
+  "/notify/payfast",
+  express.urlencoded({ extended: false }),
+  async (req, res) => {
+    try {
+      console.log("✅ PAYFAST ITN RECEIVED ✅", req.body);
+
+      const data = req.body;
+
+      const reference = data.m_payment_id;
+      const paymentStatus = data.payment_status;
+
+      // ✅ Get PayFast passphrase (from ENV)
+      const passphrase = process.env.PAYFAST_PASSPHRASE || "";
+
+      // ✅ Verify signature
+      const generatedSignature = generatePayfastSignature(data, passphrase);
+
+      if (generatedSignature !== data.signature) {
+        console.log("❌ PAYFAST SIGNATURE MISMATCH ❌");
+        return res.status(400).send("Invalid signature");
+      }
+
+      console.log("✅ PAYFAST SIGNATURE VERIFIED ✅");
+
+      // ✅ Only mark PAID if payment COMPLETE
+      if (paymentStatus !== "COMPLETE") {
+        console.log("⚠️ PayFast payment not complete:", paymentStatus);
+        return res.status(200).send("Payment not complete");
+      }
+
+      // ✅ Find payment in DB (providerReference matches reference)
+      const payment = await Payment.findOne({ providerReference: reference });
+
+      if (!payment) {
+        console.log("❌ Payment not found for reference:", reference);
+        return res.status(404).send("Payment not found");
+      }
+
+      if (payment.status === PAYMENT_STATUSES.PAID) {
+        console.log("✅ Payment already marked PAID ✅");
+        return res.status(200).send("Already paid");
+      }
+
+      // ✅ Mark Payment as PAID
+      payment.status = PAYMENT_STATUSES.PAID;
+      payment.paidAt = new Date();
+      payment.providerPayload = data;
+      await payment.save();
+
+      console.log("✅ Payment marked PAID ✅", payment._id);
+
+      // ✅ Update Job booking fee status
+      const job = await Job.findById(payment.job);
+
+      if (job) {
+        job.pricing.bookingFeeStatus = "PAID";
+        job.pricing.bookingFeePaidAt = new Date();
+        await job.save();
+
+        console.log("✅ Job bookingFee marked PAID ✅", job._id);
+
+        // ✅ Broadcast Job
+        const broadcastResult = await broadcastJobToProviders(job._id);
+
+        console.log("✅ Job broadcasted ✅", broadcastResult);
+      }
+
+      return res.status(200).send("ITN Processed ✅");
+    } catch (err) {
+      console.error("❌ PAYFAST ITN ERROR:", err);
+      return res.status(500).send("Server error");
+    }
+  }
+);
 
 /**
  * ✅ Customer creates booking fee payment for a Job
