@@ -17,14 +17,13 @@ console.log("✅ payments.js loaded ✅");
 
 /**
  * ✅ PayFast Signature verification
+ * PayFast requires MD5 of querystring in original ITN order (NOT sorted)
  */
-function generatePayfastSignature(params, passphrase) {
-  const sortedKeys = Object.keys(params)
+function generatePayfastSignature(data, passphrase) {
+  // ✅ Build querystring in the same order PayFast sent it
+  const queryString = Object.keys(data)
     .filter((k) => k !== "signature")
-    .sort();
-
-  const queryString = sortedKeys
-    .map((k) => `${k}=${encodeURIComponent(params[k]).replace(/%20/g, "+")}`)
+    .map((k) => `${k}=${encodeURIComponent(data[k]).replace(/%20/g, "+")}`)
     .join("&");
 
   const finalString = passphrase
@@ -50,11 +49,14 @@ router.post(
       const reference = data.m_payment_id;
       const paymentStatus = data.payment_status;
 
-      // ✅ Get PayFast passphrase (from ENV)
+      // ✅ Passphrase from ENV (must match PayFast dashboard)
       const passphrase = process.env.PAYFAST_PASSPHRASE || "";
 
       // ✅ Verify signature
       const generatedSignature = generatePayfastSignature(data, passphrase);
+
+      console.log("✅ Signature Sent By PayFast:", data.signature);
+      console.log("✅ Signature Generated:", generatedSignature);
 
       if (generatedSignature !== data.signature) {
         console.log("❌ PAYFAST SIGNATURE MISMATCH ❌");
@@ -117,7 +119,6 @@ router.post(
 /**
  * ✅ Customer creates booking fee payment for a Job
  * POST /api/payments/create
- * ✅ Gateway auto-selected from SystemSettings ✅
  */
 router.post(
   "/create",
@@ -133,12 +134,10 @@ router.post(
       const job = await Job.findById(jobId);
       if (!job) return res.status(404).json({ message: "Job not found" });
 
-      // ✅ Customer must own job
       if (job.customer.toString() !== req.user._id.toString()) {
         return res.status(403).json({ message: "Not authorized to pay for this job" });
       }
 
-      // ✅ Cannot pay cancelled/completed jobs
       if ([JOB_STATUSES.CANCELLED, JOB_STATUSES.COMPLETED].includes(job.status)) {
         return res.status(400).json({ message: `Cannot pay for job in status ${job.status}` });
       }
@@ -150,14 +149,11 @@ router.post(
         });
       }
 
-      // ✅ Determine gateway from dashboard settings
       const activeGateway = await getActivePaymentGateway();
       const gatewayAdapter = await getGatewayAdapter();
 
-      // ✅ Check if payment already exists
       let payment = await Payment.findOne({ job: job._id });
 
-      // ✅ If already paid
       if (payment && payment.status === PAYMENT_STATUSES.PAID) {
         return res.status(200).json({
           message: "Payment already PAID ✅",
@@ -165,7 +161,6 @@ router.post(
         });
       }
 
-      // ✅ Create payment if missing
       if (!payment) {
         payment = await Payment.create({
           job: job._id,
@@ -182,13 +177,9 @@ router.post(
 
       const reference = `TM-${payment._id}`;
 
-      // ✅ Success + Cancel URLs (mobile/web)
       const successUrl = `${process.env.FRONTEND_URL || "https://towmech.com"}/payment-success`;
       const cancelUrl = `${process.env.FRONTEND_URL || "https://towmech.com"}/payment-cancel`;
 
-      /**
-       * ✅ Create gateway payment session
-       */
       const initResponse = await gatewayAdapter.createPayment({
         amount: bookingFee,
         currency: payment.currency,
@@ -199,12 +190,10 @@ router.post(
         customerEmail: req.user.email,
       });
 
-      // ✅ Save gateway response
       payment.providerReference = reference;
       payment.providerPayload = initResponse;
       await payment.save();
 
-      // ✅ Extract payment URL from initResponse
       const paymentUrl =
         initResponse.paymentUrl ||
         initResponse.url ||
@@ -217,8 +206,8 @@ router.post(
         message: `${activeGateway} payment initialized ✅`,
         gateway: activeGateway,
         payment,
-        paymentUrl, // ✅ NOW AT TOP LEVEL
-        url: paymentUrl, // ✅ ALSO TOP LEVEL FOR MOBILE APP
+        paymentUrl,
+        url: paymentUrl,
         initResponse,
       });
     } catch (err) {
@@ -233,7 +222,6 @@ router.post(
 
 /**
  * ✅ MANUAL FALLBACK
- * PATCH /api/payments/job/:jobId/mark-paid
  */
 router.patch("/job/:jobId/mark-paid", auth, async (req, res) => {
   try {
@@ -261,7 +249,6 @@ router.patch("/job/:jobId/mark-paid", auth, async (req, res) => {
     payment.paidAt = new Date();
     payment.providerReference = `MANUAL-${Date.now()}`;
 
-    // ✅ Audit
     payment.manualMarkedBy = req.user._id;
     payment.manualMarkedAt = new Date();
 
