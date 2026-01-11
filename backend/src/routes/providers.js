@@ -1,3 +1,5 @@
+// providers.js  ✅ FULL FILE (with START/COMPLETE status route added)
+
 import express from "express";
 import auth from "../middleware/auth.js";
 import User, { USER_ROLES } from "../models/User.js";
@@ -93,7 +95,7 @@ router.get("/jobs/broadcasted", auth, async (req, res) => {
 });
 
 /**
- * ✅ NEW: Provider fetches a single broadcasted job by id
+ * ✅ Provider fetches a single broadcasted job by id
  * GET /api/providers/jobs/broadcasted/:jobId
  */
 router.get("/jobs/broadcasted/:jobId", auth, async (req, res) => {
@@ -119,7 +121,7 @@ router.get("/jobs/broadcasted/:jobId", auth, async (req, res) => {
 });
 
 /**
- * ✅ NEW: Provider fetches assigned (active) jobs
+ * ✅ Provider fetches assigned (active) jobs
  * GET /api/providers/jobs/assigned
  */
 router.get("/jobs/assigned", auth, async (req, res) => {
@@ -143,7 +145,7 @@ router.get("/jobs/assigned", auth, async (req, res) => {
 });
 
 /**
- * ✅ NEW: Provider fetches job history
+ * ✅ Provider fetches job history
  * GET /api/providers/jobs/history
  */
 router.get("/jobs/history", auth, async (req, res) => {
@@ -203,6 +205,53 @@ router.patch("/jobs/:jobId/accept", auth, async (req, res) => {
 });
 
 /**
+ * ✅ NEW ✅ Provider starts/completes job (fixes your HTTP 404)
+ * PATCH /api/providers/jobs/:jobId/status
+ *
+ * Allows:
+ * - ASSIGNED -> IN_PROGRESS
+ * - IN_PROGRESS -> COMPLETED
+ */
+router.patch("/jobs/:jobId/status", auth, async (req, res) => {
+  try {
+    const providerRoles = [USER_ROLES.MECHANIC, USER_ROLES.TOW_TRUCK];
+    if (!providerRoles.includes(req.user.role)) {
+      return res.status(403).json({ message: "Only providers can update job status" });
+    }
+
+    const { status } = req.body;
+
+    const allowed = [JOB_STATUSES.IN_PROGRESS, JOB_STATUSES.COMPLETED];
+    if (!allowed.includes(status)) {
+      return res.status(400).json({ message: "Invalid status update" });
+    }
+
+    const job = await Job.findById(req.params.jobId);
+    if (!job) return res.status(404).json({ message: "Job not found" });
+
+    // Only the assigned provider can update status
+    if (!job.assignedTo || job.assignedTo.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ message: "Not authorized" });
+    }
+
+    // Enforce flow
+    if (status === JOB_STATUSES.IN_PROGRESS && job.status !== JOB_STATUSES.ASSIGNED) {
+      return res.status(400).json({ message: "Job must be ASSIGNED first" });
+    }
+    if (status === JOB_STATUSES.COMPLETED && job.status !== JOB_STATUSES.IN_PROGRESS) {
+      return res.status(400).json({ message: "Job must be IN_PROGRESS first" });
+    }
+
+    job.status = status;
+    await job.save();
+
+    return res.status(200).json({ message: "Status updated ✅", job });
+  } catch (err) {
+    return res.status(500).json({ message: "Could not update job status", error: err.message });
+  }
+});
+
+/**
  * ✅ Provider rejects job (does not accept)
  * PATCH /api/providers/jobs/:jobId/reject
  */
@@ -252,7 +301,6 @@ router.patch("/jobs/:jobId/cancel", auth, async (req, res) => {
     }
 
     const job = await Job.findById(req.params.jobId);
-
     if (!job) return res.status(404).json({ message: "Job not found" });
 
     if (!job.assignedTo || job.assignedTo.toString() !== req.user._id.toString()) {
