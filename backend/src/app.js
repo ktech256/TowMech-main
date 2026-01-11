@@ -26,7 +26,7 @@ import adminPaymentsRoutes from "./routes/adminPayments.js";
 import adminAnalyticsRoutes from "./routes/adminAnalytics.js";
 import adminSettingsRoutes from "./routes/adminSettings.js";
 import adminZonesRoutes from "./routes/adminZones.js";
-import adminOverviewRoutes from "./routes/adminOverview.js"; // ✅ ✅ ✅ NEW OVERVIEW ROUTE ✅
+import adminOverviewRoutes from "./routes/adminOverview.js";
 
 // ✅ SuperAdmin + Admin User Management
 import superAdminRoutes from "./routes/superAdmin.js";
@@ -45,8 +45,26 @@ const app = express();
  * ✅ Middleware
  */
 app.use(cors());
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+
+// ✅ RAW BODY CAPTURE (important for PayFast ITN verification)
+app.use(
+  express.json({
+    verify: (req, res, buf) => {
+      // store raw body (for webhook verification if needed)
+      req.rawBody = buf.toString("utf8");
+    },
+  })
+);
+
+app.use(
+  express.urlencoded({
+    extended: true,
+    verify: (req, res, buf) => {
+      // PayFast sends x-www-form-urlencoded
+      req.rawBody = buf.toString("utf8");
+    },
+  })
+);
 
 /**
  * ✅ Health Check
