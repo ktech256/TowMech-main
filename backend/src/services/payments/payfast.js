@@ -5,22 +5,39 @@ const PAYFAST_SANDBOX_URL = "https://sandbox.payfast.co.za/eng/process";
 const PAYFAST_LIVE_URL = "https://www.payfast.co.za/eng/process";
 
 /**
- * ✅ PayFast requires signature from RAW params (NOT encoded)
+ * ✅ PayFast encoding rules:
+ * - encodeURIComponent
+ * - spaces must be "+"
+ */
+function encodePayfast(value) {
+  return encodeURIComponent(value)
+    .replace(/%20/g, "+")
+    .replace(/%2F/g, "/") // keep slashes readable (optional but matches PayFast often)
+    .replace(/%3A/g, ":"); // keep : readable (optional)
+}
+
+/**
+ * ✅ PayFast signature requires URL-encoded query string
+ * (excluding signature)
  */
 function generatePayfastSignature(params, passphrase = "") {
   const sortedKeys = Object.keys(params).sort();
 
-  // ✅ RAW string (no encodeURIComponent here)
-  let queryString = sortedKeys
-    .filter((key) => params[key] !== undefined && params[key] !== null && params[key] !== "")
-    .map((key) => `${key}=${params[key].toString().trim()}`)
+  const queryString = sortedKeys
+    .filter(
+      (key) =>
+        params[key] !== undefined &&
+        params[key] !== null &&
+        params[key] !== ""
+    )
+    .map((key) => `${key}=${encodePayfast(params[key].toString().trim())}`)
     .join("&");
 
-  if (passphrase) {
-    queryString += `&passphrase=${passphrase.trim()}`;
-  }
+  const finalString = passphrase
+    ? `${queryString}&passphrase=${encodePayfast(passphrase.trim())}`
+    : queryString;
 
-  return crypto.createHash("md5").update(queryString).digest("hex");
+  return crypto.createHash("md5").update(finalString).digest("hex");
 }
 
 /**
@@ -81,27 +98,30 @@ async function createPayment({
   console.log("✅ PayFast MerchantKey:", config.merchantKey);
   console.log("✅ PayFast Passphrase:", config.passphrase ? "✅ present" : "❌ missing");
 
-  // ✅ PayFast expects raw values here
+  // ✅ params must be EXACT & match PayFast documentation
   const params = {
     merchant_id: config.merchantId.trim(),
     merchant_key: config.merchantKey.trim(),
     return_url: successUrl.trim(),
     cancel_url: cancelUrl.trim(),
     notify_url: notifyUrl.trim(),
-    email_address: customerEmail.trim(),
     m_payment_id: reference.trim(),
     amount: Number(amount).toFixed(2),
     item_name: "TowMech Booking Fee",
   };
 
+  // ✅ Email is optional, remove if empty
+  if (customerEmail && customerEmail.trim() !== "") {
+    params.email_address = customerEmail.trim();
+  }
+
   const signature = generatePayfastSignature(params, config.passphrase);
 
-  // ✅ Build final URL with encoding
   const fullUrl =
     baseURL +
     "?" +
     Object.entries({ ...params, signature })
-      .map(([k, v]) => `${k}=${encodeURIComponent(v).replace(/%20/g, "+")}`)
+      .map(([k, v]) => `${k}=${encodePayfast(v.toString())}`)
       .join("&");
 
   console.log("✅ SIGNATURE:", signature);
