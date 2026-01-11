@@ -23,7 +23,7 @@ router.patch("/me/status", auth, async (req, res) => {
 
     if (!user.providerProfile) user.providerProfile = {};
 
-    // ✅ ✅ ✅ ALWAYS UPDATE LOCATION FIRST (EVEN IF NOT APPROVED YET)
+    // ✅ ALWAYS UPDATE LOCATION FIRST
     if (lat !== undefined && lng !== undefined) {
       user.providerProfile.location = {
         type: "Point",
@@ -33,21 +33,15 @@ router.patch("/me/status", auth, async (req, res) => {
 
     user.providerProfile.lastSeenAt = new Date();
 
-    // Optional update capabilities
     if (Array.isArray(towTruckTypes)) user.providerProfile.towTruckTypes = towTruckTypes;
     if (Array.isArray(carTypesSupported)) user.providerProfile.carTypesSupported = carTypesSupported;
 
-    // ✅ ✅ ✅ NOW APPLY ONLINE/OFFLINE + ENFORCEMENT
     if (typeof isOnline === "boolean") {
-
-      // ✅ ENFORCEMENT: Providers cannot go online unless APPROVED
       if (isOnline === true) {
         const status = user.providerProfile?.verificationStatus || "PENDING";
 
         if (status !== "APPROVED") {
-          // ✅ Save location changes before rejecting
           await user.save();
-
           return res.status(403).json({
             message: "Provider must be verified by admin before going online",
             verificationStatus: status,
@@ -95,6 +89,80 @@ router.get("/jobs/broadcasted", auth, async (req, res) => {
     return res.status(200).json({ jobs });
   } catch (err) {
     return res.status(500).json({ message: "Could not fetch broadcasted jobs", error: err.message });
+  }
+});
+
+/**
+ * ✅ NEW: Provider fetches a single broadcasted job by id
+ * GET /api/providers/jobs/broadcasted/:jobId
+ */
+router.get("/jobs/broadcasted/:jobId", auth, async (req, res) => {
+  try {
+    const providerRoles = [USER_ROLES.MECHANIC, USER_ROLES.TOW_TRUCK];
+    if (!providerRoles.includes(req.user.role)) {
+      return res.status(403).json({ message: "Only providers can view broadcasted jobs" });
+    }
+
+    const job = await Job.findOne({
+      _id: req.params.jobId,
+      status: JOB_STATUSES.BROADCASTED,
+      assignedTo: null,
+      broadcastedTo: req.user._id,
+    });
+
+    if (!job) return res.status(404).json({ message: "Job not found or not available" });
+
+    return res.status(200).json(job);
+  } catch (err) {
+    return res.status(500).json({ message: "Could not fetch job", error: err.message });
+  }
+});
+
+/**
+ * ✅ NEW: Provider fetches assigned (active) jobs
+ * GET /api/providers/jobs/assigned
+ */
+router.get("/jobs/assigned", auth, async (req, res) => {
+  try {
+    const providerRoles = [USER_ROLES.MECHANIC, USER_ROLES.TOW_TRUCK];
+    if (!providerRoles.includes(req.user.role)) {
+      return res.status(403).json({ message: "Only providers can view assigned jobs" });
+    }
+
+    const jobs = await Job.find({
+      assignedTo: req.user._id,
+      status: { $in: [JOB_STATUSES.ASSIGNED, JOB_STATUSES.IN_PROGRESS] },
+    })
+      .sort({ updatedAt: -1 })
+      .limit(20);
+
+    return res.status(200).json({ jobs });
+  } catch (err) {
+    return res.status(500).json({ message: "Could not fetch assigned jobs", error: err.message });
+  }
+});
+
+/**
+ * ✅ NEW: Provider fetches job history
+ * GET /api/providers/jobs/history
+ */
+router.get("/jobs/history", auth, async (req, res) => {
+  try {
+    const providerRoles = [USER_ROLES.MECHANIC, USER_ROLES.TOW_TRUCK];
+    if (!providerRoles.includes(req.user.role)) {
+      return res.status(403).json({ message: "Only providers can view job history" });
+    }
+
+    const jobs = await Job.find({
+      assignedTo: req.user._id,
+      status: JOB_STATUSES.COMPLETED,
+    })
+      .sort({ updatedAt: -1 })
+      .limit(50);
+
+    return res.status(200).json({ jobs });
+  } catch (err) {
+    return res.status(500).json({ message: "Could not fetch job history", error: err.message });
   }
 });
 
