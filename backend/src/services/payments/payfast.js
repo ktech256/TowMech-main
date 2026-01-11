@@ -9,54 +9,50 @@ const PAYFAST_LIVE_URL = "https://www.payfast.co.za/eng/process";
 
 /**
  * ✅ Generate PayFast signature
- * PayFast requires MD5 hash of query string in original order
+ * PayFast requires MD5 hash of query string:
+ * ✅ params must be sorted alphabetically
  */
 function generatePayfastSignature(params, passphrase) {
-  const queryString = Object.entries(params)
-    .map(([k, v]) => `${k}=${encodeURIComponent(v).replace(/%20/g, "+")}`)
+  const sortedKeys = Object.keys(params).sort();
+
+  const queryString = sortedKeys
+    .map((k) => `${k}=${encodeURIComponent(params[k]).replace(/%20/g, "+")}`)
     .join("&");
 
   const finalString = passphrase
-    ? `${queryString}&passphrase=${encodeURIComponent(passphrase).replace(
-        /%20/g,
-        "+"
-      )}`
+    ? `${queryString}&passphrase=${encodeURIComponent(passphrase).replace(/%20/g, "+")}`
     : queryString;
 
   return crypto.createHash("md5").update(finalString).digest("hex");
 }
 
 /**
- * ✅ Load PayFast config (DB first, fallback generic dashboard keys, fallback ENV)
+ * ✅ Load PayFast config
+ * ✅ ENV FIRST → DB fallback → Default SANDBOX
  */
 async function getPayfastConfig() {
   const settings = await SystemSettings.findOne();
   const i = settings?.integrations || {};
 
   return {
-    // ✅ 1️⃣ DB PayFast fields (if available)
-    // ✅ 2️⃣ fallback to generic dashboard keys
-    // ✅ 3️⃣ fallback ENV variables
-
     merchantId:
+      process.env.PAYFAST_MERCHANT_ID ||
       i.payfastMerchantId ||
       i.paymentPublicKey ||
-      process.env.PAYFAST_MERCHANT_ID ||
       "",
 
     merchantKey:
+      process.env.PAYFAST_MERCHANT_KEY ||
       i.payfastMerchantKey ||
       i.paymentSecretKey ||
-      process.env.PAYFAST_MERCHANT_KEY ||
       "",
 
     passphrase:
+      process.env.PAYFAST_PASSPHRASE ||
       i.payfastPassphrase ||
       i.paymentWebhookSecret ||
-      process.env.PAYFAST_PASSPHRASE ||
       "",
 
-    // ✅ ✅ ✅ FIXED: ENV first → DB fallback → default SANDBOX
     mode: process.env.PAYFAST_MODE || i.payfastMode || "SANDBOX",
   };
 }
@@ -79,19 +75,16 @@ async function createPayment({
     throw new Error("PayFast Merchant details missing ❌");
   }
 
-  const baseURL =
-    config.mode === "LIVE" ? PAYFAST_LIVE_URL : PAYFAST_SANDBOX_URL;
+  const mode = config.mode?.toUpperCase() === "LIVE" ? "LIVE" : "SANDBOX";
+  const baseURL = mode === "LIVE" ? PAYFAST_LIVE_URL : PAYFAST_SANDBOX_URL;
 
-  console.log("✅ PayFast MODE:", config.mode);
+  console.log("✅ PayFast MODE:", mode);
   console.log("✅ PayFast Base URL:", baseURL);
   console.log("✅ PayFast MerchantId:", config.merchantId);
   console.log("✅ PayFast MerchantKey:", config.merchantKey);
-  console.log(
-    "✅ PayFast Passphrase:",
-    config.passphrase ? "✅ present" : "❌ missing"
-  );
+  console.log("✅ PayFast Passphrase:", config.passphrase ? "✅ present" : "❌ missing");
 
-  // ✅ IMPORTANT: PayFast signature relies on this EXACT ORDER
+  // ✅ PayFast parameters
   const params = {
     merchant_id: config.merchantId,
     merchant_key: config.merchantKey,
@@ -104,6 +97,7 @@ async function createPayment({
     item_name: "TowMech Booking Fee",
   };
 
+  // ✅ Generate correct PayFast signature
   const signature = generatePayfastSignature(params, config.passphrase);
 
   const fullUrl =
