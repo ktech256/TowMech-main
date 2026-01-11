@@ -1,8 +1,8 @@
-import express from 'express';
-import auth from '../middleware/auth.js';
-import authorizeRoles from '../middleware/role.js';
-import User, { USER_ROLES } from '../models/User.js';
-import admin, { initFirebase } from '../config/firebase.js';
+import express from "express";
+import auth from "../middleware/auth.js";
+import authorizeRoles from "../middleware/role.js";
+import User, { USER_ROLES } from "../models/User.js";
+import admin, { initFirebase } from "../config/firebase.js";
 
 const router = express.Router();
 
@@ -10,44 +10,63 @@ const router = express.Router();
  * ✅ Test route (GET)
  * GET /api/notifications/test
  */
-router.get('/test', (req, res) => {
-  return res.status(200).json({ message: 'Notifications route working ✅' });
+router.get("/test", (req, res) => {
+  return res.status(200).json({ message: "Notifications route working ✅" });
 });
 
 /**
  * ✅ Save device token (Customer / Provider)
  * POST /api/notifications/register-token
+ *
+ * Accept BOTH formats to avoid frontend mismatch:
+ * - { fcmToken: "xxx" }
+ * - { token: "xxx" }
  */
-router.post('/register-token', auth, async (req, res) => {
+router.post("/register-token", auth, async (req, res) => {
   try {
-    const { fcmToken } = req.body;
+    const fcmToken = req.body.fcmToken || req.body.token;
 
-    if (!fcmToken) {
-      return res.status(400).json({ message: 'fcmToken is required' });
+    if (!fcmToken || typeof fcmToken !== "string" || fcmToken.length < 20) {
+      return res.status(400).json({ message: "Valid fcmToken/token is required" });
     }
 
     const user = await User.findById(req.user._id);
-    if (!user) return res.status(404).json({ message: 'User not found' });
+    if (!user) return res.status(404).json({ message: "User not found" });
 
     // ✅ Save token in root for all users
     user.fcmToken = fcmToken;
 
     // ✅ If provider → also store inside providerProfile
     const providerRoles = [USER_ROLES.TOW_TRUCK, USER_ROLES.MECHANIC];
-    if (providerRoles.includes(user.role)) {
+    const isProvider = providerRoles.includes(user.role);
+
+    if (isProvider) {
       if (!user.providerProfile) user.providerProfile = {};
       user.providerProfile.fcmToken = fcmToken;
+      user.providerProfile.fcmTokenUpdatedAt = new Date();
     }
 
     await user.save();
 
-    return res.status(200).json({
-      message: 'FCM token saved successfully ✅',
+    // ✅ IMPORTANT LOGS
+    console.log("✅ FCM TOKEN SAVED ✅", {
+      userId: user._id.toString(),
       role: user.role,
-      savedInProviderProfile: providerRoles.includes(user.role)
+      savedRoot: !!user.fcmToken,
+      savedProviderProfile: !!user.providerProfile?.fcmToken,
+      tokenLength: fcmToken.length
+    });
+
+    return res.status(200).json({
+      message: "FCM token saved successfully ✅",
+      userId: user._id,
+      role: user.role,
+      savedInRoot: true,
+      savedInProviderProfile: isProvider
     });
   } catch (err) {
-    return res.status(500).json({ message: 'Could not save token', error: err.message });
+    console.error("❌ REGISTER TOKEN ERROR:", err);
+    return res.status(500).json({ message: "Could not save token", error: err.message });
   }
 });
 
@@ -55,44 +74,74 @@ router.post('/register-token', auth, async (req, res) => {
  * ✅ Send test notification (ADMIN ONLY)
  * POST /api/notifications/send-test
  */
-router.post(
-  '/send-test',
+router.post("/send-test", auth, authorizeRoles(USER_ROLES.ADMIN), async (req, res) => {
+  try {
+    initFirebase(); // ✅ ensure firebase initialized
+
+    const { userId, title, body } = req.body;
+
+    if (!userId || !title || !body) {
+      return res.status(400).json({ message: "userId, title, body are required" });
+    }
+
+    const user = await User.findById(userId);
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    const token = user.fcmToken || user.providerProfile?.fcmToken;
+    if (!token) {
+      return res.status(400).json({ message: "User has no saved fcmToken" });
+    }
+
+    const payload = {
+      token,
+      notification: { title, body }
+    };
+
+    const response = await admin.messaging().send(payload);
+
+    return res.status(200).json({
+      message: "Notification sent successfully ✅",
+      response
+    });
+  } catch (err) {
+    console.error("❌ SEND TEST ERROR:", err);
+    return res.status(500).json({ message: "Failed to send notification", error: err.message });
+  }
+});
+
+/**
+ * ✅ DEBUG: Check providers + whether they have tokens (ADMIN ONLY)
+ * GET /api/notifications/debug/providers-tokens
+ */
+router.get(
+  "/debug/providers-tokens",
   auth,
   authorizeRoles(USER_ROLES.ADMIN),
   async (req, res) => {
     try {
-      initFirebase(); // ✅ ensure firebase initialized
+      const providerRoles = [USER_ROLES.TOW_TRUCK, USER_ROLES.MECHANIC];
 
-      const { userId, title, body } = req.body;
+      const providers = await User.find({ role: { $in: providerRoles } }).select(
+        "_id role fcmToken providerProfile.fcmToken providerProfile.isOnline providerProfile.verificationStatus"
+      );
 
-      if (!userId || !title || !body) {
-        return res.status(400).json({ message: 'userId, title, body are required' });
-      }
-
-      const user = await User.findById(userId);
-      if (!user) return res.status(404).json({ message: 'User not found' });
-
-      const token = user.fcmToken || user.providerProfile?.fcmToken;
-      if (!token) {
-        return res.status(400).json({ message: 'User has no saved fcmToken' });
-      }
-
-      const payload = {
-        token,
-        notification: {
-          title,
-          body
-        }
-      };
-
-      const response = await admin.messaging().send(payload);
+      const summary = providers.map((p) => ({
+        id: p._id.toString(),
+        role: p.role,
+        isOnline: p.providerProfile?.isOnline ?? null,
+        verificationStatus: p.providerProfile?.verificationStatus ?? null,
+        hasRootToken: !!p.fcmToken,
+        hasProviderProfileToken: !!p.providerProfile?.fcmToken
+      }));
 
       return res.status(200).json({
-        message: 'Notification sent successfully ✅',
-        response
+        total: providers.length,
+        withAnyToken: summary.filter((x) => x.hasRootToken || x.hasProviderProfileToken).length,
+        providers: summary
       });
     } catch (err) {
-      return res.status(500).json({ message: 'Failed to send notification', error: err.message });
+      console.error("❌ DEBUG PROVIDERS TOKENS ERROR:", err);
+      return res.status(500).json({ message: "Debug failed", error: err.message });
     }
   }
 );
