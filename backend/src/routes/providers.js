@@ -93,7 +93,7 @@ router.get("/jobs/broadcasted", auth, async (req, res) => {
 });
 
 /**
- * ✅ Provider fetches one broadcasted job by id
+ * ✅ NEW: Provider fetches a single broadcasted job by id
  * GET /api/providers/jobs/broadcasted/:jobId
  */
 router.get("/jobs/broadcasted/:jobId", auth, async (req, res) => {
@@ -115,90 +115,6 @@ router.get("/jobs/broadcasted/:jobId", auth, async (req, res) => {
     return res.status(200).json(job);
   } catch (err) {
     return res.status(500).json({ message: "Could not fetch job", error: err.message });
-  }
-});
-
-/**
- * ✅ NEW (IMPORTANT): Provider fetches job details (assigned OR broadcasted)
- * GET /api/providers/jobs/:jobId
- *
- * Used by ProviderJobTrackingScreen
- */
-router.get("/jobs/:jobId", auth, async (req, res) => {
-  try {
-    const providerRoles = [USER_ROLES.MECHANIC, USER_ROLES.TOW_TRUCK];
-    if (!providerRoles.includes(req.user.role)) {
-      return res.status(403).json({ message: "Only providers can view jobs" });
-    }
-
-    const job = await Job.findOne({
-      _id: req.params.jobId,
-      $or: [
-        // ✅ assigned job for this provider
-        { assignedTo: req.user._id },
-        // ✅ still broadcasted to this provider
-        { broadcastedTo: req.user._id }
-      ],
-    })
-      .populate("customer", "name email");
-
-    if (!job) {
-      return res.status(404).json({ message: "Job not found for this provider" });
-    }
-
-    return res.status(200).json(job);
-  } catch (err) {
-    return res.status(500).json({ message: "Could not fetch job", error: err.message });
-  }
-});
-
-/**
- * ✅ Provider fetches assigned (active) jobs
- * GET /api/providers/jobs/assigned
- */
-router.get("/jobs/assigned", auth, async (req, res) => {
-  try {
-    const providerRoles = [USER_ROLES.MECHANIC, USER_ROLES.TOW_TRUCK];
-    if (!providerRoles.includes(req.user.role)) {
-      return res.status(403).json({ message: "Only providers can view assigned jobs" });
-    }
-
-    const jobs = await Job.find({
-      assignedTo: req.user._id,
-      status: { $in: [JOB_STATUSES.ASSIGNED, JOB_STATUSES.IN_PROGRESS] },
-    })
-      .sort({ updatedAt: -1 })
-      .limit(20)
-      .populate("customer", "name email");
-
-    return res.status(200).json({ jobs });
-  } catch (err) {
-    return res.status(500).json({ message: "Could not fetch assigned jobs", error: err.message });
-  }
-});
-
-/**
- * ✅ Provider fetches job history
- * GET /api/providers/jobs/history
- */
-router.get("/jobs/history", auth, async (req, res) => {
-  try {
-    const providerRoles = [USER_ROLES.MECHANIC, USER_ROLES.TOW_TRUCK];
-    if (!providerRoles.includes(req.user.role)) {
-      return res.status(403).json({ message: "Only providers can view job history" });
-    }
-
-    const jobs = await Job.find({
-      assignedTo: req.user._id,
-      status: JOB_STATUSES.COMPLETED,
-    })
-      .sort({ updatedAt: -1 })
-      .limit(50)
-      .populate("customer", "name email");
-
-    return res.status(200).json({ jobs });
-  } catch (err) {
-    return res.status(500).json({ message: "Could not fetch job history", error: err.message });
   }
 });
 
@@ -226,7 +142,7 @@ router.patch("/jobs/:jobId/accept", auth, async (req, res) => {
         lockedAt: new Date(),
       },
       { new: true }
-    ).populate("customer", "name email");
+    );
 
     if (!job) {
       return res.status(409).json({ message: "Job already claimed or not available" });
@@ -272,6 +188,81 @@ router.patch("/jobs/:jobId/reject", auth, async (req, res) => {
     return res.status(200).json({ message: "Job rejected", jobId: job._id });
   } catch (err) {
     return res.status(500).json({ message: "Could not reject job", error: err.message });
+  }
+});
+
+/**
+ * ✅ NEW: Provider fetches assigned (active) jobs
+ * GET /api/providers/jobs/assigned
+ */
+router.get("/jobs/assigned", auth, async (req, res) => {
+  try {
+    const providerRoles = [USER_ROLES.MECHANIC, USER_ROLES.TOW_TRUCK];
+    if (!providerRoles.includes(req.user.role)) {
+      return res.status(403).json({ message: "Only providers can view assigned jobs" });
+    }
+
+    const jobs = await Job.find({
+      assignedTo: req.user._id,
+      status: { $in: [JOB_STATUSES.ASSIGNED, JOB_STATUSES.IN_PROGRESS] },
+    })
+      .sort({ updatedAt: -1 })
+      .limit(20);
+
+    return res.status(200).json({ jobs });
+  } catch (err) {
+    return res.status(500).json({ message: "Could not fetch assigned jobs", error: err.message });
+  }
+});
+
+/**
+ * ✅ NEW: Provider fetches job history
+ * GET /api/providers/jobs/history
+ */
+router.get("/jobs/history", auth, async (req, res) => {
+  try {
+    const providerRoles = [USER_ROLES.MECHANIC, USER_ROLES.TOW_TRUCK];
+    if (!providerRoles.includes(req.user.role)) {
+      return res.status(403).json({ message: "Only providers can view job history" });
+    }
+
+    const jobs = await Job.find({
+      assignedTo: req.user._id,
+      status: JOB_STATUSES.COMPLETED,
+    })
+      .sort({ updatedAt: -1 })
+      .limit(50);
+
+    return res.status(200).json({ jobs });
+  } catch (err) {
+    return res.status(500).json({ message: "Could not fetch job history", error: err.message });
+  }
+});
+
+/**
+ * ✅ FIXED: Provider fetches a single job by id (assigned to them)
+ * GET /api/providers/jobs/:jobId
+ *
+ * IMPORTANT FIX:
+ * - Restrict :jobId to ObjectId regex so it does NOT catch /jobs/assigned or /jobs/history.
+ */
+router.get("/jobs/:jobId([0-9a-fA-F]{24})", auth, async (req, res) => {
+  try {
+    const providerRoles = [USER_ROLES.MECHANIC, USER_ROLES.TOW_TRUCK];
+    if (!providerRoles.includes(req.user.role)) {
+      return res.status(403).json({ message: "Only providers can view provider jobs" });
+    }
+
+    const job = await Job.findOne({
+      _id: req.params.jobId,
+      assignedTo: req.user._id,
+    }).populate("customer", "name email phone");
+
+    if (!job) return res.status(404).json({ message: "Job not found" });
+
+    return res.status(200).json(job);
+  } catch (err) {
+    return res.status(500).json({ message: "Could not fetch job", error: err.message });
   }
 });
 
