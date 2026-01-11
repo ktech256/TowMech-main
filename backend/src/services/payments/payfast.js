@@ -8,19 +8,22 @@ const PAYFAST_SANDBOX_URL = "https://sandbox.payfast.co.za/eng/process";
 const PAYFAST_LIVE_URL = "https://www.payfast.co.za/eng/process";
 
 /**
- * ✅ Generate PayFast signature
- * PayFast requires MD5 hash of query string:
- * ✅ params must be sorted alphabetically
+ * ✅ PayFast signature generator
+ * ✅ MUST use sorted params and PayFast encoding rules
  */
-function generatePayfastSignature(params, passphrase) {
+function generatePayfastSignature(params, passphrase = "") {
   const sortedKeys = Object.keys(params).sort();
 
   const queryString = sortedKeys
-    .map((k) => `${k}=${encodeURIComponent(params[k]).replace(/%20/g, "+")}`)
+    .filter((key) => params[key] !== undefined && params[key] !== null && params[key] !== "")
+    .map((key) => {
+      const value = params[key].toString().trim();
+      return `${key}=${encodeURIComponent(value).replace(/%20/g, "+")}`;
+    })
     .join("&");
 
   const finalString = passphrase
-    ? `${queryString}&passphrase=${encodeURIComponent(passphrase).replace(/%20/g, "+")}`
+    ? `${queryString}&passphrase=${encodeURIComponent(passphrase.trim()).replace(/%20/g, "+")}`
     : queryString;
 
   return crypto.createHash("md5").update(finalString).digest("hex");
@@ -28,7 +31,7 @@ function generatePayfastSignature(params, passphrase) {
 
 /**
  * ✅ Load PayFast config
- * ✅ ENV FIRST → DB fallback → Default SANDBOX
+ * ✅ ENV FIRST → DB fallback
  */
 async function getPayfastConfig() {
   const settings = await SystemSettings.findOne();
@@ -84,30 +87,30 @@ async function createPayment({
   console.log("✅ PayFast MerchantKey:", config.merchantKey);
   console.log("✅ PayFast Passphrase:", config.passphrase ? "✅ present" : "❌ missing");
 
-  // ✅ PayFast parameters
+  // ✅ PayFast expects exact formatting
   const params = {
-    merchant_id: config.merchantId,
-    merchant_key: config.merchantKey,
-    return_url: successUrl,
-    cancel_url: cancelUrl,
-    notify_url: notifyUrl,
-    email_address: customerEmail,
-    m_payment_id: reference,
+    merchant_id: config.merchantId.trim(),
+    merchant_key: config.merchantKey.trim(),
+    return_url: successUrl.trim(),
+    cancel_url: cancelUrl.trim(),
+    notify_url: notifyUrl.trim(),
+    email_address: customerEmail.trim(),
+    m_payment_id: reference.trim(),
     amount: Number(amount).toFixed(2),
     item_name: "TowMech Booking Fee",
   };
 
-  // ✅ Generate correct PayFast signature
   const signature = generatePayfastSignature(params, config.passphrase);
 
   const fullUrl =
     baseURL +
     "?" +
     Object.entries({ ...params, signature })
-      .map(([k, v]) => `${k}=${encodeURIComponent(v)}`)
+      .map(([k, v]) => `${k}=${encodeURIComponent(v).replace(/%20/g, "+")}`)
       .join("&");
 
   console.log("✅ PAYMENT URL GENERATED:", fullUrl);
+  console.log("✅ SIGNATURE:", signature);
 
   return {
     paymentUrl: fullUrl,
@@ -118,7 +121,7 @@ async function createPayment({
 }
 
 /**
- * ✅ PayFast verification happens via ITN notify_url callback
+ * ✅ PayFast verification happens via ITN
  */
 async function verifyPayment() {
   return { message: "PayFast verification handled via notify_url ITN ✅" };
