@@ -17,7 +17,10 @@ const PORT = process.env.PORT || 5000;
 (async () => {
   try {
     console.log("✅ server.js started");
-    console.log("✅ ENV CHECK:", process.env.MONGODB_URI ? "Loaded ✅" : "Missing ❌");
+    console.log(
+      "✅ ENV CHECK:",
+      process.env.MONGODB_URI ? "Loaded ✅" : "Missing ❌"
+    );
 
     await connectDB();
     console.log("✅ DB connected");
