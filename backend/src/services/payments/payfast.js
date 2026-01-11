@@ -1,32 +1,26 @@
 import crypto from "crypto";
 import SystemSettings from "../../models/SystemSettings.js";
 
-/**
- * ✅ PayFast base URLs
- */
 const PAYFAST_SANDBOX_URL = "https://sandbox.payfast.co.za/eng/process";
 const PAYFAST_LIVE_URL = "https://www.payfast.co.za/eng/process";
 
 /**
- * ✅ PayFast signature generator
- * ✅ MUST use sorted params and PayFast encoding rules
+ * ✅ PayFast requires signature from RAW params (NOT encoded)
  */
 function generatePayfastSignature(params, passphrase = "") {
   const sortedKeys = Object.keys(params).sort();
 
-  const queryString = sortedKeys
+  // ✅ RAW string (no encodeURIComponent here)
+  let queryString = sortedKeys
     .filter((key) => params[key] !== undefined && params[key] !== null && params[key] !== "")
-    .map((key) => {
-      const value = params[key].toString().trim();
-      return `${key}=${encodeURIComponent(value).replace(/%20/g, "+")}`;
-    })
+    .map((key) => `${key}=${params[key].toString().trim()}`)
     .join("&");
 
-  const finalString = passphrase
-    ? `${queryString}&passphrase=${encodeURIComponent(passphrase.trim()).replace(/%20/g, "+")}`
-    : queryString;
+  if (passphrase) {
+    queryString += `&passphrase=${passphrase.trim()}`;
+  }
 
-  return crypto.createHash("md5").update(finalString).digest("hex");
+  return crypto.createHash("md5").update(queryString).digest("hex");
 }
 
 /**
@@ -87,7 +81,7 @@ async function createPayment({
   console.log("✅ PayFast MerchantKey:", config.merchantKey);
   console.log("✅ PayFast Passphrase:", config.passphrase ? "✅ present" : "❌ missing");
 
-  // ✅ PayFast expects exact formatting
+  // ✅ PayFast expects raw values here
   const params = {
     merchant_id: config.merchantId.trim(),
     merchant_key: config.merchantKey.trim(),
@@ -102,6 +96,7 @@ async function createPayment({
 
   const signature = generatePayfastSignature(params, config.passphrase);
 
+  // ✅ Build final URL with encoding
   const fullUrl =
     baseURL +
     "?" +
@@ -109,8 +104,8 @@ async function createPayment({
       .map(([k, v]) => `${k}=${encodeURIComponent(v).replace(/%20/g, "+")}`)
       .join("&");
 
-  console.log("✅ PAYMENT URL GENERATED:", fullUrl);
   console.log("✅ SIGNATURE:", signature);
+  console.log("✅ PAYMENT URL GENERATED:", fullUrl);
 
   return {
     paymentUrl: fullUrl,
@@ -120,9 +115,6 @@ async function createPayment({
   };
 }
 
-/**
- * ✅ PayFast verification happens via ITN
- */
 async function verifyPayment() {
   return { message: "PayFast verification handled via notify_url ITN ✅" };
 }
