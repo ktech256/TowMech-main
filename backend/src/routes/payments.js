@@ -20,7 +20,8 @@ console.log("✅ payments.js loaded ✅");
 
 /**
  * ✅ PayFast ITN signature rules (IMPORTANT):
- * - Verify signature from RAW body (prevents +/%20 normalization issues)
+ * - Best: verify from RAW body (prevents +/%20 normalization issues)
+ * - Fallback: verify from req.body if raw was consumed by a global parser
  * - Remove signature field
  * - Append passphrase (urlencoded, spaces as +) if present
  * - MD5 hash
@@ -29,13 +30,113 @@ function encodePayfast(value) {
   return encodeURIComponent(String(value)).replace(/%20/g, "+");
 }
 
+function md5Hex(str) {
+  return crypto.createHash("md5").update(str).digest("hex").toLowerCase();
+}
+
 /**
- * ✅ PayFast ITN Webhook (FIXED)
+ * ✅ Generate signature from req.body (fallback mode)
+ * IMPORTANT: include empty strings too (PayFast often sends custom_* as "")
+ */
+function generatePayfastSignatureFromBody(body, passphrase = "") {
+  const data = { ...(body || {}) };
+  delete data.signature;
+
+  const keys = Object.keys(data).sort();
+
+  const queryString = keys
+    .map((k) => {
+      const v = data[k] ?? ""; // include empty strings
+      return `${k}=${encodePayfast(v)}`;
+    })
+    .join("&");
+
+  const finalString =
+    passphrase && passphrase.trim() !== ""
+      ? `${queryString}&passphrase=${encodePayfast(passphrase.trim())}`
+      : queryString;
+
+  return md5Hex(finalString);
+}
+
+/**
+ * ✅ Verify signature from RAW body (preferred)
+ * Returns { ok, generatedSignature, receivedSignature, mode, raw }
+ */
+function verifyPayfastSignature({ rawBody, body, passphrase }) {
+  const raw = (rawBody || "").trim();
+  const pp = (passphrase || "").trim();
+
+  // ✅ signature from parsed body (always present if PayFast included it)
+  const receivedFromBody = (body?.signature || "").toLowerCase();
+
+  // ✅ 1) Preferred: RAW verification
+  if (raw) {
+    const receivedFromRaw =
+      (raw.match(/(?:^|&)signature=([^&]+)/)?.[1] || "").toLowerCase();
+
+    if (!receivedFromRaw) {
+      return {
+        ok: false,
+        generatedSignature: "",
+        receivedSignature: "",
+        mode: "raw",
+        raw,
+        reason: "missing_signature_in_raw",
+      };
+    }
+
+    const rawWithoutSignature = raw
+      .split("&")
+      .filter((pair) => !pair.startsWith("signature="))
+      .join("&");
+
+    const finalString =
+      pp !== ""
+        ? `${rawWithoutSignature}&passphrase=${encodePayfast(pp)}`
+        : rawWithoutSignature;
+
+    const generatedSignature = md5Hex(finalString);
+
+    return {
+      ok: generatedSignature === receivedFromRaw,
+      generatedSignature,
+      receivedSignature: receivedFromRaw,
+      mode: "raw",
+      raw,
+    };
+  }
+
+  // ✅ 2) Fallback: BODY verification (when raw stream was already consumed globally)
+  if (!receivedFromBody) {
+    return {
+      ok: false,
+      generatedSignature: "",
+      receivedSignature: "",
+      mode: "body",
+      raw: "",
+      reason: "missing_signature_in_body",
+    };
+  }
+
+  const generatedSignature = generatePayfastSignatureFromBody(body, pp);
+
+  return {
+    ok: generatedSignature === receivedFromBody,
+    generatedSignature,
+    receivedSignature: receivedFromBody,
+    mode: "body",
+    raw: "",
+  };
+}
+
+/**
+ * ✅ PayFast ITN Webhook (FIXED + FALLBACK)
  * POST /api/payments/notify/payfast
  *
  * IMPORTANT:
  * - Must be urlencoded parser (PayFast sends x-www-form-urlencoded)
- * - Must verify signature from RAW body (not req.body)
+ * - Try RAW verification; if raw is empty, fall back to req.body verification
  * - Return 200 quickly (PayFast retries aggressively)
  */
 router.post(
@@ -43,7 +144,7 @@ router.post(
   express.urlencoded({
     extended: false,
     verify: (req, res, buf) => {
-      // ✅ Save RAW payload as PayFast sent it
+      // ✅ Save RAW payload as PayFast sent it (may be empty if global parser already ran)
       req.rawBody = buf.toString("utf8");
     },
   }),
@@ -63,42 +164,27 @@ router.post(
       // ✅ Passphrase must match PayFast dashboard exactly
       const passphrase = (process.env.PAYFAST_PASSPHRASE || "").trim();
 
-      // ✅ RAW body is the source of truth for signature verification
-      const raw = (req.rawBody || "").trim();
+      const verification = verifyPayfastSignature({
+        rawBody: req.rawBody,
+        body: data,
+        passphrase,
+      });
 
-      // ✅ Extract received signature from raw string
-      const receivedSignature =
-        (raw.match(/(?:^|&)signature=([^&]+)/)?.[1] || "").toLowerCase();
+      if (verification.mode === "raw") {
+        console.log("✅ ITN RAW BODY:", verification.raw);
+      } else {
+        console.log("⚠️ RAW BODY EMPTY → using body-based signature rebuild");
+      }
 
-      if (!receivedSignature) {
+      console.log("✅ ITN generatedSignature:", verification.generatedSignature);
+      console.log("✅ ITN receivedSignature :", verification.receivedSignature);
+
+      if (!verification.receivedSignature) {
         console.log("❌ ITN missing signature");
-        console.log("✅ ITN RAW BODY:", raw);
         return res.status(200).send("Missing signature");
       }
 
-      // ✅ Remove signature pair from raw string
-      const rawWithoutSignature = raw
-        .split("&")
-        .filter((pair) => !pair.startsWith("signature="))
-        .join("&");
-
-      // ✅ Append passphrase if present (PayFast expects it URL-encoded)
-      const finalString =
-        passphrase !== ""
-          ? `${rawWithoutSignature}&passphrase=${encodePayfast(passphrase)}`
-          : rawWithoutSignature;
-
-      const generatedSignature = crypto
-        .createHash("md5")
-        .update(finalString)
-        .digest("hex")
-        .toLowerCase();
-
-      console.log("✅ ITN RAW BODY:", raw);
-      console.log("✅ ITN generatedSignature:", generatedSignature);
-      console.log("✅ ITN receivedSignature :", receivedSignature);
-
-      if (generatedSignature !== receivedSignature) {
+      if (!verification.ok) {
         console.log("❌ PAYFAST ITN SIGNATURE MISMATCH ❌");
         // Return 200 to avoid endless retries while you debug
         return res.status(200).send("Signature mismatch");
@@ -137,10 +223,7 @@ router.post(
       const job = await Job.findById(payment.job);
 
       if (!job) {
-        console.log(
-          "⚠️ Job not found for payment.job:",
-          payment.job?.toString()
-        );
+        console.log("⚠️ Job not found for payment.job:", payment.job?.toString());
         return res.status(200).send("Job not found");
       }
 
