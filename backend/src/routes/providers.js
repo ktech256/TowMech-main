@@ -1,5 +1,3 @@
-// providers.js  ✅ FULL FILE (with START/COMPLETE status route added)
-
 import express from "express";
 import auth from "../middleware/auth.js";
 import User, { USER_ROLES } from "../models/User.js";
@@ -95,7 +93,7 @@ router.get("/jobs/broadcasted", auth, async (req, res) => {
 });
 
 /**
- * ✅ Provider fetches a single broadcasted job by id
+ * ✅ Provider fetches one broadcasted job by id
  * GET /api/providers/jobs/broadcasted/:jobId
  */
 router.get("/jobs/broadcasted/:jobId", auth, async (req, res) => {
@@ -121,6 +119,40 @@ router.get("/jobs/broadcasted/:jobId", auth, async (req, res) => {
 });
 
 /**
+ * ✅ NEW (IMPORTANT): Provider fetches job details (assigned OR broadcasted)
+ * GET /api/providers/jobs/:jobId
+ *
+ * Used by ProviderJobTrackingScreen
+ */
+router.get("/jobs/:jobId", auth, async (req, res) => {
+  try {
+    const providerRoles = [USER_ROLES.MECHANIC, USER_ROLES.TOW_TRUCK];
+    if (!providerRoles.includes(req.user.role)) {
+      return res.status(403).json({ message: "Only providers can view jobs" });
+    }
+
+    const job = await Job.findOne({
+      _id: req.params.jobId,
+      $or: [
+        // ✅ assigned job for this provider
+        { assignedTo: req.user._id },
+        // ✅ still broadcasted to this provider
+        { broadcastedTo: req.user._id }
+      ],
+    })
+      .populate("customer", "name email");
+
+    if (!job) {
+      return res.status(404).json({ message: "Job not found for this provider" });
+    }
+
+    return res.status(200).json(job);
+  } catch (err) {
+    return res.status(500).json({ message: "Could not fetch job", error: err.message });
+  }
+});
+
+/**
  * ✅ Provider fetches assigned (active) jobs
  * GET /api/providers/jobs/assigned
  */
@@ -136,7 +168,8 @@ router.get("/jobs/assigned", auth, async (req, res) => {
       status: { $in: [JOB_STATUSES.ASSIGNED, JOB_STATUSES.IN_PROGRESS] },
     })
       .sort({ updatedAt: -1 })
-      .limit(20);
+      .limit(20)
+      .populate("customer", "name email");
 
     return res.status(200).json({ jobs });
   } catch (err) {
@@ -160,7 +193,8 @@ router.get("/jobs/history", auth, async (req, res) => {
       status: JOB_STATUSES.COMPLETED,
     })
       .sort({ updatedAt: -1 })
-      .limit(50);
+      .limit(50)
+      .populate("customer", "name email");
 
     return res.status(200).json({ jobs });
   } catch (err) {
@@ -192,7 +226,7 @@ router.patch("/jobs/:jobId/accept", auth, async (req, res) => {
         lockedAt: new Date(),
       },
       { new: true }
-    );
+    ).populate("customer", "name email");
 
     if (!job) {
       return res.status(409).json({ message: "Job already claimed or not available" });
@@ -201,53 +235,6 @@ router.patch("/jobs/:jobId/accept", auth, async (req, res) => {
     return res.status(200).json({ message: "Job accepted", job });
   } catch (err) {
     return res.status(500).json({ message: "Could not accept job", error: err.message });
-  }
-});
-
-/**
- * ✅ NEW ✅ Provider starts/completes job (fixes your HTTP 404)
- * PATCH /api/providers/jobs/:jobId/status
- *
- * Allows:
- * - ASSIGNED -> IN_PROGRESS
- * - IN_PROGRESS -> COMPLETED
- */
-router.patch("/jobs/:jobId/status", auth, async (req, res) => {
-  try {
-    const providerRoles = [USER_ROLES.MECHANIC, USER_ROLES.TOW_TRUCK];
-    if (!providerRoles.includes(req.user.role)) {
-      return res.status(403).json({ message: "Only providers can update job status" });
-    }
-
-    const { status } = req.body;
-
-    const allowed = [JOB_STATUSES.IN_PROGRESS, JOB_STATUSES.COMPLETED];
-    if (!allowed.includes(status)) {
-      return res.status(400).json({ message: "Invalid status update" });
-    }
-
-    const job = await Job.findById(req.params.jobId);
-    if (!job) return res.status(404).json({ message: "Job not found" });
-
-    // Only the assigned provider can update status
-    if (!job.assignedTo || job.assignedTo.toString() !== req.user._id.toString()) {
-      return res.status(403).json({ message: "Not authorized" });
-    }
-
-    // Enforce flow
-    if (status === JOB_STATUSES.IN_PROGRESS && job.status !== JOB_STATUSES.ASSIGNED) {
-      return res.status(400).json({ message: "Job must be ASSIGNED first" });
-    }
-    if (status === JOB_STATUSES.COMPLETED && job.status !== JOB_STATUSES.IN_PROGRESS) {
-      return res.status(400).json({ message: "Job must be IN_PROGRESS first" });
-    }
-
-    job.status = status;
-    await job.save();
-
-    return res.status(200).json({ message: "Status updated ✅", job });
-  } catch (err) {
-    return res.status(500).json({ message: "Could not update job status", error: err.message });
   }
 });
 
@@ -301,6 +288,7 @@ router.patch("/jobs/:jobId/cancel", auth, async (req, res) => {
     }
 
     const job = await Job.findById(req.params.jobId);
+
     if (!job) return res.status(404).json({ message: "Job not found" });
 
     if (!job.assignedTo || job.assignedTo.toString() !== req.user._id.toString()) {
