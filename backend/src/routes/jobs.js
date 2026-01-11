@@ -354,4 +354,111 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
   }
 });
 
+/**
+ * ✅ NEW: UPDATE JOB STATUS (Provider + Customer)
+ * PATCH /api/jobs/:id/status
+ *
+ * Provider:
+ * - must own the job (assignedTo == req.user._id)
+ * - ASSIGNED -> IN_PROGRESS
+ * - IN_PROGRESS -> COMPLETED
+ *
+ * Customer:
+ * - can cancel own job (CREATED/BROADCASTED -> CANCELLED)
+ */
+router.patch("/:id/status", auth, async (req, res) => {
+  try {
+    const { status } = req.body || {};
+    if (!status) return res.status(400).json({ message: "status is required" });
+
+    // Only allow known statuses
+    const allowed = Object.values(JOB_STATUSES);
+    if (!allowed.includes(status)) {
+      return res.status(400).json({ message: "Invalid status", allowed });
+    }
+
+    const job = await Job.findById(req.params.id);
+    if (!job) return res.status(404).json({ message: "Job not found" });
+
+    const isProvider = [USER_ROLES.MECHANIC, USER_ROLES.TOW_TRUCK].includes(req.user.role);
+    const isCustomer = req.user.role === USER_ROLES.CUSTOMER;
+
+    // =========================
+    // ✅ PROVIDER FLOW
+    // =========================
+    if (isProvider) {
+      // Must be assigned to this provider
+      if (!job.assignedTo || job.assignedTo.toString() !== req.user._id.toString()) {
+        return res.status(403).json({ message: "Not allowed: job not assigned to you" });
+      }
+
+      // Only allow proper transitions
+      const current = job.status;
+
+      const ok =
+        (current === JOB_STATUSES.ASSIGNED && status === JOB_STATUSES.IN_PROGRESS) ||
+        (current === JOB_STATUSES.IN_PROGRESS && status === JOB_STATUSES.COMPLETED);
+
+      if (!ok) {
+        return res.status(400).json({
+          message: "Invalid provider status transition",
+          current,
+          attempted: status,
+          allowedTransitions: [
+            "ASSIGNED -> IN_PROGRESS",
+            "IN_PROGRESS -> COMPLETED",
+          ],
+        });
+      }
+
+      job.status = status;
+      await job.save();
+
+      return res.status(200).json({
+        message: "Job status updated ✅",
+        job,
+      });
+    }
+
+    // =========================
+    // ✅ CUSTOMER FLOW (Cancel only)
+    // =========================
+    if (isCustomer) {
+      if (job.customer?.toString() !== req.user._id.toString()) {
+        return res.status(403).json({ message: "Not allowed: job not yours" });
+      }
+
+      // Allow customer cancel only
+      if (status !== JOB_STATUSES.CANCELLED) {
+        return res.status(403).json({ message: "Customer can only cancel jobs" });
+      }
+
+      // Only if not already completed
+      if ([JOB_STATUSES.COMPLETED].includes(job.status)) {
+        return res.status(400).json({ message: "Cannot cancel a completed job" });
+      }
+
+      job.status = JOB_STATUSES.CANCELLED;
+      job.cancelledBy = req.user._id;
+      job.cancelReason = req.body.reason || "Cancelled by customer";
+      job.cancelledAt = new Date();
+
+      await job.save();
+
+      return res.status(200).json({
+        message: "Job cancelled ✅",
+        job,
+      });
+    }
+
+    return res.status(403).json({ message: "Role not allowed" });
+  } catch (err) {
+    console.error("❌ UPDATE STATUS ERROR:", err);
+    return res.status(500).json({
+      message: "Could not update job status",
+      error: err.message,
+    });
+  }
+});
+
 export default router;
