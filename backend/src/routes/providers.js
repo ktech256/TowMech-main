@@ -6,6 +6,65 @@ import Job, { JOB_STATUSES } from "../models/Job.js";
 const router = express.Router();
 
 /**
+ * ✅ Provider profile (fetch what they registered with)
+ * GET /api/providers/me
+ */
+router.get("/me", auth, async (req, res) => {
+  try {
+    const providerRoles = [USER_ROLES.MECHANIC, USER_ROLES.TOW_TRUCK];
+    if (!providerRoles.includes(req.user.role)) {
+      return res.status(403).json({ message: "Only providers can view this profile" });
+    }
+
+    const user = await User.findById(req.user._id).select(
+      "name email phone role providerProfile createdAt updatedAt"
+    );
+
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    return res.status(200).json({ user });
+  } catch (err) {
+    return res.status(500).json({
+      message: "Could not fetch provider profile",
+      error: err.message,
+    });
+  }
+});
+
+/**
+ * ✅ Provider profile update (ONLY email + phone editable)
+ * PATCH /api/providers/me
+ */
+router.patch("/me", auth, async (req, res) => {
+  try {
+    const providerRoles = [USER_ROLES.MECHANIC, USER_ROLES.TOW_TRUCK];
+    if (!providerRoles.includes(req.user.role)) {
+      return res.status(403).json({ message: "Only providers can update this profile" });
+    }
+
+    const { email, phone } = req.body;
+
+    const update = {};
+    if (typeof email === "string") update.email = email.trim();
+    if (typeof phone === "string") update.phone = phone.trim();
+
+    const user = await User.findByIdAndUpdate(req.user._id, update, {
+      new: true,
+      runValidators: true,
+    }).select("name email phone role providerProfile createdAt updatedAt");
+
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    return res.status(200).json({ user });
+  } catch (err) {
+    return res.status(500).json({
+      message: "Could not update provider profile",
+      error: err.message,
+    });
+  }
+});
+
+/**
  * ✅ Provider updates online/offline + current location
  * PATCH /api/providers/me/status
  */
@@ -45,7 +104,7 @@ router.patch("/me/status", auth, async (req, res) => {
           return res.status(403).json({
             message: "Provider must be verified by admin before going online",
             verificationStatus: status,
-            providerProfile: user.providerProfile
+            providerProfile: user.providerProfile,
           });
         }
       }
@@ -62,93 +121,6 @@ router.patch("/me/status", auth, async (req, res) => {
   } catch (err) {
     return res.status(500).json({
       message: "Could not update provider status",
-      error: err.message,
-    });
-  }
-});
-
-/**
- * ✅ NEW: Provider profile (fetch signup details)
- * GET /api/providers/me
- */
-router.get("/me", auth, async (req, res) => {
-  try {
-    const providerRoles = [USER_ROLES.MECHANIC, USER_ROLES.TOW_TRUCK];
-    if (!providerRoles.includes(req.user.role)) {
-      return res.status(403).json({ message: "Only service providers can access this profile" });
-    }
-
-    const user = await User.findById(req.user._id).select("-password");
-    if (!user) return res.status(404).json({ message: "User not found" });
-
-    return res.status(200).json({
-      _id: user._id,
-      firstName: user.firstName ?? null,
-      lastName: user.lastName ?? null,
-      name: user.name ?? null, // (in case your model uses name)
-      email: user.email ?? null,
-      phone: user.phone ?? null,
-      role: user.role,
-      providerProfile: user.providerProfile || null,
-      createdAt: user.createdAt,
-      updatedAt: user.updatedAt,
-    });
-  } catch (err) {
-    return res.status(500).json({
-      message: "Could not fetch provider profile",
-      error: err.message,
-    });
-  }
-});
-
-/**
- * ✅ NEW: Update provider details (ONLY email + phone)
- * PATCH /api/providers/me
- */
-router.patch("/me", auth, async (req, res) => {
-  try {
-    const providerRoles = [USER_ROLES.MECHANIC, USER_ROLES.TOW_TRUCK];
-    if (!providerRoles.includes(req.user.role)) {
-      return res.status(403).json({ message: "Only service providers can update profile" });
-    }
-
-    const { email, phone } = req.body;
-
-    // ✅ ONLY allow these 2 fields
-    const updates = {};
-    if (typeof email === "string" && email.trim()) updates.email = email.trim().toLowerCase();
-    if (typeof phone === "string" && phone.trim()) updates.phone = phone.trim();
-
-    if (Object.keys(updates).length === 0) {
-      return res.status(400).json({ message: "Nothing to update" });
-    }
-
-    const user = await User.findById(req.user._id);
-    if (!user) return res.status(404).json({ message: "User not found" });
-
-    // ✅ apply allowed updates only
-    if (updates.email) user.email = updates.email;
-    if (updates.phone) user.phone = updates.phone;
-
-    await user.save();
-
-    const fresh = await User.findById(req.user._id).select("-password");
-
-    return res.status(200).json({
-      _id: fresh._id,
-      firstName: fresh.firstName ?? null,
-      lastName: fresh.lastName ?? null,
-      name: fresh.name ?? null,
-      email: fresh.email ?? null,
-      phone: fresh.phone ?? null,
-      role: fresh.role,
-      providerProfile: fresh.providerProfile || null,
-      createdAt: fresh.createdAt,
-      updatedAt: fresh.updatedAt,
-    });
-  } catch (err) {
-    return res.status(500).json({
-      message: "Could not update provider profile",
       error: err.message,
     });
   }
@@ -180,7 +152,7 @@ router.get("/jobs/broadcasted", auth, async (req, res) => {
 });
 
 /**
- * ✅ NEW: Provider fetches a single broadcasted job by id
+ * ✅ Provider fetches a single broadcasted job by id
  * GET /api/providers/jobs/broadcasted/:jobId
  */
 router.get("/jobs/broadcasted/:jobId", auth, async (req, res) => {
@@ -279,7 +251,7 @@ router.patch("/jobs/:jobId/reject", auth, async (req, res) => {
 });
 
 /**
- * ✅ NEW: Provider fetches assigned (active) jobs
+ * ✅ Provider assigned/active jobs
  * GET /api/providers/jobs/assigned
  */
 router.get("/jobs/assigned", auth, async (req, res) => {
@@ -303,7 +275,7 @@ router.get("/jobs/assigned", auth, async (req, res) => {
 });
 
 /**
- * ✅ NEW: Provider fetches job history
+ * ✅ Provider job history
  * GET /api/providers/jobs/history
  */
 router.get("/jobs/history", auth, async (req, res) => {
@@ -327,11 +299,9 @@ router.get("/jobs/history", auth, async (req, res) => {
 });
 
 /**
- * ✅ FIXED: Provider fetches a single job by id (assigned to them)
+ * ✅ Provider fetches a single job by id (assigned to them)
  * GET /api/providers/jobs/:jobId
- *
- * IMPORTANT FIX:
- * - Restrict :jobId to ObjectId regex so it does NOT catch /jobs/assigned or /jobs/history.
+ * ✅ ObjectId regex prevents conflicts with /assigned and /history
  */
 router.get("/jobs/:jobId([0-9a-fA-F]{24})", auth, async (req, res) => {
   try {
@@ -366,7 +336,6 @@ router.patch("/jobs/:jobId/cancel", auth, async (req, res) => {
     }
 
     const job = await Job.findById(req.params.jobId);
-
     if (!job) return res.status(404).json({ message: "Job not found" });
 
     if (!job.assignedTo || job.assignedTo.toString() !== req.user._id.toString()) {
