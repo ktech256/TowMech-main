@@ -68,6 +68,93 @@ router.patch("/me/status", auth, async (req, res) => {
 });
 
 /**
+ * ✅ NEW: Provider profile (fetch signup details)
+ * GET /api/providers/me
+ */
+router.get("/me", auth, async (req, res) => {
+  try {
+    const providerRoles = [USER_ROLES.MECHANIC, USER_ROLES.TOW_TRUCK];
+    if (!providerRoles.includes(req.user.role)) {
+      return res.status(403).json({ message: "Only service providers can access this profile" });
+    }
+
+    const user = await User.findById(req.user._id).select("-password");
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    return res.status(200).json({
+      _id: user._id,
+      firstName: user.firstName ?? null,
+      lastName: user.lastName ?? null,
+      name: user.name ?? null, // (in case your model uses name)
+      email: user.email ?? null,
+      phone: user.phone ?? null,
+      role: user.role,
+      providerProfile: user.providerProfile || null,
+      createdAt: user.createdAt,
+      updatedAt: user.updatedAt,
+    });
+  } catch (err) {
+    return res.status(500).json({
+      message: "Could not fetch provider profile",
+      error: err.message,
+    });
+  }
+});
+
+/**
+ * ✅ NEW: Update provider details (ONLY email + phone)
+ * PATCH /api/providers/me
+ */
+router.patch("/me", auth, async (req, res) => {
+  try {
+    const providerRoles = [USER_ROLES.MECHANIC, USER_ROLES.TOW_TRUCK];
+    if (!providerRoles.includes(req.user.role)) {
+      return res.status(403).json({ message: "Only service providers can update profile" });
+    }
+
+    const { email, phone } = req.body;
+
+    // ✅ ONLY allow these 2 fields
+    const updates = {};
+    if (typeof email === "string" && email.trim()) updates.email = email.trim().toLowerCase();
+    if (typeof phone === "string" && phone.trim()) updates.phone = phone.trim();
+
+    if (Object.keys(updates).length === 0) {
+      return res.status(400).json({ message: "Nothing to update" });
+    }
+
+    const user = await User.findById(req.user._id);
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    // ✅ apply allowed updates only
+    if (updates.email) user.email = updates.email;
+    if (updates.phone) user.phone = updates.phone;
+
+    await user.save();
+
+    const fresh = await User.findById(req.user._id).select("-password");
+
+    return res.status(200).json({
+      _id: fresh._id,
+      firstName: fresh.firstName ?? null,
+      lastName: fresh.lastName ?? null,
+      name: fresh.name ?? null,
+      email: fresh.email ?? null,
+      phone: fresh.phone ?? null,
+      role: fresh.role,
+      providerProfile: fresh.providerProfile || null,
+      createdAt: fresh.createdAt,
+      updatedAt: fresh.updatedAt,
+    });
+  } catch (err) {
+    return res.status(500).json({
+      message: "Could not update provider profile",
+      error: err.message,
+    });
+  }
+});
+
+/**
  * ✅ Provider fetches jobs broadcasted to them
  * GET /api/providers/jobs/broadcasted
  */
