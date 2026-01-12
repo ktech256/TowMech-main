@@ -3,7 +3,17 @@ import auth from "../middleware/auth.js";
 import User, { USER_ROLES } from "../models/User.js";
 import Job, { JOB_STATUSES } from "../models/Job.js";
 
+// ✅✅✅ ADDED (for documents upload)
+import multer from "multer";
+import { uploadToFirebase } from "../utils/uploadToFirebase.js";
+
 const router = express.Router();
+
+// ✅✅✅ ADDED (multer memory storage)
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB per file
+});
 
 /**
  * ✅ Provider profile (fetch what they registered with)
@@ -63,6 +73,101 @@ router.patch("/me", auth, async (req, res) => {
     });
   }
 });
+
+/**
+ * ✅✅✅ ADDED: Upload provider verification documents
+ * PATCH /api/providers/me/documents
+ *
+ * multipart/form-data fields (match Android):
+ *  - idDocument
+ *  - license
+ *  - vehicleProof
+ *  - workshopProof
+ *
+ * ✅ Only allowed if provider is NOT APPROVED
+ */
+router.patch(
+  "/me/documents",
+  auth,
+  upload.fields([
+    { name: "idDocument", maxCount: 1 },
+    { name: "license", maxCount: 1 },
+    { name: "vehicleProof", maxCount: 1 },
+    { name: "workshopProof", maxCount: 1 },
+  ]),
+  async (req, res) => {
+    try {
+      const providerRoles = [USER_ROLES.MECHANIC, USER_ROLES.TOW_TRUCK];
+      if (!providerRoles.includes(req.user.role)) {
+        return res.status(403).json({ message: "Only providers can upload documents" });
+      }
+
+      const user = await User.findById(req.user._id);
+      if (!user) return res.status(404).json({ message: "User not found" });
+
+      if (!user.providerProfile) user.providerProfile = {};
+      if (!user.providerProfile.verificationDocs) user.providerProfile.verificationDocs = {};
+
+      const status = user.providerProfile.verificationStatus || "PENDING";
+
+      // ✅ upload only allowed if NOT approved
+      if (status === "APPROVED") {
+        return res.status(403).json({
+          message: "Account already approved. Document upload disabled.",
+          verificationStatus: status,
+        });
+      }
+
+      const files = req.files || {};
+
+      const uploadOne = async (file, keyName) => {
+        if (!file) return null;
+
+        const userId = user._id.toString();
+        const ts = Date.now();
+        const fileName = `providers/${userId}/${keyName}-${ts}-${file.originalname}`;
+
+        return uploadToFirebase(file.buffer, fileName, file.mimetype);
+      };
+
+      const idDocFile = files.idDocument?.[0];
+      const licenseFile = files.license?.[0];
+      const vehicleProofFile = files.vehicleProof?.[0];
+      const workshopProofFile = files.workshopProof?.[0];
+
+      const idDocumentUrl = await uploadOne(idDocFile, "idDocument");
+      const licenseUrl = await uploadOne(licenseFile, "license");
+      const vehicleProofUrl = await uploadOne(vehicleProofFile, "vehicleProof");
+      const workshopProofUrl = await uploadOne(workshopProofFile, "workshopProof");
+
+      if (idDocumentUrl) user.providerProfile.verificationDocs.idDocumentUrl = idDocumentUrl;
+      if (licenseUrl) user.providerProfile.verificationDocs.licenseUrl = licenseUrl;
+      if (vehicleProofUrl) user.providerProfile.verificationDocs.vehicleProofUrl = vehicleProofUrl;
+      if (workshopProofUrl) user.providerProfile.verificationDocs.workshopProofUrl = workshopProofUrl;
+
+      // ✅ if previously rejected, resubmit => PENDING
+      if (status === "REJECTED") {
+        user.providerProfile.verificationStatus = "PENDING";
+        user.providerProfile.verifiedAt = null;
+        user.providerProfile.verifiedBy = null;
+      }
+
+      await user.save();
+
+      return res.status(200).json({
+        message: "Documents uploaded ✅",
+        user: await User.findById(user._id).select(
+          "name email phone role providerProfile createdAt updatedAt"
+        ),
+      });
+    } catch (err) {
+      return res.status(500).json({
+        message: "Could not upload documents",
+        error: err.message,
+      });
+    }
+  }
+);
 
 /**
  * ✅ Provider updates online/offline + current location
