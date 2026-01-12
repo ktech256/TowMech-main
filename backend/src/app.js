@@ -7,7 +7,9 @@ import jobRoutes from "./routes/jobs.js";
 import providerRoutes from "./routes/providers.js";
 import paymentRoutes from "./routes/payments.js";
 import notificationRoutes from "./routes/notifications.js";
-import providerDocumentsRoutes from "./routes/providerDocuments.js";
+
+// ❌ REMOVE this to avoid double mounting conflict
+// import providerDocumentsRoutes from "./routes/providerDocuments.js";
 
 // ✅ SAFETY ROUTES
 import safetyRoutes from "./routes/safety.js";
@@ -50,7 +52,6 @@ app.use(cors());
 app.use(
   express.json({
     verify: (req, res, buf) => {
-      // store raw body (for webhook verification if needed)
       req.rawBody = buf.toString("utf8");
     },
   })
@@ -60,7 +61,6 @@ app.use(
   express.urlencoded({
     extended: true,
     verify: (req, res, buf) => {
-      // PayFast sends x-www-form-urlencoded
       req.rawBody = buf.toString("utf8");
     },
   })
@@ -81,7 +81,9 @@ app.use("/api/jobs", jobRoutes);
 app.use("/api/providers", providerRoutes);
 app.use("/api/payments", paymentRoutes);
 app.use("/api/notifications", notificationRoutes);
-app.use("/api/providers", providerDocumentsRoutes);
+
+// ❌ REMOVE this line to avoid route collisions
+// app.use("/api/providers", providerDocumentsRoutes);
 
 /**
  * ✅ SAFETY ROUTES (PUBLIC)

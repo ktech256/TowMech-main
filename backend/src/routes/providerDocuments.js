@@ -13,16 +13,22 @@ const upload = multer({ storage: multer.memoryStorage() });
  * ✅ Provider uploads verification documents
  * PATCH /api/providers/me/documents
  *
- * Upload using form-data with keys:
- * - idDocumentUrl
- * - licenseUrl
- * - vehicleProofUrl
- * - workshopProofUrl
+ * Upload using form-data with keys (supports BOTH):
+ * - idDocument OR idDocumentUrl
+ * - license OR licenseUrl
+ * - vehicleProof OR vehicleProofUrl
+ * - workshopProof OR workshopProofUrl
  */
 router.patch(
   "/me/documents",
   auth,
   upload.fields([
+    { name: "idDocument", maxCount: 1 },
+    { name: "license", maxCount: 1 },
+    { name: "vehicleProof", maxCount: 1 },
+    { name: "workshopProof", maxCount: 1 },
+
+    // backward compatibility
     { name: "idDocumentUrl", maxCount: 1 },
     { name: "licenseUrl", maxCount: 1 },
     { name: "vehicleProofUrl", maxCount: 1 },
@@ -43,31 +49,32 @@ router.patch(
       }
 
       if (!user.providerProfile) user.providerProfile = {};
-      if (!user.providerProfile.verificationDocs)
+      if (!user.providerProfile.verificationDocs) {
         user.providerProfile.verificationDocs = {};
+      }
 
-      const files = req.files;
+      const files = req.files || {};
 
-      const uploadDoc = async (field) => {
-        const file = files?.[field]?.[0];
+      // helper: find file by either new key or legacy key
+      const getFile = (primaryKey, legacyKey) =>
+        files?.[primaryKey]?.[0] || files?.[legacyKey]?.[0] || null;
+
+      const uploadDoc = async (primaryKey, legacyKey, saveKey) => {
+        const file = getFile(primaryKey, legacyKey);
         if (!file) return null;
 
-        const fileName = `providers/${user._id}/${field}-${Date.now()}`;
-        const url = await uploadToFirebase(
-          file.buffer,
-          fileName,
-          file.mimetype
-        );
+        const fileName = `providers/${user._id}/${saveKey}-${Date.now()}`;
+        const url = await uploadToFirebase(file.buffer, fileName, file.mimetype);
 
-        user.providerProfile.verificationDocs[field] = url;
+        user.providerProfile.verificationDocs[saveKey] = url;
         return url;
       };
 
       // ✅ Upload each doc if provided
-      await uploadDoc("idDocumentUrl");
-      await uploadDoc("licenseUrl");
-      await uploadDoc("vehicleProofUrl");
-      await uploadDoc("workshopProofUrl");
+      await uploadDoc("idDocument", "idDocumentUrl", "idDocumentUrl");
+      await uploadDoc("license", "licenseUrl", "licenseUrl");
+      await uploadDoc("vehicleProof", "vehicleProofUrl", "vehicleProofUrl");
+      await uploadDoc("workshopProof", "workshopProofUrl", "workshopProofUrl");
 
       // ✅ set provider status to pending after upload
       user.providerProfile.verificationStatus = "PENDING";
