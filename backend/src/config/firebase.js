@@ -2,6 +2,10 @@ import admin from "firebase-admin";
 
 let firebaseApp;
 
+/**
+ * ✅ Initialize Firebase Admin ONCE
+ * - Used for FCM messaging + Firebase Storage uploads
+ */
 export const initFirebase = () => {
   if (firebaseApp) return firebaseApp; // ✅ prevent re-init
 
@@ -9,7 +13,6 @@ export const initFirebase = () => {
   const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
   let privateKey = process.env.FIREBASE_PRIVATE_KEY;
 
-  // ✅ NEW: Storage bucket for Firebase Storage
   const storageBucket = process.env.FIREBASE_STORAGE_BUCKET;
 
   if (!projectId || !clientEmail || !privateKey) {
@@ -18,7 +21,6 @@ export const initFirebase = () => {
     );
   }
 
-  // ✅ NEW: Ensure bucket exists for Storage uploads
   if (!storageBucket) {
     throw new Error(
       "Missing Firebase Storage bucket env var. Required: FIREBASE_STORAGE_BUCKET"
@@ -36,11 +38,18 @@ export const initFirebase = () => {
       clientEmail,
       privateKey,
     }),
-
-    // ✅ NEW: Enables Firebase Storage
-    storageBucket: storageBucket,
+    storageBucket,
   });
 
+  return firebaseApp;
+};
+
+/**
+ * ✅ Convenience helper: always ensure firebase initialized before use
+ * (optional)
+ */
+export const getFirebaseApp = () => {
+  if (!firebaseApp) initFirebase();
   return firebaseApp;
 };
 
