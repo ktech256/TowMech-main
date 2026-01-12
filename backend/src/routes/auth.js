@@ -4,10 +4,16 @@ import jwt from "jsonwebtoken";
 import auth from "../middleware/auth.js";
 import User, { USER_ROLES, TOW_TRUCK_TYPES } from "../models/User.js";
 
-// ✅ SMS provider (Twilio)
-import twilio from "twilio";
+// ✅ SMS provider (Twilio) — SAFE import for ESM/Render
+import twilioPkg from "twilio";
+const twilio = twilioPkg?.default || twilioPkg;
 
 const router = express.Router();
+
+// ✅ warn if missing (won’t crash boot, but highlights misconfig)
+if (!process.env.JWT_SECRET) {
+  console.error("❌ JWT_SECRET is missing in environment variables");
+}
 
 // ✅ Helper: Generate JWT token
 const generateToken = (userId, role) =>
@@ -15,22 +21,14 @@ const generateToken = (userId, role) =>
 
 /**
  * ✅ Normalize phone for consistent login + uniqueness
- * - trims spaces
- * - removes common separators
- * - keeps leading + if present
- *
- * NOTE: Ideally store all phones in E.164 format like +2782...
- * If your SA numbers come as 082..., you can convert to +2782... using SA rules.
  */
 function normalizePhone(phone) {
   if (!phone) return "";
   let p = String(phone).trim();
 
-  // remove spaces and separators
   p = p.replace(/\s+/g, "");
   p = p.replace(/[-()]/g, "");
 
-  // If user types 00 prefix, convert to +
   if (p.startsWith("00")) p = "+" + p.slice(2);
 
   return p;
@@ -38,10 +36,6 @@ function normalizePhone(phone) {
 
 /**
  * ✅ Send OTP via SMS (Twilio)
- * Required env vars:
- * - TWILIO_ACCOUNT_SID
- * - TWILIO_AUTH_TOKEN
- * - TWILIO_FROM_NUMBER  (e.g. +1234567890)
  */
 async function sendOtpSms(phone, otpCode, purpose = "OTP") {
   const sid = process.env.TWILIO_ACCOUNT_SID;
@@ -58,6 +52,7 @@ async function sendOtpSms(phone, otpCode, purpose = "OTP") {
   }
 
   const client = twilio(sid, token);
+
   const message =
     purpose === "RESET"
       ? `TowMech password reset code: ${otpCode}. Expires in 10 minutes.`
@@ -108,11 +103,9 @@ function isValidPassport(passport) {
 
 /**
  * ✅ Helper: Normalize towTruckTypes
- * Converts to official values that match model enum.
  */
 function normalizeTowTruckTypes(input) {
   if (!input) return [];
-
   const list = Array.isArray(input) ? input : [input];
 
   return list
@@ -172,7 +165,6 @@ router.post("/register", async (req, res) => {
       towTruckTypes,
     } = req.body;
 
-    // ✅ ROLE VALIDATION FIRST
     if (!Object.values(USER_ROLES).includes(role)) {
       return res.status(400).json({ message: "Invalid role provided" });
     }
@@ -201,21 +193,18 @@ router.post("/register", async (req, res) => {
       });
     }
 
-    // ✅ BASIC REQUIRED FIELDS (STRICT)
     if (!firstName || !lastName || !normalizedPhone || !email || !password || !birthday) {
       return res.status(400).json({
         message: "firstName, lastName, phone, email, password, birthday are required",
       });
     }
 
-    // ✅ NATIONALITY VALIDATION
     if (!nationalityType || !["SouthAfrican", "ForeignNational"].includes(nationalityType)) {
       return res.status(400).json({
         message: "nationalityType must be SouthAfrican or ForeignNational",
       });
     }
 
-    // ✅ South African rules
     if (nationalityType === "SouthAfrican") {
       if (!saIdNumber) {
         return res.status(400).json({ message: "saIdNumber is required for SouthAfrican" });
@@ -225,7 +214,6 @@ router.post("/register", async (req, res) => {
       }
     }
 
-    // ✅ Foreign National rules
     if (nationalityType === "ForeignNational") {
       if (!passportNumber || !country) {
         return res.status(400).json({
@@ -239,7 +227,6 @@ router.post("/register", async (req, res) => {
       }
     }
 
-    // ✅ TowTruck providers must select towTruckTypes
     if (role === USER_ROLES.TOW_TRUCK) {
       const normalizedTypes = normalizeTowTruckTypes(towTruckTypes);
 
@@ -260,7 +247,6 @@ router.post("/register", async (req, res) => {
       req.body.towTruckTypes = normalizedTypes;
     }
 
-    // ✅ Duplicate email OR phone
     const existingEmail = await User.findOne({ email });
     if (existingEmail) return res.status(409).json({ message: "Email already registered" });
 
@@ -314,7 +300,6 @@ router.post("/login", async (req, res) => {
     console.log("✅ LOGIN ROUTE HIT ✅", req.body);
 
     const { phone, password } = req.body;
-
     const normalizedPhone = normalizePhone(phone);
 
     if (!normalizedPhone || !password) {
@@ -335,7 +320,6 @@ router.post("/login", async (req, res) => {
       await sendOtpSms(user.phone, otpCode, "OTP");
     } catch (smsErr) {
       console.error("❌ SMS OTP SEND FAILED:", smsErr.message);
-      // Optionally: return res.status(500).json({ message: "Failed to send OTP SMS" });
     }
 
     const debugEnabled = String(process.env.ENABLE_OTP_DEBUG).toLowerCase() === "true";
@@ -396,7 +380,6 @@ router.post("/verify-otp", async (req, res) => {
 /**
  * ✅ Forgot Password → sends OTP via SMS
  * POST /api/auth/forgot-password
- * body: { phone }
  */
 router.post("/forgot-password", async (req, res) => {
   try {
@@ -409,7 +392,6 @@ router.post("/forgot-password", async (req, res) => {
 
     const user = await User.findOne({ phone: normalizedPhone });
 
-    // ✅ don't leak whether phone exists
     if (!user) {
       return res.status(200).json({ message: "If your phone exists, an SMS code has been sent ✅" });
     }
@@ -437,7 +419,6 @@ router.post("/forgot-password", async (req, res) => {
 /**
  * ✅ Reset Password (PHONE + OTP + newPassword)
  * POST /api/auth/reset-password
- * body: { phone, otp, newPassword }
  */
 router.post("/reset-password", async (req, res) => {
   try {
@@ -460,7 +441,6 @@ router.post("/reset-password", async (req, res) => {
     }
 
     user.password = newPassword;
-
     user.otpCode = null;
     user.otpExpiresAt = null;
 
