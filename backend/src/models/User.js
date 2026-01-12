@@ -36,6 +36,30 @@ export const VEHICLE_TYPES = [
 ];
 
 /**
+ * ✅ Normalize phone for consistent login + uniqueness
+ * - trims spaces
+ * - removes common separators
+ * - converts leading 00 to +
+ *
+ * NOTE:
+ * Best practice is E.164 format: +27...
+ * This keeps your system consistent even if users type "082 123 4567" or "00..."
+ */
+function normalizePhone(phone) {
+  if (!phone) return "";
+  let p = String(phone).trim();
+
+  // remove spaces and separators
+  p = p.replace(/\s+/g, "");
+  p = p.replace(/[-()]/g, "");
+
+  // convert 00 prefix → +
+  if (p.startsWith("00")) p = "+" + p.slice(2);
+
+  return p;
+}
+
+/**
  * ✅ Admin Permissions Schema (ONLY for Admin role)
  * ✅ MUST MATCH DASHBOARD PERMISSION KEYS
  */
@@ -162,7 +186,17 @@ const userSchema = new mongoose.Schema(
     firstName: { type: String, required: true },
     lastName: { type: String, required: true },
 
-    phone: { type: String, required: true },
+    /**
+     * ✅ Phone is now the PRIMARY LOGIN identifier
+     * ✅ Must be unique so login works correctly
+     */
+    phone: {
+      type: String,
+      required: true,
+      unique: true,
+      index: true,
+      set: normalizePhone, // ✅ auto-normalize on assignment
+    },
 
     birthday: { type: Date, required: true },
 
@@ -176,7 +210,7 @@ const userSchema = new mongoose.Schema(
     passportNumber: { type: String, default: null },
     country: { type: String, default: null },
 
-    // ✅ Auth
+    // ✅ Auth (email still required for registration / comms)
     email: { type: String, required: true, unique: true, lowercase: true },
     password: { type: String, required: true },
 
@@ -199,6 +233,15 @@ const userSchema = new mongoose.Schema(
 );
 
 userSchema.index({ "providerProfile.location": "2dsphere" });
+
+/**
+ * ✅ Ensure phone normalization happens even if set() isn't triggered
+ * (extra safety for updates)
+ */
+userSchema.pre("validate", function (next) {
+  if (this.phone) this.phone = normalizePhone(this.phone);
+  next();
+});
 
 /**
  * ✅ Hash password

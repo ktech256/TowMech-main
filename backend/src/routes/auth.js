@@ -108,6 +108,7 @@ function isValidPassport(passport) {
 
 /**
  * ✅ Helper: Normalize towTruckTypes
+ * Converts to official values that match model enum.
  */
 function normalizeTowTruckTypes(input) {
   if (!input) return [];
@@ -146,7 +147,7 @@ async function generateAndSaveOtp(user, { minutes = 10 } = {}) {
  * ✅ Register user
  * POST /api/auth/register
  *
- * ✅ Email required during registration (per your request)
+ * ✅ Email required during registration
  * ✅ Phone required too (because login uses phone)
  */
 router.post("/register", async (req, res) => {
@@ -168,7 +169,6 @@ router.post("/register", async (req, res) => {
       country,
 
       role = USER_ROLES.CUSTOMER,
-
       towTruckTypes,
     } = req.body;
 
@@ -179,7 +179,7 @@ router.post("/register", async (req, res) => {
 
     const normalizedPhone = normalizePhone(phone);
 
-    // ✅ ✅ IMPORTANT: Skip strict validation for SuperAdmin/Admin
+    // ✅ Skip strict validation for SuperAdmin/Admin
     if (role === USER_ROLES.SUPER_ADMIN || role === USER_ROLES.ADMIN) {
       const existing = await User.findOne({ email });
       if (existing) return res.status(409).json({ message: "User already exists" });
@@ -202,7 +202,6 @@ router.post("/register", async (req, res) => {
     }
 
     // ✅ BASIC REQUIRED FIELDS (STRICT)
-    // Email required during registration (your requirement)
     if (!firstName || !lastName || !normalizedPhone || !email || !password || !birthday) {
       return res.status(400).json({
         message: "firstName, lastName, phone, email, password, birthday are required",
@@ -216,13 +215,17 @@ router.post("/register", async (req, res) => {
       });
     }
 
+    // ✅ South African rules
     if (nationalityType === "SouthAfrican") {
-      if (!saIdNumber) return res.status(400).json({ message: "saIdNumber is required for SouthAfrican" });
+      if (!saIdNumber) {
+        return res.status(400).json({ message: "saIdNumber is required for SouthAfrican" });
+      }
       if (!isValidSouthAfricanID(saIdNumber)) {
         return res.status(400).json({ message: "Invalid South African ID number" });
       }
     }
 
+    // ✅ Foreign National rules
     if (nationalityType === "ForeignNational") {
       if (!passportNumber || !country) {
         return res.status(400).json({
@@ -239,6 +242,7 @@ router.post("/register", async (req, res) => {
     // ✅ TowTruck providers must select towTruckTypes
     if (role === USER_ROLES.TOW_TRUCK) {
       const normalizedTypes = normalizeTowTruckTypes(towTruckTypes);
+
       if (!normalizedTypes.length) {
         return res.status(400).json({
           message: "TowTruck providers must select at least 1 towTruckType",
@@ -256,7 +260,7 @@ router.post("/register", async (req, res) => {
       req.body.towTruckTypes = normalizedTypes;
     }
 
-    // ✅ Duplicate email OR phone (phone must be unique because login uses phone)
+    // ✅ Duplicate email OR phone
     const existingEmail = await User.findOne({ email });
     if (existingEmail) return res.status(409).json({ message: "Email already registered" });
 
@@ -318,15 +322,10 @@ router.post("/login", async (req, res) => {
     }
 
     const user = await User.findOne({ phone: normalizedPhone });
-
-    if (!user) {
-      return res.status(401).json({ message: "Invalid credentials" });
-    }
+    if (!user) return res.status(401).json({ message: "Invalid credentials" });
 
     const isMatch = await user.matchPassword(password);
-    if (!isMatch) {
-      return res.status(401).json({ message: "Invalid credentials" });
-    }
+    if (!isMatch) return res.status(401).json({ message: "Invalid credentials" });
 
     const otpCode = await generateAndSaveOtp(user, { minutes: 10 });
 
@@ -336,8 +335,7 @@ router.post("/login", async (req, res) => {
       await sendOtpSms(user.phone, otpCode, "OTP");
     } catch (smsErr) {
       console.error("❌ SMS OTP SEND FAILED:", smsErr.message);
-      // You can optionally fail here:
-      // return res.status(500).json({ message: "Failed to send OTP SMS" });
+      // Optionally: return res.status(500).json({ message: "Failed to send OTP SMS" });
     }
 
     const debugEnabled = String(process.env.ENABLE_OTP_DEBUG).toLowerCase() === "true";
@@ -361,7 +359,6 @@ router.post("/verify-otp", async (req, res) => {
     console.log("✅ VERIFY OTP HIT ✅", req.body);
 
     const { phone, otp } = req.body;
-
     const normalizedPhone = normalizePhone(phone);
 
     if (!normalizedPhone || !otp) {
@@ -369,7 +366,6 @@ router.post("/verify-otp", async (req, res) => {
     }
 
     const user = await User.findOne({ phone: normalizedPhone });
-
     if (!user) return res.status(404).json({ message: "User not found" });
 
     if (!user.otpCode || user.otpCode !== otp) {
@@ -463,10 +459,8 @@ router.post("/reset-password", async (req, res) => {
       return res.status(401).json({ message: "OTP expired" });
     }
 
-    // ✅ set password (assuming your User model pre-save hashes it)
     user.password = newPassword;
 
-    // ✅ clear OTP
     user.otpCode = null;
     user.otpExpiresAt = null;
 
