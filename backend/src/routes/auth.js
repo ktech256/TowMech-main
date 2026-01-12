@@ -4,11 +4,73 @@ import jwt from "jsonwebtoken";
 import auth from "../middleware/auth.js";
 import User, { USER_ROLES, TOW_TRUCK_TYPES } from "../models/User.js";
 
+// ✅ SMS provider (Twilio)
+import twilio from "twilio";
+
 const router = express.Router();
 
 // ✅ Helper: Generate JWT token
 const generateToken = (userId, role) =>
   jwt.sign({ id: userId, role }, process.env.JWT_SECRET, { expiresIn: "7d" });
+
+/**
+ * ✅ Normalize phone for consistent login + uniqueness
+ * - trims spaces
+ * - removes common separators
+ * - keeps leading + if present
+ *
+ * NOTE: Ideally store all phones in E.164 format like +2782...
+ * If your SA numbers come as 082..., you can convert to +2782... using SA rules.
+ */
+function normalizePhone(phone) {
+  if (!phone) return "";
+  let p = String(phone).trim();
+
+  // remove spaces and separators
+  p = p.replace(/\s+/g, "");
+  p = p.replace(/[-()]/g, "");
+
+  // If user types 00 prefix, convert to +
+  if (p.startsWith("00")) p = "+" + p.slice(2);
+
+  return p;
+}
+
+/**
+ * ✅ Send OTP via SMS (Twilio)
+ * Required env vars:
+ * - TWILIO_ACCOUNT_SID
+ * - TWILIO_AUTH_TOKEN
+ * - TWILIO_FROM_NUMBER  (e.g. +1234567890)
+ */
+async function sendOtpSms(phone, otpCode, purpose = "OTP") {
+  const sid = process.env.TWILIO_ACCOUNT_SID;
+  const token = process.env.TWILIO_AUTH_TOKEN;
+  const from = process.env.TWILIO_FROM_NUMBER;
+
+  const safePhone = normalizePhone(phone);
+
+  // ✅ If SMS provider not configured → fallback to console (dev mode)
+  if (!sid || !token || !from) {
+    console.log("⚠️ TWILIO NOT CONFIGURED → SMS NOT SENT");
+    console.log(`📲 ${purpose} SHOULD HAVE BEEN SENT TO:`, safePhone, "| OTP:", otpCode);
+    return { ok: false, provider: "none" };
+  }
+
+  const client = twilio(sid, token);
+  const message =
+    purpose === "RESET"
+      ? `TowMech password reset code: ${otpCode}. Expires in 10 minutes.`
+      : `Your TowMech OTP is: ${otpCode}. It expires in 10 minutes.`;
+
+  await client.messages.create({
+    body: message,
+    from,
+    to: safePhone,
+  });
+
+  return { ok: true, provider: "twilio" };
+}
 
 /**
  * ✅ Helper: Validate South African ID (Luhn algorithm)
@@ -46,15 +108,13 @@ function isValidPassport(passport) {
 
 /**
  * ✅ Helper: Normalize towTruckTypes
- * Converts to official values that match model enum.
  */
 function normalizeTowTruckTypes(input) {
   if (!input) return [];
 
   const list = Array.isArray(input) ? input : [input];
 
-  // ✅ trim + normalize spacing/case
-  const normalized = list
+  return list
     .map((x) => String(x).trim())
     .filter(Boolean)
     .map((x) => {
@@ -67,16 +127,27 @@ function normalizeTowTruckTypes(input) {
       if (lower === "towtruck-xxl" || lower === "towtruck xxl") return "TowTruck-XXL";
       if (lower === "recovery") return "Recovery";
 
-      // ✅ fallback returns as-is
       return x;
     });
+}
 
-  return normalized;
+/**
+ * ✅ Helper: Generate OTP + save
+ */
+async function generateAndSaveOtp(user, { minutes = 10 } = {}) {
+  const otpCode = crypto.randomInt(100000, 999999).toString();
+  user.otpCode = otpCode;
+  user.otpExpiresAt = new Date(Date.now() + minutes * 60 * 1000);
+  await user.save();
+  return otpCode;
 }
 
 /**
  * ✅ Register user
  * POST /api/auth/register
+ *
+ * ✅ Email required during registration (per your request)
+ * ✅ Phone required too (because login uses phone)
  */
 router.post("/register", async (req, res) => {
   try {
@@ -103,24 +174,21 @@ router.post("/register", async (req, res) => {
 
     // ✅ ROLE VALIDATION FIRST
     if (!Object.values(USER_ROLES).includes(role)) {
-      console.log("🟥 REGISTER FAIL: Invalid role", role);
       return res.status(400).json({ message: "Invalid role provided" });
     }
 
+    const normalizedPhone = normalizePhone(phone);
+
     // ✅ ✅ IMPORTANT: Skip strict validation for SuperAdmin/Admin
     if (role === USER_ROLES.SUPER_ADMIN || role === USER_ROLES.ADMIN) {
-      console.log("🟨 REGISTER: Admin/SuperAdmin detected → skipping strict validation");
-
       const existing = await User.findOne({ email });
-      if (existing) {
-        return res.status(409).json({ message: "User already exists" });
-      }
+      if (existing) return res.status(409).json({ message: "User already exists" });
 
       const user = await User.create({
         name: `${firstName || "Admin"} ${lastName || ""}`.trim(),
         firstName: firstName || "Admin",
         lastName: lastName || "",
-        phone: phone || "",
+        phone: normalizedPhone || "",
         email,
         password,
         birthday: birthday || null,
@@ -129,18 +197,13 @@ router.post("/register", async (req, res) => {
 
       return res.status(201).json({
         message: "User registered successfully ✅",
-        user: {
-          id: user._id,
-          name: user.name,
-          email: user.email,
-          role: user.role,
-        },
+        user: { id: user._id, name: user.name, email: user.email, role: user.role },
       });
     }
 
     // ✅ BASIC REQUIRED FIELDS (STRICT)
-    if (!firstName || !lastName || !phone || !email || !password || !birthday) {
-      console.log("🟥 REGISTER FAIL: Missing required fields");
+    // Email required during registration (your requirement)
+    if (!firstName || !lastName || !normalizedPhone || !email || !password || !birthday) {
       return res.status(400).json({
         message: "firstName, lastName, phone, email, password, birthday are required",
       });
@@ -153,29 +216,19 @@ router.post("/register", async (req, res) => {
       });
     }
 
-    // ✅ South African rules
     if (nationalityType === "SouthAfrican") {
-      if (!saIdNumber) {
-        return res.status(400).json({
-          message: "saIdNumber is required for SouthAfrican",
-        });
-      }
-
+      if (!saIdNumber) return res.status(400).json({ message: "saIdNumber is required for SouthAfrican" });
       if (!isValidSouthAfricanID(saIdNumber)) {
-        return res.status(400).json({
-          message: "Invalid South African ID number",
-        });
+        return res.status(400).json({ message: "Invalid South African ID number" });
       }
     }
 
-    // ✅ Foreign National rules
     if (nationalityType === "ForeignNational") {
       if (!passportNumber || !country) {
         return res.status(400).json({
           message: "passportNumber and country are required for ForeignNational",
         });
       }
-
       if (!isValidPassport(passportNumber)) {
         return res.status(400).json({
           message: "passportNumber must be 8 to 11 alphanumeric characters",
@@ -186,7 +239,6 @@ router.post("/register", async (req, res) => {
     // ✅ TowTruck providers must select towTruckTypes
     if (role === USER_ROLES.TOW_TRUCK) {
       const normalizedTypes = normalizeTowTruckTypes(towTruckTypes);
-
       if (!normalizedTypes.length) {
         return res.status(400).json({
           message: "TowTruck providers must select at least 1 towTruckType",
@@ -194,7 +246,6 @@ router.post("/register", async (req, res) => {
       }
 
       const invalid = normalizedTypes.filter((t) => !TOW_TRUCK_TYPES.includes(t));
-
       if (invalid.length > 0) {
         return res.status(400).json({
           message: `Invalid towTruckTypes: ${invalid.join(", ")}`,
@@ -205,12 +256,12 @@ router.post("/register", async (req, res) => {
       req.body.towTruckTypes = normalizedTypes;
     }
 
-    // ✅ Duplicate email
-    const existing = await User.findOne({ email });
-    if (existing) {
-      console.log("🟨 REGISTER FAIL: user already exists");
-      return res.status(409).json({ message: "User already exists" });
-    }
+    // ✅ Duplicate email OR phone (phone must be unique because login uses phone)
+    const existingEmail = await User.findOne({ email });
+    if (existingEmail) return res.status(409).json({ message: "Email already registered" });
+
+    const existingPhone = await User.findOne({ phone: normalizedPhone });
+    if (existingPhone) return res.status(409).json({ message: "Phone number already registered" });
 
     const name = `${firstName.trim()} ${lastName.trim()}`;
 
@@ -218,7 +269,7 @@ router.post("/register", async (req, res) => {
       name,
       firstName,
       lastName,
-      phone,
+      phone: normalizedPhone,
       email,
       password,
       birthday,
@@ -240,114 +291,99 @@ router.post("/register", async (req, res) => {
           : undefined,
     });
 
-    console.log("✅ REGISTER SUCCESS:", user.email, user.role);
-
     return res.status(201).json({
       message: "User registered successfully ✅",
-      user: {
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        role: user.role,
-      },
+      user: { id: user._id, name: user.name, email: user.email, role: user.role },
     });
   } catch (err) {
     console.error("❌ REGISTER ERROR:", err.message);
-    return res.status(500).json({
-      message: "Registration failed",
-      error: err.message,
-    });
+    return res.status(500).json({ message: "Registration failed", error: err.message });
   }
 });
 
 /**
- * ✅ Login user → generates OTP
+ * ✅ Login user (PHONE + PASSWORD) → generates OTP and sends via SMS
  * POST /api/auth/login
  */
 router.post("/login", async (req, res) => {
   try {
     console.log("✅ LOGIN ROUTE HIT ✅", req.body);
 
-    const { email, password } = req.body;
+    const { phone, password } = req.body;
 
-    if (!email || !password) {
-      return res.status(400).json({ message: "Email and password are required" });
+    const normalizedPhone = normalizePhone(phone);
+
+    if (!normalizedPhone || !password) {
+      return res.status(400).json({ message: "phone and password are required" });
     }
 
-    const user = await User.findOne({ email });
+    const user = await User.findOne({ phone: normalizedPhone });
 
     if (!user) {
-      console.log("🟥 LOGIN FAIL: user not found");
       return res.status(401).json({ message: "Invalid credentials" });
     }
 
     const isMatch = await user.matchPassword(password);
-
     if (!isMatch) {
-      console.log("🟥 LOGIN FAIL: wrong password");
       return res.status(401).json({ message: "Invalid credentials" });
     }
 
-    const otpCode = crypto.randomInt(100000, 999999).toString();
-    user.otpCode = otpCode;
-    user.otpExpiresAt = new Date(Date.now() + 10 * 60 * 1000);
-    await user.save();
+    const otpCode = await generateAndSaveOtp(user, { minutes: 10 });
 
-    console.log("✅ OTP GENERATED FOR:", email, "| OTP:", otpCode);
+    console.log("✅ OTP GENERATED FOR PHONE:", normalizedPhone, "| OTP:", otpCode);
+
+    try {
+      await sendOtpSms(user.phone, otpCode, "OTP");
+    } catch (smsErr) {
+      console.error("❌ SMS OTP SEND FAILED:", smsErr.message);
+      // You can optionally fail here:
+      // return res.status(500).json({ message: "Failed to send OTP SMS" });
+    }
 
     const debugEnabled = String(process.env.ENABLE_OTP_DEBUG).toLowerCase() === "true";
 
     return res.status(200).json({
-      message: "OTP generated ✅",
+      message: "OTP sent via SMS ✅",
       otp: debugEnabled ? otpCode : undefined,
     });
   } catch (err) {
     console.error("❌ LOGIN ERROR:", err.message);
-    return res.status(500).json({
-      message: "Login failed",
-      error: err.message,
-    });
+    return res.status(500).json({ message: "Login failed", error: err.message });
   }
 });
 
 /**
- * ✅ VERIFY OTP ✅✅✅
+ * ✅ VERIFY OTP (PHONE + OTP)
  * POST /api/auth/verify-otp
  */
 router.post("/verify-otp", async (req, res) => {
   try {
     console.log("✅ VERIFY OTP HIT ✅", req.body);
 
-    const { email, otp } = req.body;
+    const { phone, otp } = req.body;
 
-    if (!email || !otp) {
-      return res.status(400).json({
-        message: "email and otp are required",
-      });
+    const normalizedPhone = normalizePhone(phone);
+
+    if (!normalizedPhone || !otp) {
+      return res.status(400).json({ message: "phone and otp are required" });
     }
 
-    const user = await User.findOne({ email });
+    const user = await User.findOne({ phone: normalizedPhone });
 
-    if (!user) {
-      return res.status(404).json({ message: "User not found" });
-    }
+    if (!user) return res.status(404).json({ message: "User not found" });
 
-    // ✅ OTP check
     if (!user.otpCode || user.otpCode !== otp) {
       return res.status(401).json({ message: "Invalid OTP" });
     }
 
-    // ✅ Expiry check
     if (!user.otpExpiresAt || user.otpExpiresAt < new Date()) {
       return res.status(401).json({ message: "OTP expired" });
     }
 
-    // ✅ Clear OTP after success
     user.otpCode = null;
     user.otpExpiresAt = null;
     await user.save();
 
-    // ✅ Generate token
     const token = generateToken(user._id, user.role);
 
     return res.status(200).json({
@@ -357,10 +393,89 @@ router.post("/verify-otp", async (req, res) => {
     });
   } catch (err) {
     console.error("❌ VERIFY OTP ERROR:", err.message);
-    return res.status(500).json({
-      message: "OTP verification failed",
-      error: err.message,
+    return res.status(500).json({ message: "OTP verification failed", error: err.message });
+  }
+});
+
+/**
+ * ✅ Forgot Password → sends OTP via SMS
+ * POST /api/auth/forgot-password
+ * body: { phone }
+ */
+router.post("/forgot-password", async (req, res) => {
+  try {
+    const { phone } = req.body;
+    const normalizedPhone = normalizePhone(phone);
+
+    if (!normalizedPhone) {
+      return res.status(400).json({ message: "phone is required" });
+    }
+
+    const user = await User.findOne({ phone: normalizedPhone });
+
+    // ✅ don't leak whether phone exists
+    if (!user) {
+      return res.status(200).json({ message: "If your phone exists, an SMS code has been sent ✅" });
+    }
+
+    const otpCode = await generateAndSaveOtp(user, { minutes: 10 });
+
+    try {
+      await sendOtpSms(user.phone, otpCode, "RESET");
+    } catch (smsErr) {
+      console.error("❌ RESET SMS SEND FAILED:", smsErr.message);
+    }
+
+    const debugEnabled = String(process.env.ENABLE_OTP_DEBUG).toLowerCase() === "true";
+
+    return res.status(200).json({
+      message: "If your phone exists, an SMS code has been sent ✅",
+      otp: debugEnabled ? otpCode : undefined,
     });
+  } catch (err) {
+    console.error("❌ FORGOT PASSWORD ERROR:", err.message);
+    return res.status(500).json({ message: "Forgot password failed", error: err.message });
+  }
+});
+
+/**
+ * ✅ Reset Password (PHONE + OTP + newPassword)
+ * POST /api/auth/reset-password
+ * body: { phone, otp, newPassword }
+ */
+router.post("/reset-password", async (req, res) => {
+  try {
+    const { phone, otp, newPassword } = req.body;
+    const normalizedPhone = normalizePhone(phone);
+
+    if (!normalizedPhone || !otp || !newPassword) {
+      return res.status(400).json({ message: "phone, otp, newPassword are required" });
+    }
+
+    const user = await User.findOne({ phone: normalizedPhone });
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    if (!user.otpCode || user.otpCode !== otp) {
+      return res.status(401).json({ message: "Invalid OTP" });
+    }
+
+    if (!user.otpExpiresAt || user.otpExpiresAt < new Date()) {
+      return res.status(401).json({ message: "OTP expired" });
+    }
+
+    // ✅ set password (assuming your User model pre-save hashes it)
+    user.password = newPassword;
+
+    // ✅ clear OTP
+    user.otpCode = null;
+    user.otpExpiresAt = null;
+
+    await user.save();
+
+    return res.status(200).json({ message: "Password reset successful ✅" });
+  } catch (err) {
+    console.error("❌ RESET PASSWORD ERROR:", err.message);
+    return res.status(500).json({ message: "Reset password failed", error: err.message });
   }
 });
 
