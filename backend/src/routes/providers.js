@@ -7,6 +7,9 @@ import Job, { JOB_STATUSES } from "../models/Job.js";
 import multer from "multer";
 import { uploadToFirebase } from "../utils/uploadToFirebase.js";
 
+// ✅✅✅ ADDED (push helpers)
+import { sendPushToManyUsers } from "../utils/sendPush.js";
+
 const router = express.Router();
 
 // ✅✅✅ ADDED (multer memory storage)
@@ -23,7 +26,9 @@ router.get("/me", auth, async (req, res) => {
   try {
     const providerRoles = [USER_ROLES.MECHANIC, USER_ROLES.TOW_TRUCK];
     if (!providerRoles.includes(req.user.role)) {
-      return res.status(403).json({ message: "Only providers can view this profile" });
+      return res
+        .status(403)
+        .json({ message: "Only providers can view this profile" });
     }
 
     const user = await User.findById(req.user._id).select(
@@ -49,7 +54,9 @@ router.patch("/me", auth, async (req, res) => {
   try {
     const providerRoles = [USER_ROLES.MECHANIC, USER_ROLES.TOW_TRUCK];
     if (!providerRoles.includes(req.user.role)) {
-      return res.status(403).json({ message: "Only providers can update this profile" });
+      return res
+        .status(403)
+        .json({ message: "Only providers can update this profile" });
     }
 
     const { email, phone } = req.body;
@@ -99,14 +106,17 @@ router.patch(
     try {
       const providerRoles = [USER_ROLES.MECHANIC, USER_ROLES.TOW_TRUCK];
       if (!providerRoles.includes(req.user.role)) {
-        return res.status(403).json({ message: "Only providers can upload documents" });
+        return res
+          .status(403)
+          .json({ message: "Only providers can upload documents" });
       }
 
       const user = await User.findById(req.user._id);
       if (!user) return res.status(404).json({ message: "User not found" });
 
       if (!user.providerProfile) user.providerProfile = {};
-      if (!user.providerProfile.verificationDocs) user.providerProfile.verificationDocs = {};
+      if (!user.providerProfile.verificationDocs)
+        user.providerProfile.verificationDocs = {};
 
       const status = user.providerProfile.verificationStatus || "PENDING";
 
@@ -140,10 +150,14 @@ router.patch(
       const vehicleProofUrl = await uploadOne(vehicleProofFile, "vehicleProof");
       const workshopProofUrl = await uploadOne(workshopProofFile, "workshopProof");
 
-      if (idDocumentUrl) user.providerProfile.verificationDocs.idDocumentUrl = idDocumentUrl;
-      if (licenseUrl) user.providerProfile.verificationDocs.licenseUrl = licenseUrl;
-      if (vehicleProofUrl) user.providerProfile.verificationDocs.vehicleProofUrl = vehicleProofUrl;
-      if (workshopProofUrl) user.providerProfile.verificationDocs.workshopProofUrl = workshopProofUrl;
+      if (idDocumentUrl)
+        user.providerProfile.verificationDocs.idDocumentUrl = idDocumentUrl;
+      if (licenseUrl)
+        user.providerProfile.verificationDocs.licenseUrl = licenseUrl;
+      if (vehicleProofUrl)
+        user.providerProfile.verificationDocs.vehicleProofUrl = vehicleProofUrl;
+      if (workshopProofUrl)
+        user.providerProfile.verificationDocs.workshopProofUrl = workshopProofUrl;
 
       // ✅ if previously rejected, resubmit => PENDING
       if (status === "REJECTED") {
@@ -179,7 +193,9 @@ router.patch("/me/status", auth, async (req, res) => {
 
     const providerRoles = [USER_ROLES.MECHANIC, USER_ROLES.TOW_TRUCK];
     if (!providerRoles.includes(req.user.role)) {
-      return res.status(403).json({ message: "Only service providers can update status" });
+      return res
+        .status(403)
+        .json({ message: "Only service providers can update status" });
     }
 
     const user = await User.findById(req.user._id);
@@ -197,8 +213,10 @@ router.patch("/me/status", auth, async (req, res) => {
 
     user.providerProfile.lastSeenAt = new Date();
 
-    if (Array.isArray(towTruckTypes)) user.providerProfile.towTruckTypes = towTruckTypes;
-    if (Array.isArray(carTypesSupported)) user.providerProfile.carTypesSupported = carTypesSupported;
+    if (Array.isArray(towTruckTypes))
+      user.providerProfile.towTruckTypes = towTruckTypes;
+    if (Array.isArray(carTypesSupported))
+      user.providerProfile.carTypesSupported = carTypesSupported;
 
     if (typeof isOnline === "boolean") {
       if (isOnline === true) {
@@ -239,7 +257,9 @@ router.get("/jobs/broadcasted", auth, async (req, res) => {
   try {
     const providerRoles = [USER_ROLES.MECHANIC, USER_ROLES.TOW_TRUCK];
     if (!providerRoles.includes(req.user.role)) {
-      return res.status(403).json({ message: "Only providers can view broadcasted jobs" });
+      return res
+        .status(403)
+        .json({ message: "Only providers can view broadcasted jobs" });
     }
 
     const jobs = await Job.find({
@@ -252,7 +272,10 @@ router.get("/jobs/broadcasted", auth, async (req, res) => {
 
     return res.status(200).json({ jobs });
   } catch (err) {
-    return res.status(500).json({ message: "Could not fetch broadcasted jobs", error: err.message });
+    return res.status(500).json({
+      message: "Could not fetch broadcasted jobs",
+      error: err.message,
+    });
   }
 });
 
@@ -264,7 +287,9 @@ router.get("/jobs/broadcasted/:jobId", auth, async (req, res) => {
   try {
     const providerRoles = [USER_ROLES.MECHANIC, USER_ROLES.TOW_TRUCK];
     if (!providerRoles.includes(req.user.role)) {
-      return res.status(403).json({ message: "Only providers can view broadcasted jobs" });
+      return res
+        .status(403)
+        .json({ message: "Only providers can view broadcasted jobs" });
     }
 
     const job = await Job.findOne({
@@ -274,7 +299,8 @@ router.get("/jobs/broadcasted/:jobId", auth, async (req, res) => {
       broadcastedTo: req.user._id,
     });
 
-    if (!job) return res.status(404).json({ message: "Job not found or not available" });
+    if (!job)
+      return res.status(404).json({ message: "Job not found or not available" });
 
     return res.status(200).json(job);
   } catch (err) {
@@ -285,6 +311,9 @@ router.get("/jobs/broadcasted/:jobId", auth, async (req, res) => {
 /**
  * ✅ Provider accepts job (first accept wins)
  * PATCH /api/providers/jobs/:jobId/accept
+ *
+ * ✅ NEW: Notify all other broadcasted providers to dismiss this job
+ * (DATA-only push via sendPushToManyUsers)
  */
 router.patch("/jobs/:jobId/accept", auth, async (req, res) => {
   try {
@@ -309,7 +338,27 @@ router.patch("/jobs/:jobId/accept", auth, async (req, res) => {
     );
 
     if (!job) {
-      return res.status(409).json({ message: "Job already claimed or not available" });
+      return res.status(409).json({
+        message: "Job already claimed or not available",
+      });
+    }
+
+    // ✅ Notify OTHER providers (everyone who had it, except the accepter)
+    const otherProviders = (job.broadcastedTo || [])
+      .map((id) => id.toString())
+      .filter((id) => id !== req.user._id.toString());
+
+    if (otherProviders.length > 0) {
+      await sendPushToManyUsers({
+        userIds: otherProviders,
+        title: "Job Taken",
+        body: "This job has been accepted by another provider",
+        data: {
+          type: "job_cancelled",
+          jobId: job._id.toString(),
+          reason: "accepted_by_other",
+        },
+      });
     }
 
     return res.status(200).json({ message: "Job accepted", job });
@@ -340,7 +389,9 @@ router.patch("/jobs/:jobId/reject", auth, async (req, res) => {
       return res.status(404).json({ message: "Job not found or not available" });
     }
 
-    job.broadcastedTo = job.broadcastedTo.filter((id) => id.toString() !== req.user._id.toString());
+    job.broadcastedTo = job.broadcastedTo.filter(
+      (id) => id.toString() !== req.user._id.toString()
+    );
 
     if (!job.excludedProviders) job.excludedProviders = [];
     if (!job.excludedProviders.map(String).includes(req.user._id.toString())) {
