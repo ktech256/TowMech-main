@@ -31,19 +31,17 @@ function getUserFcmToken(user) {
 }
 
 /**
- * ✅ IMPORTANT:
- * To guarantee custom sound ALWAYS (foreground + background),
- * we MUST send DATA ONLY payload (NO notification{} block).
- *
- * If notification{} exists, Android may display it automatically in background
- * and you cannot force your custom sound.
+ * ✅ Must match Android NotificationChannels.PROVIDER_JOBS_CHANNEL_ID
  */
-
-// ✅ Must match your Android NotificationChannels.PROVIDER_JOBS_CHANNEL_ID
 const ANDROID_CHANNEL_ID = "provider_jobs_channel";
 
 /**
  * ✅ Send push notification to a single user (DATA ONLY)
+ *
+ * data can include:
+ *  - open: "job_requests"
+ *  - jobId: "..."
+ *  - pickup, dropoff, amount, currency, distanceKm (strings/numbers ok)
  */
 export const sendPushToUser = async ({ userId, title, body, data = {} }) => {
   initFirebase();
@@ -54,7 +52,11 @@ export const sendPushToUser = async ({ userId, title, body, data = {} }) => {
   const token = getUserFcmToken(user);
   if (!token) return null;
 
-  const safeData = normalizeFcmData({ ...data, title, body });
+  const safeData = normalizeFcmData({
+    ...data,
+    title,
+    body,
+  });
 
   const message = {
     token,
@@ -64,9 +66,7 @@ export const sendPushToUser = async ({ userId, title, body, data = {} }) => {
 
     android: {
       priority: "high",
-      // ✅ This only helps when the OS shows the notification
-      // but since we're DATA-only, your app builds it.
-      // Still safe to keep for consistency.
+      // Safe to keep, but does NOT force system notification since it's data-only.
       notification: {
         channelId: ANDROID_CHANNEL_ID,
       },
@@ -92,7 +92,11 @@ export const sendPushToManyUsers = async ({ userIds, title, body, data = {} }) =
     return { successCount: 0, failureCount: 0, responses: [] };
   }
 
-  const safeData = normalizeFcmData({ ...data, title, body });
+  const safeData = normalizeFcmData({
+    ...data,
+    title,
+    body,
+  });
 
   const message = {
     tokens,
@@ -109,4 +113,25 @@ export const sendPushToManyUsers = async ({ userIds, title, body, data = {} }) =
   };
 
   return admin.messaging().sendEachForMulticast(message);
+};
+
+/**
+ * ✅ Helper: Cancel / remove job banner on other providers
+ * Call this when:
+ *  - another provider accepted the job
+ *  - job expired / cancelled
+ *
+ * The Android app will cancel the notification immediately
+ * because it checks open=job_cancelled/job_taken/job_unavailable.
+ */
+export const sendCancelJobToManyUsers = async ({ userIds, jobId, reason = "job_taken" }) => {
+  return sendPushToManyUsers({
+    userIds,
+    title: "Job Update",
+    body: "Job no longer available",
+    data: {
+      open: reason, // "job_taken" | "job_cancelled" | "job_unavailable"
+      jobId: String(jobId),
+    },
+  });
 };
