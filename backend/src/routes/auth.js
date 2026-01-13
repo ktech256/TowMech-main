@@ -39,7 +39,7 @@ function normalizePhone(phone) {
 }
 
 /**
- * ✅ NEW: build multiple phone candidates to match DB formats
+ * ✅ build multiple phone candidates to match DB formats
  * Fixes Render login failures when DB stores +27 but user types 07... (or vice versa)
  */
 function buildPhoneCandidates(phone) {
@@ -172,9 +172,6 @@ async function generateAndSaveOtp(user, { minutes = 10 } = {}) {
 /**
  * ✅ Register user
  * POST /api/auth/register
- *
- * ✅ Email required during registration
- * ✅ Phone required too (because login uses phone)
  */
 router.post("/register", async (req, res) => {
   try {
@@ -325,11 +322,7 @@ router.post("/register", async (req, res) => {
 });
 
 /**
- * ✅ Login user (PHONE + PASSWORD)
- *
- * - Customers/Providers: OTP flow (returns {message, otp?})
- * - Admin/SuperAdmin: return token immediately (fast dashboard login)
- *
+ * ✅ Login user (PHONE + PASSWORD) → ALWAYS OTP (including Admin)
  * POST /api/auth/login
  */
 router.post("/login", async (req, res) => {
@@ -343,7 +336,7 @@ router.post("/login", async (req, res) => {
       return res.status(400).json({ message: "phone and password are required" });
     }
 
-    // ✅ NEW: Try multiple phone formats (prevents Render mismatch)
+    // ✅ Try multiple phone formats
     const phoneCandidates = buildPhoneCandidates(normalizedPhone);
 
     const user = await User.findOne({ phone: { $in: phoneCandidates } });
@@ -352,32 +345,16 @@ router.post("/login", async (req, res) => {
     const isMatch = await user.matchPassword(password);
     if (!isMatch) return res.status(401).json({ message: "Invalid credentials" });
 
-    // ✅ ✅ ✅ OPTION B: ADMIN BYPASS OTP (return token immediately)
-    const isAdmin = [USER_ROLES.ADMIN, USER_ROLES.SUPER_ADMIN].includes(user.role);
-    if (isAdmin) {
-      const token = generateToken(user._id, user.role);
-
-      // Optional: clear any stale OTP fields
-      user.otpCode = null;
-      user.otpExpiresAt = null;
-      await user.save();
-
-      return res.status(200).json({
-        message: "Login successful ✅",
-        token,
-        user: typeof user.toSafeJSON === "function" ? user.toSafeJSON(user.role) : undefined,
-      });
-    }
-
-    // ✅ Non-admins keep OTP flow
+    // ✅ ALWAYS OTP (admins included)
     const otpCode = await generateAndSaveOtp(user, { minutes: 10 });
 
-    console.log("✅ OTP GENERATED FOR PHONE:", normalizedPhone, "| OTP:", otpCode);
+    console.log("✅ OTP GENERATED FOR:", user.phone, "| OTP:", otpCode);
 
     try {
       await sendOtpSms(user.phone, otpCode, "OTP");
     } catch (smsErr) {
       console.error("❌ SMS OTP SEND FAILED:", smsErr.message);
+      // still allow OTP verification if SMS fails (use debug)
     }
 
     const debugEnabled = String(process.env.ENABLE_OTP_DEBUG).toLowerCase() === "true";
@@ -394,7 +371,7 @@ router.post("/login", async (req, res) => {
 });
 
 /**
- * ✅ VERIFY OTP (PHONE + OTP)
+ * ✅ VERIFY OTP (PHONE + OTP) → returns token
  * POST /api/auth/verify-otp
  */
 router.post("/verify-otp", async (req, res) => {
@@ -408,7 +385,6 @@ router.post("/verify-otp", async (req, res) => {
       return res.status(400).json({ message: "phone and otp are required" });
     }
 
-    // ✅ also use candidates here for consistency
     const phoneCandidates = buildPhoneCandidates(normalizedPhone);
 
     const user = await User.findOne({ phone: { $in: phoneCandidates } });
