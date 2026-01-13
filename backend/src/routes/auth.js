@@ -29,8 +29,12 @@ function normalizePhone(phone) {
   p = p.replace(/\s+/g, "");
   p = p.replace(/[-()]/g, "");
 
+  // If someone sends "00.." convert to +..
   if (p.startsWith("00")) p = "+" + p.slice(2);
 
+  // IMPORTANT:
+  // Do NOT force +27 here unless you're 100% sure all numbers are SA & stored with +27.
+  // Your DB must match whatever normalization produces.
   return p;
 }
 
@@ -292,7 +296,11 @@ router.post("/register", async (req, res) => {
 });
 
 /**
- * ✅ Login user (PHONE + PASSWORD) → generates OTP and sends via SMS
+ * ✅ Login user (PHONE + PASSWORD)
+ *
+ * - Customers/Providers: OTP flow (returns {message, otp?})
+ * - Admin/SuperAdmin: return token immediately (fast dashboard login)
+ *
  * POST /api/auth/login
  */
 router.post("/login", async (req, res) => {
@@ -312,6 +320,24 @@ router.post("/login", async (req, res) => {
     const isMatch = await user.matchPassword(password);
     if (!isMatch) return res.status(401).json({ message: "Invalid credentials" });
 
+    // ✅ ✅ ✅ OPTION B: ADMIN BYPASS OTP (return token immediately)
+    const isAdmin = [USER_ROLES.ADMIN, USER_ROLES.SUPER_ADMIN].includes(user.role);
+    if (isAdmin) {
+      const token = generateToken(user._id, user.role);
+
+      // Optional: clear any stale OTP fields
+      user.otpCode = null;
+      user.otpExpiresAt = null;
+      await user.save();
+
+      return res.status(200).json({
+        message: "Login successful ✅",
+        token,
+        user: user.toSafeJSON ? user.toSafeJSON(user.role) : undefined,
+      });
+    }
+
+    // ✅ Non-admins keep OTP flow
     const otpCode = await generateAndSaveOtp(user, { minutes: 10 });
 
     console.log("✅ OTP GENERATED FOR PHONE:", normalizedPhone, "| OTP:", otpCode);
