@@ -8,9 +8,6 @@ import providerRoutes from "./routes/providers.js";
 import paymentRoutes from "./routes/payments.js";
 import notificationRoutes from "./routes/notifications.js";
 
-// ❌ REMOVE this to avoid double mounting conflict
-// import providerDocumentsRoutes from "./routes/providerDocuments.js";
-
 // ✅ SAFETY ROUTES
 import safetyRoutes from "./routes/safety.js";
 import adminSafetyRoutes from "./routes/adminSafety.js";
@@ -40,6 +37,9 @@ import adminSupportRoutes from "./routes/adminSupport.js";
 
 // ✅ Notifications Routes
 import adminNotificationsRoutes from "./routes/adminNotifications.js";
+
+// ✅ ✅ ✅ RATINGS ROUTES (NEW)
+import ratingRoutes from "./routes/rating.routes.js";
 
 const app = express();
 
@@ -82,8 +82,13 @@ app.use("/api/providers", providerRoutes);
 app.use("/api/payments", paymentRoutes);
 app.use("/api/notifications", notificationRoutes);
 
-// ❌ REMOVE this line to avoid route collisions
-// app.use("/api/providers", providerDocumentsRoutes);
+/**
+ * ✅ ✅ ✅ RATINGS ROUTES MOUNTED TWICE
+ * - Mobile uses: POST /api/jobs/rate
+ * - Dashboard uses: GET /api/admin/ratings + /api/admin/ratings/:id
+ */
+app.use("/api/jobs", ratingRoutes);
+app.use("/api/admin", ratingRoutes);
 
 /**
  * ✅ SAFETY ROUTES (PUBLIC)

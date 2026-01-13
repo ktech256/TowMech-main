@@ -37,13 +37,6 @@ export const VEHICLE_TYPES = [
 
 /**
  * ✅ Normalize phone for consistent login + uniqueness
- * - trims spaces
- * - removes common separators
- * - converts leading 00 to +
- *
- * NOTE:
- * Best practice is E.164 format: +27...
- * This keeps your system consistent even if users type "082 123 4567" or "00..."
  */
 function normalizePhone(phone) {
   if (!phone) return "";
@@ -96,8 +89,6 @@ const permissionsSchema = new mongoose.Schema(
 
 /**
  * ✅ Account Status Schema
- * Only visible by SuperAdmin
- * Admin sees limited version via toSafeJSON()
  */
 const accountStatusSchema = new mongoose.Schema(
   {
@@ -176,6 +167,23 @@ const providerProfileSchema = new mongoose.Schema(
 );
 
 /**
+ * ✅ Rating Stats Schema (NEW)
+ */
+const ratingStatsSchema = new mongoose.Schema(
+  {
+    asProvider: {
+      avg: { type: Number, default: 0 },
+      count: { type: Number, default: 0 },
+    },
+    asCustomer: {
+      avg: { type: Number, default: 0 },
+      count: { type: Number, default: 0 },
+    },
+  },
+  { _id: false }
+);
+
+/**
  * ✅ USER SCHEMA
  */
 const userSchema = new mongoose.Schema(
@@ -188,14 +196,13 @@ const userSchema = new mongoose.Schema(
 
     /**
      * ✅ Phone is now the PRIMARY LOGIN identifier
-     * ✅ Must be unique so login works correctly
      */
     phone: {
       type: String,
       required: true,
       unique: true,
       index: true,
-      set: normalizePhone, // ✅ auto-normalize on assignment
+      set: normalizePhone,
     },
 
     birthday: { type: Date, required: true },
@@ -210,7 +217,7 @@ const userSchema = new mongoose.Schema(
     passportNumber: { type: String, default: null },
     country: { type: String, default: null },
 
-    // ✅ Auth (email still required for registration / comms)
+    // ✅ Auth
     email: { type: String, required: true, unique: true, lowercase: true },
     password: { type: String, required: true },
 
@@ -227,6 +234,9 @@ const userSchema = new mongoose.Schema(
 
     permissions: { type: permissionsSchema, default: null },
 
+    // ✅ NEW rating stats field
+    ratingStats: { type: ratingStatsSchema, default: () => ({}) },
+
     accountStatus: { type: accountStatusSchema, default: () => ({}) },
   },
   { timestamps: true }
@@ -236,7 +246,6 @@ userSchema.index({ "providerProfile.location": "2dsphere" });
 
 /**
  * ✅ Ensure phone normalization happens even if set() isn't triggered
- * (extra safety for updates)
  */
 userSchema.pre("validate", function (next) {
   if (this.phone) this.phone = normalizePhone(this.phone);
@@ -263,9 +272,6 @@ userSchema.methods.matchPassword = async function (enteredPassword) {
 
 /**
  * ✅ Safe JSON output with role-based visibility
- * - Customers/providers see NO accountStatus
- * - Admin sees limited status + reasons
- * - SuperAdmin sees FULL accountStatus
  */
 userSchema.methods.toSafeJSON = function (viewerRole) {
   const obj = this.toObject();

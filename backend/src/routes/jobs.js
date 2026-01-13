@@ -1,6 +1,8 @@
 import express from "express";
+import mongoose from "mongoose"; // ✅ ADDED (needed for aggregation ObjectId)
 import Job, { JOB_STATUSES } from "../models/Job.js";
 import User, { USER_ROLES } from "../models/User.js";
+import Rating from "../models/Rating.js"; // ✅ ADDED (3.1)
 import Payment, { PAYMENT_STATUSES } from "../models/Payment.js";
 import PricingConfig from "../models/PricingConfig.js";
 import auth from "../middleware/auth.js";
@@ -14,6 +16,40 @@ import { sendJobAcceptedEmail } from "../utils/sendJobAcceptedEmail.js";
 import { calculateJobPricing } from "../utils/calculateJobPricing.js";
 
 const router = express.Router();
+
+/**
+ * ✅ Helper: Recompute rating stats for a target user (3.2)
+ */
+async function recomputeUserRatingStats(userId) {
+  const targetId = new mongoose.Types.ObjectId(userId);
+
+  // Provider stats: toRole != "Customer"
+  const providerAgg = await Rating.aggregate([
+    { $match: { toUser: targetId, toRole: { $ne: "Customer" } } },
+    { $group: { _id: "$toUser", avg: { $avg: "$rating" }, count: { $sum: 1 } } },
+  ]);
+
+  // Customer stats: toRole == "Customer"
+  const customerAgg = await Rating.aggregate([
+    { $match: { toUser: targetId, toRole: "Customer" } },
+    { $group: { _id: "$toUser", avg: { $avg: "$rating" }, count: { $sum: 1 } } },
+  ]);
+
+  const providerStats = providerAgg[0]
+    ? { avg: Number(providerAgg[0].avg.toFixed(2)), count: providerAgg[0].count }
+    : { avg: 0, count: 0 };
+
+  const customerStats = customerAgg[0]
+    ? { avg: Number(customerAgg[0].avg.toFixed(2)), count: customerAgg[0].count }
+    : { avg: 0, count: 0 };
+
+  await User.findByIdAndUpdate(userId, {
+    $set: {
+      "ratingStats.asProvider": providerStats,
+      "ratingStats.asCustomer": customerStats,
+    },
+  });
+}
 
 /**
  * ✅ Helper: Haversine Distance (km)
@@ -38,8 +74,6 @@ function haversineDistanceKm(lat1, lng1, lat2, lng2) {
 
 /**
  * ✅ PREVIEW JOB
- * ✅ Returns pricing estimate without creating job
- * ✅ If towTruckTypeNeeded missing -> returns results for ALL tow truck types
  * POST /api/jobs/preview
  */
 router.post(
@@ -152,7 +186,6 @@ router.post(
 
       /**
        * ✅ CASE 2: towTruckTypeNeeded missing
-       * ✅ return pricing + ONLINE/OFFLINE per tow truck type
        */
       const resultsByTowTruckType = {};
 
@@ -168,7 +201,6 @@ router.post(
           distanceKm,
         });
 
-        // ✅ Providers for THIS towTruckType
         const providersForType = await findNearbyProviders({
           roleNeeded,
           pickupLng,
@@ -187,14 +219,11 @@ router.post(
           estimatedDistanceKm: pricing.estimatedDistanceKm,
           towTruckTypeMultiplier: pricing.towTruckTypeMultiplier,
           vehicleTypeMultiplier: pricing.vehicleTypeMultiplier,
-
-          // ✅ NEW: Availability data
           providersCount: providersForType.length,
           status: providersForType.length > 0 ? "ONLINE" : "OFFLINE",
         };
       }
 
-      // ✅ total providers (any towtruck type)
       const providers = await findNearbyProviders({
         roleNeeded,
         pickupLng,
@@ -231,7 +260,6 @@ router.post(
 
 /**
  * ✅ CUSTOMER creates job
- * ✅ Only allowed if providers exist nearby
  * POST /api/jobs
  */
 router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => {
@@ -355,23 +383,14 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
 });
 
 /**
- * ✅ NEW: UPDATE JOB STATUS (Provider + Customer)
+ * ✅ UPDATE JOB STATUS
  * PATCH /api/jobs/:id/status
- *
- * Provider:
- * - must own the job (assignedTo == req.user._id)
- * - ASSIGNED -> IN_PROGRESS
- * - IN_PROGRESS -> COMPLETED
- *
- * Customer:
- * - can cancel own job (CREATED/BROADCASTED -> CANCELLED)
  */
 router.patch("/:id/status", auth, async (req, res) => {
   try {
     const { status } = req.body || {};
     if (!status) return res.status(400).json({ message: "status is required" });
 
-    // Only allow known statuses
     const allowed = Object.values(JOB_STATUSES);
     if (!allowed.includes(status)) {
       return res.status(400).json({ message: "Invalid status", allowed });
@@ -383,16 +402,11 @@ router.patch("/:id/status", auth, async (req, res) => {
     const isProvider = [USER_ROLES.MECHANIC, USER_ROLES.TOW_TRUCK].includes(req.user.role);
     const isCustomer = req.user.role === USER_ROLES.CUSTOMER;
 
-    // =========================
-    // ✅ PROVIDER FLOW
-    // =========================
     if (isProvider) {
-      // Must be assigned to this provider
       if (!job.assignedTo || job.assignedTo.toString() !== req.user._id.toString()) {
         return res.status(403).json({ message: "Not allowed: job not assigned to you" });
       }
 
-      // Only allow proper transitions
       const current = job.status;
 
       const ok =
@@ -404,10 +418,7 @@ router.patch("/:id/status", auth, async (req, res) => {
           message: "Invalid provider status transition",
           current,
           attempted: status,
-          allowedTransitions: [
-            "ASSIGNED -> IN_PROGRESS",
-            "IN_PROGRESS -> COMPLETED",
-          ],
+          allowedTransitions: ["ASSIGNED -> IN_PROGRESS", "IN_PROGRESS -> COMPLETED"],
         });
       }
 
@@ -420,20 +431,15 @@ router.patch("/:id/status", auth, async (req, res) => {
       });
     }
 
-    // =========================
-    // ✅ CUSTOMER FLOW (Cancel only)
-    // =========================
     if (isCustomer) {
       if (job.customer?.toString() !== req.user._id.toString()) {
         return res.status(403).json({ message: "Not allowed: job not yours" });
       }
 
-      // Allow customer cancel only
       if (status !== JOB_STATUSES.CANCELLED) {
         return res.status(403).json({ message: "Customer can only cancel jobs" });
       }
 
-      // Only if not already completed
       if ([JOB_STATUSES.COMPLETED].includes(job.status)) {
         return res.status(400).json({ message: "Cannot cancel a completed job" });
       }
@@ -456,6 +462,94 @@ router.patch("/:id/status", auth, async (req, res) => {
     console.error("❌ UPDATE STATUS ERROR:", err);
     return res.status(500).json({
       message: "Could not update job status",
+      error: err.message,
+    });
+  }
+});
+
+/**
+ * ✅ RATE JOB (3.3)
+ * POST /api/jobs/rate
+ * Body: { jobId, rating, comment }
+ */
+router.post("/rate", auth, async (req, res) => {
+  try {
+    const { jobId, rating, comment } = req.body || {};
+
+    if (!jobId) return res.status(400).json({ message: "jobId is required" });
+
+    const stars = Number(rating);
+    if (!stars || stars < 1 || stars > 5) {
+      return res.status(400).json({ message: "rating must be 1..5" });
+    }
+
+    const text = comment ? String(comment).trim().slice(0, 200) : null;
+
+    const job = await Job.findById(jobId).populate("customer").populate("assignedTo");
+    if (!job) return res.status(404).json({ message: "Job not found" });
+
+    if (job.status !== JOB_STATUSES.COMPLETED) {
+      return res.status(400).json({ message: "Job must be COMPLETED before rating" });
+    }
+
+    const me = await User.findById(req.user._id);
+    if (!me) return res.status(401).json({ message: "User not found" });
+
+    const myRole = me.role;
+
+    const isCustomer = myRole === USER_ROLES.CUSTOMER;
+    const isProvider = [USER_ROLES.MECHANIC, USER_ROLES.TOW_TRUCK].includes(myRole);
+
+    if (!isCustomer && !isProvider) {
+      return res.status(403).json({ message: "Role not allowed to rate" });
+    }
+
+    let toUser = null;
+    let toRole = null;
+
+    if (isCustomer) {
+      if (!job.assignedTo) {
+        return res.status(400).json({ message: "Cannot rate: no provider assigned" });
+      }
+      toUser = job.assignedTo._id;
+      toRole = job.assignedTo.role;
+    } else {
+      if (!job.customer) {
+        return res.status(400).json({ message: "Cannot rate: missing job customer" });
+      }
+      toUser = job.customer._id;
+      toRole = USER_ROLES.CUSTOMER;
+    }
+
+    const existing = await Rating.findOne({ job: job._id, fromUser: me._id });
+    if (existing) {
+      return res.status(409).json({ message: "You already rated this job" });
+    }
+
+    await Rating.create({
+      job: job._id,
+      fromUser: me._id,
+      toUser,
+      fromRole: myRole,
+      toRole,
+      rating: stars,
+      comment: text,
+    });
+
+    await recomputeUserRatingStats(toUser);
+
+    return res.status(201).json({
+      success: true,
+      message: "Rating submitted ✅",
+    });
+  } catch (err) {
+    if (err && err.code === 11000) {
+      return res.status(409).json({ message: "You already rated this job" });
+    }
+
+    console.error("❌ RATE JOB ERROR:", err);
+    return res.status(500).json({
+      message: "Could not submit rating",
       error: err.message,
     });
   }
