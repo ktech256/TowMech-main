@@ -333,7 +333,7 @@ router.post("/login", async (req, res) => {
       return res.status(200).json({
         message: "Login successful ✅",
         token,
-        user: user.toSafeJSON ? user.toSafeJSON(user.role) : undefined,
+        user: typeof user.toSafeJSON === "function" ? user.toSafeJSON(user.role) : undefined,
       });
     }
 
@@ -353,6 +353,7 @@ router.post("/login", async (req, res) => {
     return res.status(200).json({
       message: "OTP sent via SMS ✅",
       otp: debugEnabled ? otpCode : undefined,
+      requiresOtp: true,
     });
   } catch (err) {
     console.error("❌ LOGIN ERROR:", err.message);
@@ -395,7 +396,7 @@ router.post("/verify-otp", async (req, res) => {
     return res.status(200).json({
       message: "OTP verified ✅",
       token,
-      user: user.toSafeJSON(user.role),
+      user: typeof user.toSafeJSON === "function" ? user.toSafeJSON(user.role) : undefined,
     });
   } catch (err) {
     console.error("❌ VERIFY OTP ERROR:", err.message);
@@ -435,6 +436,7 @@ router.post("/forgot-password", async (req, res) => {
     return res.status(200).json({
       message: "If your phone exists, an SMS code has been sent ✅",
       otp: debugEnabled ? otpCode : undefined,
+      requiresOtp: true,
     });
   } catch (err) {
     console.error("❌ FORGOT PASSWORD ERROR:", err.message);
