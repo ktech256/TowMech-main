@@ -383,6 +383,42 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
 });
 
 /**
+ * ✅ ✅ ✅ NEW: GET JOB BY ID (Customer + Assigned Provider + Admin)
+ * GET /api/jobs/:id
+ */
+router.get("/:id", auth, async (req, res) => {
+  try {
+    const job = await Job.findById(req.params.id)
+      .populate("customer", "name email role phone")
+      .populate("assignedTo", "name email role phone");
+
+    if (!job) return res.status(404).json({ message: "Job not found" });
+
+    const isAdmin = [USER_ROLES.ADMIN, USER_ROLES.SUPER_ADMIN].includes(req.user.role);
+
+    const isOwner =
+      job.customer?._id?.toString() === req.user._id.toString() ||
+      job.customer?.toString?.() === req.user._id.toString();
+
+    const isAssignedProvider =
+      job.assignedTo?._id?.toString() === req.user._id.toString() ||
+      job.assignedTo?.toString?.() === req.user._id.toString();
+
+    if (!isAdmin && !isOwner && !isAssignedProvider) {
+      return res.status(403).json({ message: "Not allowed" });
+    }
+
+    return res.status(200).json({ job });
+  } catch (err) {
+    console.error("❌ GET JOB ERROR:", err);
+    return res.status(500).json({
+      message: "Failed to fetch job",
+      error: err.message,
+    });
+  }
+});
+
+/**
  * ✅ UPDATE JOB STATUS
  * PATCH /api/jobs/:id/status
  */
