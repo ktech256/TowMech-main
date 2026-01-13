@@ -39,6 +39,35 @@ function normalizePhone(phone) {
 }
 
 /**
+ * ✅ NEW: build multiple phone candidates to match DB formats
+ * Fixes Render login failures when DB stores +27 but user types 07... (or vice versa)
+ */
+function buildPhoneCandidates(phone) {
+  const p = normalizePhone(phone);
+  const candidates = new Set();
+  if (!p) return [];
+
+  // as entered/normalized
+  candidates.add(p);
+
+  // if starts with +, also try without +
+  if (p.startsWith("+")) candidates.add(p.slice(1));
+
+  // SA local: 0XXXXXXXXX => +27XXXXXXXXX and 27XXXXXXXXX
+  if (/^0\d{9}$/.test(p)) {
+    candidates.add("+27" + p.slice(1));
+    candidates.add("27" + p.slice(1));
+  }
+
+  // if user enters 27XXXXXXXXX, also try +27XXXXXXXXX
+  if (/^27\d{9}$/.test(p)) {
+    candidates.add("+" + p);
+  }
+
+  return Array.from(candidates);
+}
+
+/**
  * ✅ Send OTP via SMS (Twilio)
  */
 async function sendOtpSms(phone, otpCode, purpose = "OTP") {
@@ -314,7 +343,10 @@ router.post("/login", async (req, res) => {
       return res.status(400).json({ message: "phone and password are required" });
     }
 
-    const user = await User.findOne({ phone: normalizedPhone });
+    // ✅ NEW: Try multiple phone formats (prevents Render mismatch)
+    const phoneCandidates = buildPhoneCandidates(normalizedPhone);
+
+    const user = await User.findOne({ phone: { $in: phoneCandidates } });
     if (!user) return res.status(401).json({ message: "Invalid credentials" });
 
     const isMatch = await user.matchPassword(password);
@@ -376,7 +408,10 @@ router.post("/verify-otp", async (req, res) => {
       return res.status(400).json({ message: "phone and otp are required" });
     }
 
-    const user = await User.findOne({ phone: normalizedPhone });
+    // ✅ also use candidates here for consistency
+    const phoneCandidates = buildPhoneCandidates(normalizedPhone);
+
+    const user = await User.findOne({ phone: { $in: phoneCandidates } });
     if (!user) return res.status(404).json({ message: "User not found" });
 
     if (!user.otpCode || user.otpCode !== otp) {
@@ -417,7 +452,9 @@ router.post("/forgot-password", async (req, res) => {
       return res.status(400).json({ message: "phone is required" });
     }
 
-    const user = await User.findOne({ phone: normalizedPhone });
+    const phoneCandidates = buildPhoneCandidates(normalizedPhone);
+
+    const user = await User.findOne({ phone: { $in: phoneCandidates } });
 
     if (!user) {
       return res.status(200).json({ message: "If your phone exists, an SMS code has been sent ✅" });
@@ -457,7 +494,9 @@ router.post("/reset-password", async (req, res) => {
       return res.status(400).json({ message: "phone, otp, newPassword are required" });
     }
 
-    const user = await User.findOne({ phone: normalizedPhone });
+    const phoneCandidates = buildPhoneCandidates(normalizedPhone);
+
+    const user = await User.findOne({ phone: { $in: phoneCandidates } });
     if (!user) return res.status(404).json({ message: "User not found" });
 
     if (!user.otpCode || user.otpCode !== otp) {
