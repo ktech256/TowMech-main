@@ -1,233 +1,201 @@
 import mongoose from "mongoose";
-import Rating from "../models/Rating.js";
-import Job, { JOB_STATUSES } from "../models/Job.js";
+import Job from "../models/Job.js";
 import User, { USER_ROLES } from "../models/User.js";
+import Rating from "../models/Rating.js";
+import { JOB_STATUSES } from "../models/Job.js";
 
-/**
- * ✅ Recompute ratingStats on a User
- * Updates:
- *  - ratingStats.asProvider.avg + count  (if toRole != Customer)
- *  - ratingStats.asCustomer.avg + count  (if toRole == Customer)
- */
-export async function recomputeUserRatingStats(userId) {
-  const targetId = new mongoose.Types.ObjectId(userId);
+function safeAvgUpdate(currentAvg, currentCount, newRating) {
+  const count = Number(currentCount || 0);
+  const avg = Number(currentAvg || 0);
 
-  // Provider stats: toRole != "Customer"
-  const providerAgg = await Rating.aggregate([
-    { $match: { toUser: targetId, toRole: { $ne: USER_ROLES.CUSTOMER } } },
-    { $group: { _id: "$toUser", avg: { $avg: "$rating" }, count: { $sum: 1 } } },
-  ]);
+  const newCount = count + 1;
+  const newAvg = (avg * count + newRating) / newCount;
 
-  // Customer stats: toRole == "Customer"
-  const customerAgg = await Rating.aggregate([
-    { $match: { toUser: targetId, toRole: USER_ROLES.CUSTOMER } },
-    { $group: { _id: "$toUser", avg: { $avg: "$rating" }, count: { $sum: 1 } } },
-  ]);
-
-  const providerStats = providerAgg[0]
-    ? { avg: Number(providerAgg[0].avg.toFixed(2)), count: providerAgg[0].count }
-    : { avg: 0, count: 0 };
-
-  const customerStats = customerAgg[0]
-    ? { avg: Number(customerAgg[0].avg.toFixed(2)), count: customerAgg[0].count }
-    : { avg: 0, count: 0 };
-
-  await User.findByIdAndUpdate(userId, {
-    $set: {
-      "ratingStats.asProvider": providerStats,
-      "ratingStats.asCustomer": customerStats,
-    },
-  });
-
-  return { providerStats, customerStats };
+  return { avg: Number(newAvg.toFixed(2)), count: newCount };
 }
 
-/**
- * ✅ Submit rating (Customer rates Provider OR Provider rates Customer)
- * Body: { jobId, rating, comment }
- *
- * Rules:
- * - Job must exist and be COMPLETED
- * - Only Customer or Provider can rate
- * - Only once per job per user
- * - Comment max 200 chars
- */
-export async function submitRating({ userId, jobId, rating, comment }) {
-  if (!jobId) {
-    const err = new Error("jobId is required");
-    err.statusCode = 400;
-    throw err;
+export async function createRatingAndUpdateStats({ raterId, jobId, rating, comment }) {
+  // Validate IDs
+  if (!mongoose.Types.ObjectId.isValid(jobId)) {
+    const e = new Error("Invalid jobId");
+    e.statusCode = 400;
+    throw e;
   }
 
-  const stars = Number(rating);
-  if (!stars || stars < 1 || stars > 5) {
-    const err = new Error("rating must be 1..5");
-    err.statusCode = 400;
-    throw err;
-  }
-
-  const safeComment = comment ? String(comment).trim().slice(0, 200) : null;
-
-  const job = await Job.findById(jobId).populate("customer").populate("assignedTo");
+  const job = await Job.findById(jobId).populate("customer assignedTo");
   if (!job) {
-    const err = new Error("Job not found");
-    err.statusCode = 404;
-    throw err;
+    const e = new Error("Job not found");
+    e.statusCode = 404;
+    throw e;
   }
 
   if (job.status !== JOB_STATUSES.COMPLETED) {
-    const err = new Error("Job must be COMPLETED before rating");
-    err.statusCode = 400;
-    throw err;
+    const e = new Error("You can only rate a completed job");
+    e.statusCode = 400;
+    throw e;
   }
 
-  const me = await User.findById(userId);
-  if (!me) {
-    const err = new Error("User not found");
-    err.statusCode = 401;
-    throw err;
+  const rater = await User.findById(raterId);
+  if (!rater) {
+    const e = new Error("Rater not found");
+    e.statusCode = 404;
+    throw e;
   }
 
-  const myRole = me.role;
+  const isCustomerRater = rater.role === USER_ROLES.CUSTOMER;
+  const isProviderRater = [USER_ROLES.MECHANIC, USER_ROLES.TOW_TRUCK].includes(rater.role);
 
-  const isCustomer = myRole === USER_ROLES.CUSTOMER;
-  const isProvider = [USER_ROLES.MECHANIC, USER_ROLES.TOW_TRUCK].includes(myRole);
-
-  if (!isCustomer && !isProvider) {
-    const err = new Error("Role not allowed to rate");
-    err.statusCode = 403;
-    throw err;
+  if (!isCustomerRater && !isProviderRater) {
+    const e = new Error("Role not allowed to rate");
+    e.statusCode = 403;
+    throw e;
   }
 
-  let toUser = null;
-  let toRole = null;
+  // Determine target:
+  // - Customer rates assigned provider
+  // - Provider rates customer
+  let targetUser = null;
+  let raterRole = "";
+  let targetRole = "";
 
-  // Customer rates Provider
-  if (isCustomer) {
+  if (isCustomerRater) {
     if (!job.assignedTo) {
-      const err = new Error("Cannot rate: no provider assigned");
-      err.statusCode = 400;
-      throw err;
+      const e = new Error("Cannot rate: job has no assigned provider");
+      e.statusCode = 400;
+      throw e;
     }
-    toUser = job.assignedTo._id;
-    toRole = job.assignedTo.role || "Provider";
-  }
-
-  // Provider rates Customer
-  if (isProvider) {
+    targetUser = job.assignedTo;
+    raterRole = "Customer";
+    targetRole = "Provider";
+  } else {
+    // provider rater
     if (!job.customer) {
-      const err = new Error("Cannot rate: missing job customer");
-      err.statusCode = 400;
-      throw err;
+      const e = new Error("Cannot rate: job has no customer");
+      e.statusCode = 400;
+      throw e;
     }
-    toUser = job.customer._id;
-    toRole = USER_ROLES.CUSTOMER;
+    // must be assigned provider for this job
+    if (!job.assignedTo || String(job.assignedTo._id) !== String(rater._id)) {
+      const e = new Error("Not allowed: job not assigned to you");
+      e.statusCode = 403;
+      throw e;
+    }
+    targetUser = job.customer;
+    raterRole = rater.role; // TowTruck / Mechanic
+    targetRole = "Customer";
   }
 
-  // Prevent duplicate rating from same user for same job
-  const existing = await Rating.findOne({ job: job._id, fromUser: me._id });
+  // prevent duplicate rating per (job, rater)
+  const existing = await Rating.findOne({ job: job._id, rater: rater._id });
   if (existing) {
-    const err = new Error("You already rated this job");
-    err.statusCode = 409;
-    throw err;
+    const e = new Error("You already rated this job");
+    e.statusCode = 409;
+    throw e;
   }
 
+  // create rating
   const created = await Rating.create({
     job: job._id,
-    fromUser: me._id,
-    toUser,
-    fromRole: myRole,
-    toRole,
-    rating: stars,
-    comment: safeComment,
+    rater: rater._id,
+    target: targetUser._id,
+    rating,
+    comment: (comment || "").trim().slice(0, 200) || null,
+    raterRole,
+    targetRole,
   });
 
-  // Update stats on the user who received the rating
-  const stats = await recomputeUserRatingStats(toUser);
+  // update ratingStats on target user
+  const target = await User.findById(targetUser._id);
+  if (target) {
+    if (!target.ratingStats) target.ratingStats = {};
+    if (!target.ratingStats.asProvider)
+      target.ratingStats.asProvider = { avg: 0, count: 0 };
+    if (!target.ratingStats.asCustomer)
+      target.ratingStats.asCustomer = { avg: 0, count: 0 };
 
-  return { created, stats };
+    if (targetRole === "Provider") {
+      const next = safeAvgUpdate(
+        target.ratingStats.asProvider.avg,
+        target.ratingStats.asProvider.count,
+        rating
+      );
+      target.ratingStats.asProvider = next;
+    } else {
+      const next = safeAvgUpdate(
+        target.ratingStats.asCustomer.avg,
+        target.ratingStats.asCustomer.count,
+        rating
+      );
+      target.ratingStats.asCustomer = next;
+    }
+
+    await target.save();
+  }
+
+  return created;
 }
 
-/**
- * ✅ Admin list ratings (Support & Disputes)
- * Filters:
- * - jobId
- * - toUser
- * - fromUser
- * - minRating / maxRating
- * - fromRole / toRole
- * - search (comment text)
- * - page / limit
- */
-export async function adminListRatings(filters = {}) {
-  const {
-    page = 1,
-    limit = 20,
-    jobId,
-    toUser,
-    fromUser,
-    minRating,
-    maxRating,
-    fromRole,
-    toRole,
-    search,
-  } = filters;
+export async function listRatingsAdmin({ page = 1, limit = 20, search = "", minStars, maxStars }) {
+  const safePage = Math.max(1, page);
+  const safeLimit = Math.min(100, Math.max(1, limit));
+  const skip = (safePage - 1) * safeLimit;
 
-  const q = {};
+  const filter = {};
 
-  if (jobId) q.job = jobId;
-  if (toUser) q.toUser = toUser;
-  if (fromUser) q.fromUser = fromUser;
-  if (fromRole) q.fromRole = fromRole;
-  if (toRole) q.toRole = toRole;
+  if (typeof minStars === "number") filter.rating = { ...(filter.rating || {}), $gte: minStars };
+  if (typeof maxStars === "number") filter.rating = { ...(filter.rating || {}), $lte: maxStars };
 
-  if (minRating || maxRating) {
-    q.rating = {};
-    if (minRating) q.rating.$gte = Number(minRating);
-    if (maxRating) q.rating.$lte = Number(maxRating);
-  }
-
+  // basic search across comment + rater/target name/email (via populate match later)
+  // We'll do comment/job title search directly; name/email search uses regex on populated docs isn't native.
   if (search) {
-    q.comment = { $regex: String(search).trim(), $options: "i" };
+    filter.$or = [
+      { comment: { $regex: search, $options: "i" } },
+    ];
   }
 
-  const safeLimit = Math.min(Number(limit) || 20, 100);
-  const skip = (Number(page) - 1) * safeLimit;
-
-  const [items, total] = await Promise.all([
-    Rating.find(q)
+  const [total, ratings] = await Promise.all([
+    Rating.countDocuments(filter),
+    Rating.find(filter)
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(safeLimit)
-      .populate("job", "title status pickupAddressText dropoffAddressText roleNeeded")
-      .populate("fromUser", "name role phone email ratingStats")
-      .populate("toUser", "name role phone email ratingStats"),
-    Rating.countDocuments(q),
+      .populate("job", "title")
+      .populate("rater", "name email role")
+      .populate("target", "name email role"),
   ]);
 
+  // If search includes names/emails, do a second-pass filter in-memory
+  let finalRatings = ratings;
+  if (search) {
+    const s = search.toLowerCase();
+    finalRatings = ratings.filter((r) => {
+      const rater = r.rater || {};
+      const target = r.target || {};
+      const job = r.job || {};
+      return (
+        String(r.comment || "").toLowerCase().includes(s) ||
+        String(job.title || "").toLowerCase().includes(s) ||
+        String(rater.name || "").toLowerCase().includes(s) ||
+        String(rater.email || "").toLowerCase().includes(s) ||
+        String(target.name || "").toLowerCase().includes(s) ||
+        String(target.email || "").toLowerCase().includes(s)
+      );
+    });
+  }
+
   return {
-    page: Number(page),
+    page: safePage,
     limit: safeLimit,
     total,
-    pages: Math.ceil(total / safeLimit),
-    items,
+    ratings: finalRatings,
   };
 }
 
-/**
- * ✅ Admin get a single rating
- */
-export async function adminGetRatingById(ratingId) {
-  const rating = await Rating.findById(ratingId)
-    .populate("job", "title status pickupAddressText dropoffAddressText roleNeeded pricing customer assignedTo createdAt")
-    .populate("fromUser", "name role phone email ratingStats")
-    .populate("toUser", "name role phone email ratingStats");
+export async function getRatingByIdAdmin(id) {
+  if (!mongoose.Types.ObjectId.isValid(id)) return null;
 
-  if (!rating) {
-    const err = new Error("Rating not found");
-    err.statusCode = 404;
-    throw err;
-  }
-
-  return rating;
+  return Rating.findById(id)
+    .populate("job", "title")
+    .populate("rater", "name email role")
+    .populate("target", "name email role");
 }

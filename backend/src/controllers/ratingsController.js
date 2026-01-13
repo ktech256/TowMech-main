@@ -1,19 +1,21 @@
 import {
-  submitRating,
-  adminListRatings,
-  adminGetRatingById,
+  createRatingAndUpdateStats,
+  listRatingsAdmin,
+  getRatingByIdAdmin,
 } from "../services/rating.service.js";
-import { USER_ROLES } from "../models/User.js";
 
-/**
- * ✅ POST /api/jobs/rate  (Called by Mobile App)
- */
-export async function submitRatingController(req, res) {
+export async function submitRating(req, res) {
   try {
-    const { jobId, rating, comment } = req.body || {};
+    const { jobId, rating, comment } = req.body;
 
-    const result = await submitRating({
-      userId: req.user._id,
+    if (!jobId) return res.status(400).json({ message: "jobId is required" });
+    if (typeof rating !== "number")
+      return res.status(400).json({ message: "rating must be a number" });
+    if (rating < 1 || rating > 5)
+      return res.status(400).json({ message: "rating must be 1..5" });
+
+    const result = await createRatingAndUpdateStats({
+      raterId: req.user._id,
       jobId,
       rating,
       comment,
@@ -22,53 +24,53 @@ export async function submitRatingController(req, res) {
     return res.status(201).json({
       success: true,
       message: "Rating submitted ✅",
-      ratingId: result.created?._id,
-      updatedStats: result.stats,
+      rating: result,
     });
   } catch (err) {
-    if (err && err.code === 11000) {
-      return res.status(409).json({ message: "You already rated this job" });
-    }
-
-    const status = err.statusCode || 500;
-    return res.status(status).json({
-      message: err.message || "Could not submit rating",
+    console.error("❌ submitRating error:", err);
+    return res.status(err.statusCode || 500).json({
+      success: false,
+      message: err.message || "Failed to submit rating",
     });
   }
 }
 
-/**
- * ✅ GET /api/admin/ratings
- * Dashboard list + filters
- */
-export async function adminListRatingsController(req, res) {
+export async function adminListRatings(req, res) {
   try {
-    // Only Admin / SuperAdmin
-    if (![USER_ROLES.ADMIN, USER_ROLES.SUPER_ADMIN].includes(req.user.role)) {
-      return res.status(403).json({ message: "Not allowed" });
-    }
+    const { page, limit, search, minStars, maxStars } = req.query;
 
-    const result = await adminListRatings(req.query || {});
-    return res.status(200).json(result);
+    const data = await listRatingsAdmin({
+      page: Number(page) || 1,
+      limit: Number(limit) || 20,
+      search: search ? String(search) : "",
+      minStars: minStars !== undefined ? Number(minStars) : undefined,
+      maxStars: maxStars !== undefined ? Number(maxStars) : undefined,
+    });
+
+    return res.status(200).json({ success: true, ...data });
   } catch (err) {
-    return res.status(500).json({ message: err.message || "Failed to load ratings" });
+    console.error("❌ adminListRatings error:", err);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to load ratings",
+    });
   }
 }
 
-/**
- * ✅ GET /api/admin/ratings/:id
- * Dashboard view details
- */
-export async function adminGetRatingController(req, res) {
+export async function adminGetRatingById(req, res) {
   try {
-    if (![USER_ROLES.ADMIN, USER_ROLES.SUPER_ADMIN].includes(req.user.role)) {
-      return res.status(403).json({ message: "Not allowed" });
-    }
+    const { id } = req.params;
 
-    const rating = await adminGetRatingById(req.params.id);
-    return res.status(200).json({ rating });
+    const rating = await getRatingByIdAdmin(id);
+    if (!rating)
+      return res.status(404).json({ success: false, message: "Rating not found" });
+
+    return res.status(200).json({ success: true, rating });
   } catch (err) {
-    const status = err.statusCode || 500;
-    return res.status(status).json({ message: err.message || "Failed to load rating" });
+    console.error("❌ adminGetRatingById error:", err);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to load rating",
+    });
   }
 }
