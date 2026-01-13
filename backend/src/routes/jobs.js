@@ -1,8 +1,8 @@
 import express from "express";
-import mongoose from "mongoose"; // ✅ ADDED (needed for aggregation ObjectId)
+import mongoose from "mongoose"; // ✅ needed for aggregation ObjectId
 import Job, { JOB_STATUSES } from "../models/Job.js";
 import User, { USER_ROLES } from "../models/User.js";
-import Rating from "../models/Rating.js"; // ✅ ADDED (3.1)
+import Rating from "../models/Rating.js";
 import Payment, { PAYMENT_STATUSES } from "../models/Payment.js";
 import PricingConfig from "../models/PricingConfig.js";
 import auth from "../middleware/auth.js";
@@ -18,21 +18,22 @@ import { calculateJobPricing } from "../utils/calculateJobPricing.js";
 const router = express.Router();
 
 /**
- * ✅ Helper: Recompute rating stats for a target user (3.2)
+ * ✅ Helper: Recompute rating stats for a target user
+ * IMPORTANT: uses Rating schema fields: target + targetRole
  */
 async function recomputeUserRatingStats(userId) {
   const targetId = new mongoose.Types.ObjectId(userId);
 
-  // Provider stats: toRole != "Customer"
+  // Provider stats: targetRole != "Customer"
   const providerAgg = await Rating.aggregate([
-    { $match: { toUser: targetId, toRole: { $ne: "Customer" } } },
-    { $group: { _id: "$toUser", avg: { $avg: "$rating" }, count: { $sum: 1 } } },
+    { $match: { target: targetId, targetRole: { $ne: "Customer" } } },
+    { $group: { _id: "$target", avg: { $avg: "$rating" }, count: { $sum: 1 } } },
   ]);
 
-  // Customer stats: toRole == "Customer"
+  // Customer stats: targetRole == "Customer"
   const customerAgg = await Rating.aggregate([
-    { $match: { toUser: targetId, toRole: "Customer" } },
-    { $group: { _id: "$toUser", avg: { $avg: "$rating" }, count: { $sum: 1 } } },
+    { $match: { target: targetId, targetRole: "Customer" } },
+    { $group: { _id: "$target", avg: { $avg: "$rating" }, count: { $sum: 1 } } },
   ]);
 
   const providerStats = providerAgg[0]
@@ -57,7 +58,7 @@ async function recomputeUserRatingStats(userId) {
 function haversineDistanceKm(lat1, lng1, lat2, lng2) {
   const toRad = (v) => (v * Math.PI) / 180;
 
-  const R = 6371; // Earth radius in km
+  const R = 6371;
   const dLat = toRad(lat2 - lat1);
   const dLng = toRad(lng2 - lng1);
 
@@ -120,7 +121,7 @@ router.post(
 
       let towTruckTypes = config.towTruckTypes || [];
 
-      // ✅ FIX: Ensure towTruckTypes is never empty
+      // ✅ Ensure towTruckTypes never empty
       if (!towTruckTypes || towTruckTypes.length === 0) {
         console.log("⚠️ towTruckTypes empty → setting defaults...");
 
@@ -137,8 +138,6 @@ router.post(
         towTruckTypes = config.towTruckTypes;
       }
 
-      console.log("✅ towTruckTypes:", towTruckTypes);
-
       // ✅ Compute distance (TowTruck jobs only)
       const distanceKm =
         roleNeeded === USER_ROLES.TOW_TRUCK &&
@@ -147,9 +146,7 @@ router.post(
           ? haversineDistanceKm(pickupLat, pickupLng, dropoffLat, dropoffLng)
           : 0;
 
-      /**
-       * ✅ CASE 1: towTruckTypeNeeded provided → return single preview result
-       */
+      // ✅ CASE 1: towTruckTypeNeeded provided → single preview
       if (towTruckTypeNeeded) {
         const pricing = await calculateJobPricing({
           roleNeeded,
@@ -184,9 +181,7 @@ router.post(
         });
       }
 
-      /**
-       * ✅ CASE 2: towTruckTypeNeeded missing
-       */
+      // ✅ CASE 2: towTruckTypeNeeded missing → return all types
       const resultsByTowTruckType = {};
 
       for (const type of towTruckTypes) {
@@ -383,7 +378,7 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
 });
 
 /**
- * ✅ ✅ ✅ NEW: GET JOB BY ID (Customer + Assigned Provider + Admin)
+ * ✅ GET JOB BY ID (Customer + Assigned Provider + Admin)
  * GET /api/jobs/:id
  */
 router.get("/:id", auth, async (req, res) => {
@@ -504,14 +499,13 @@ router.patch("/:id/status", auth, async (req, res) => {
 });
 
 /**
- * ✅ RATE JOB (3.3)
+ * ✅ RATE JOB
  * POST /api/jobs/rate
  * Body: { jobId, rating, comment }
  */
 router.post("/rate", auth, async (req, res) => {
   try {
     const { jobId, rating, comment } = req.body || {};
-
     if (!jobId) return res.status(400).json({ message: "jobId is required" });
 
     const stars = Number(rating);
@@ -532,7 +526,6 @@ router.post("/rate", auth, async (req, res) => {
     if (!me) return res.status(401).json({ message: "User not found" });
 
     const myRole = me.role;
-
     const isCustomer = myRole === USER_ROLES.CUSTOMER;
     const isProvider = [USER_ROLES.MECHANIC, USER_ROLES.TOW_TRUCK].includes(myRole);
 
@@ -540,39 +533,38 @@ router.post("/rate", auth, async (req, res) => {
       return res.status(403).json({ message: "Role not allowed to rate" });
     }
 
-    let toUser = null;
-    let toRole = null;
+    let targetUserId = null;
+    let targetRole = null;
 
     if (isCustomer) {
       if (!job.assignedTo) {
         return res.status(400).json({ message: "Cannot rate: no provider assigned" });
       }
-      toUser = job.assignedTo._id;
-      toRole = job.assignedTo.role;
+      targetUserId = job.assignedTo._id;
+      targetRole = job.assignedTo.role; // TowTruck / Mechanic
     } else {
       if (!job.customer) {
         return res.status(400).json({ message: "Cannot rate: missing job customer" });
       }
-      toUser = job.customer._id;
-      toRole = USER_ROLES.CUSTOMER;
+      targetUserId = job.customer._id;
+      targetRole = USER_ROLES.CUSTOMER;
     }
 
-    const existing = await Rating.findOne({ job: job._id, fromUser: me._id });
-    if (existing) {
-      return res.status(409).json({ message: "You already rated this job" });
-    }
+    // ✅ prevent duplicates (schema uses job+rater unique)
+    const existing = await Rating.findOne({ job: job._id, rater: me._id });
+    if (existing) return res.status(409).json({ message: "You already rated this job" });
 
     await Rating.create({
       job: job._id,
-      fromUser: me._id,
-      toUser,
-      fromRole: myRole,
-      toRole,
+      rater: me._id,
+      target: targetUserId,
+      raterRole: myRole,
+      targetRole,
       rating: stars,
       comment: text,
     });
 
-    await recomputeUserRatingStats(toUser);
+    await recomputeUserRatingStats(targetUserId);
 
     return res.status(201).json({
       success: true,
