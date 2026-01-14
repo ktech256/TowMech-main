@@ -51,9 +51,13 @@ router.patch(
         'baseFee',
         'perKmFee',
 
-        // ✅ NEW ✅ provider type base pricing
+        // ✅ provider type base pricing (global fallback pricing)
         'providerBasePricing',
 
+        // ✅ NEW ✅ TowTruck per-type pricing (PRIMARY admin settings)
+        'towTruckTypePricing',
+
+        // ✅ multipliers + other settings (kept for compatibility)
         'towTruckTypeMultipliers',
         'vehicleTypeMultipliers',
         'bookingFees',
