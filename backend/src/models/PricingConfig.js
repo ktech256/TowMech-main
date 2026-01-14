@@ -116,7 +116,7 @@ const pricingConfigSchema = new mongoose.Schema(
     vehicleTypeMultipliers: {
       Sedan: { type: Number, default: 1.0 },
       SUV: { type: Number, default: 1.2 },
-      Hatchback: { type: Number, default: 0.9 },
+      Hatchback: { type: Number, default: 1.0 },
       Truck: { type: Number, default: 1.5 },
       Van: { type: Number, default: 1.4 }
     },

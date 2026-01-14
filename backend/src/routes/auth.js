@@ -523,4 +523,30 @@ router.post("/reset-password", async (req, res) => {
   }
 });
 
+/**
+ * ✅ Get logged-in user profile
+ * GET /api/auth/me
+ *
+ * Works for Customer + Provider + Admin (any logged in user)
+ */
+router.get("/me", auth, async (req, res) => {
+  try {
+    const user = await User.findById(req.user._id).select(
+      "name email phone role providerProfile createdAt updatedAt"
+    );
+
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    return res.status(200).json({
+      user: typeof user.toSafeJSON === "function" ? user.toSafeJSON(user.role) : user,
+    });
+  } catch (err) {
+    return res.status(500).json({
+      message: "Could not fetch profile",
+      error: err.message,
+    });
+  }
+});
+
 export default router;
+```0
