@@ -179,7 +179,7 @@ function normalizeTowTruckTypes(input) {
       if (lower === "towtruck-xxl" || lower === "towtruck xxl") return "TowTruck-XXL";
       if (lower === "flatbed") return "Flatbed"; // legacy flatbed enum value
       if (lower === "rollback") return "Rollback"; // legacy rollback enum value
-      if (lower === "recovery") return "Recovery"; // legacy recovery enum value
+      if (lower === "recovery") return "Recovery"; // legacy recovery value
 
       return x;
     });
@@ -549,4 +549,3 @@ router.get("/me", auth, async (req, res) => {
 });
 
 export default router;
-```0
