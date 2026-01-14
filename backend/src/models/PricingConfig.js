@@ -31,6 +31,59 @@ const pricingConfigSchema = new mongoose.Schema(
     },
 
     /**
+     * ✅ TowTruck Type Pricing (NEW ✅ - Manual configuration per tow truck type)
+     *
+     * Each tow truck type can have its own:
+     * - baseFee
+     * - perKmFee
+     * - nightFee
+     * - weekendFee
+     *
+     * NOTE:
+     * - This does NOT break anything because it is additive.
+     * - Your pricing engine can use this first, and fall back to providerBasePricing.towTruck if missing.
+     * - Aligned cheapest → most expensive (as requested).
+     */
+    towTruckTypePricing: {
+      'Hook & Chain': {
+        baseFee: { type: Number, default: 20 },
+        perKmFee: { type: Number, default: 20 },
+        nightFee: { type: Number, default: 0 },
+        weekendFee: { type: Number, default: 0 }
+      },
+      'Wheel-Lift': {
+        baseFee: { type: Number, default: 20 },
+        perKmFee: { type: Number, default: 20 },
+        nightFee: { type: Number, default: 0 },
+        weekendFee: { type: Number, default: 0 }
+      },
+      'Flatbed/Roll Back': {
+        baseFee: { type: Number, default: 20 },
+        perKmFee: { type: Number, default: 20 },
+        nightFee: { type: Number, default: 0 },
+        weekendFee: { type: Number, default: 0 }
+      },
+      'Boom Trucks(With Crane)': {
+        baseFee: { type: Number, default: 20 },
+        perKmFee: { type: Number, default: 20 },
+        nightFee: { type: Number, default: 0 },
+        weekendFee: { type: Number, default: 0 }
+      },
+      'Integrated / Wrecker': {
+        baseFee: { type: Number, default: 20 },
+        perKmFee: { type: Number, default: 20 },
+        nightFee: { type: Number, default: 0 },
+        weekendFee: { type: Number, default: 0 }
+      },
+      'Heavy-Duty Rotator(Recovery)': {
+        baseFee: { type: Number, default: 20 },
+        perKmFee: { type: Number, default: 20 },
+        nightFee: { type: Number, default: 0 },
+        weekendFee: { type: Number, default: 0 }
+      }
+    },
+
+    /**
      * ✅ TowTruck Multipliers (Type based)
      *
      * IMPORTANT:
