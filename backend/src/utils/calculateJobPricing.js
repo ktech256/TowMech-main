@@ -55,18 +55,38 @@ export const calculateJobPricing = async ({
 
   const currency = pricingConfig.currency || "ZAR";
 
-  // ✅ Determine provider pricing based on role
+  /**
+   * ✅ Determine provider pricing based on role
+   * For TowTruck:
+   *   1) use towTruckTypePricing[towTruckTypeNeeded] if available
+   *   2) fallback to providerBasePricing.towTruck
+   *   3) fallback to legacy global baseFee/perKmFee
+   * For Mechanic:
+   *   keep current providerBasePricing.mechanic logic
+   */
   const providerPricing =
     roleNeeded === USER_ROLES.TOW_TRUCK
       ? pricingConfig.providerBasePricing?.towTruck
       : pricingConfig.providerBasePricing?.mechanic;
 
-  // ✅ fallback to legacy pricing if provider pricing missing
-  const baseFee = providerPricing?.baseFee ?? pricingConfig.baseFee ?? 0;
-  const perKmFee = providerPricing?.perKmFee ?? pricingConfig.perKmFee ?? 0;
+  // ✅ NEW: TowTruck per-type pricing block
+  const towTypePricing =
+    roleNeeded === USER_ROLES.TOW_TRUCK && towTruckTypeNeeded
+      ? pricingConfig.towTruckTypePricing?.[towTruckTypeNeeded] || null
+      : null;
 
-  const nightFee = providerPricing?.nightFee ?? 0;
-  const weekendFee = providerPricing?.weekendFee ?? 0;
+  // ✅ Choose base/perKm/night/weekend from type config first (TowTruck only)
+  const baseFee =
+    (towTypePricing?.baseFee ?? providerPricing?.baseFee ?? pricingConfig.baseFee ?? 0);
+
+  const perKmFee =
+    (towTypePricing?.perKmFee ?? providerPricing?.perKmFee ?? pricingConfig.perKmFee ?? 0);
+
+  const nightFee =
+    (towTypePricing?.nightFee ?? providerPricing?.nightFee ?? 0);
+
+  const weekendFee =
+    (towTypePricing?.weekendFee ?? providerPricing?.weekendFee ?? 0);
 
   // ✅ Use provided distanceKm if exists, else compute fallback
   let estimatedDistanceKm = 0;
@@ -89,6 +109,9 @@ export const calculateJobPricing = async ({
   }
 
   // ✅ Multipliers
+  // NOTE:
+  // - We KEEP towTruckTypeMultipliers for backward compatibility.
+  // - Even with per-type fees, multiplier can still be used (optional tuning).
   const towMult =
     towTruckTypeNeeded
       ? pricingConfig.towTruckTypeMultipliers?.[towTruckTypeNeeded] || 1
@@ -116,7 +139,7 @@ export const calculateJobPricing = async ({
       ? (baseFee + perKmFee * estimatedDistanceKm + applyNightFee + applyWeekendFee) *
         towMult *
         vehicleMult *
-        surgeMultiplier
+        (surgeEnabled ? surgeMultiplier : 1)
       : baseFee + applyNightFee + applyWeekendFee; // mechanic can still have base fee + bonuses
 
   // ✅ Booking fees
@@ -126,7 +149,9 @@ export const calculateJobPricing = async ({
   const bookingFee =
     roleNeeded === USER_ROLES.TOW_TRUCK
       ? Math.round((estimatedTotal * towBookingPercent) / 100)
-      : Math.round(mechanicFixedFee * (pricingConfig.surgePricing?.mechanicBookingFeeMultiplier || 1));
+      : Math.round(
+          mechanicFixedFee * (pricingConfig.surgePricing?.mechanicBookingFeeMultiplier || 1)
+        );
 
   // ✅ Commission + provider share (TowTruck only)
   const towTruckCompanyPercent =
@@ -151,7 +176,7 @@ export const calculateJobPricing = async ({
     estimatedDistanceKm,
     towTruckTypeMultiplier: towMult,
     vehicleTypeMultiplier: vehicleMult,
-    surgeMultiplier,
+    surgeMultiplier: surgeEnabled ? surgeMultiplier : 1,
     estimatedTotal: Math.round(estimatedTotal),
     bookingFee,
     commissionAmount,
