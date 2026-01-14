@@ -430,6 +430,118 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
   }
 });
 
+/* ============================================================
+   ✅✅✅ ADDITIONS (NO DELETIONS): CUSTOMER "MY JOBS" ROUTES
+   Fixes: 404 for GET /api/jobs/my/active and /api/jobs/my/history
+   Placed BEFORE "/:id" route to avoid path conflicts.
+   ============================================================ */
+
+/**
+ * ✅ CUSTOMER: ACTIVE JOBS
+ * GET /api/jobs/my/active
+ */
+router.get(
+  "/my/active",
+  auth,
+  authorizeRoles(USER_ROLES.CUSTOMER),
+  async (req, res) => {
+    try {
+      const activeStatuses = [
+        JOB_STATUSES.CREATED,
+        JOB_STATUSES.BROADCASTED,
+        JOB_STATUSES.ASSIGNED,
+        JOB_STATUSES.IN_PROGRESS,
+      ];
+
+      const jobs = await Job.find({
+        customer: req.user._id,
+        status: { $in: activeStatuses },
+      })
+        .sort({ createdAt: -1 })
+        .populate("customer", "name email role phone")
+        .populate("assignedTo", "name email role phone providerProfile")
+        .limit(50);
+
+      return res.status(200).json({ jobs });
+    } catch (err) {
+      console.error("❌ MY ACTIVE JOBS ERROR:", err);
+      return res.status(500).json({
+        message: "Could not fetch active jobs",
+        error: err.message,
+      });
+    }
+  }
+);
+
+/**
+ * ✅ CUSTOMER: JOB HISTORY
+ * GET /api/jobs/my/history
+ */
+router.get(
+  "/my/history",
+  auth,
+  authorizeRoles(USER_ROLES.CUSTOMER),
+  async (req, res) => {
+    try {
+      const historyStatuses = [JOB_STATUSES.COMPLETED, JOB_STATUSES.CANCELLED];
+
+      const jobs = await Job.find({
+        customer: req.user._id,
+        status: { $in: historyStatuses },
+      })
+        .sort({ createdAt: -1 })
+        .populate("customer", "name email role phone")
+        .populate("assignedTo", "name email role phone providerProfile")
+        .limit(100);
+
+      return res.status(200).json({ jobs });
+    } catch (err) {
+      console.error("❌ MY JOB HISTORY ERROR:", err);
+      return res.status(500).json({
+        message: "Could not fetch job history",
+        error: err.message,
+      });
+    }
+  }
+);
+
+/**
+ * ✅ OPTIONAL ALIAS (keep old clients stable)
+ * GET /api/jobs/customer/active
+ */
+router.get(
+  "/customer/active",
+  auth,
+  authorizeRoles(USER_ROLES.CUSTOMER),
+  async (req, res) => {
+    try {
+      const activeStatuses = [
+        JOB_STATUSES.CREATED,
+        JOB_STATUSES.BROADCASTED,
+        JOB_STATUSES.ASSIGNED,
+        JOB_STATUSES.IN_PROGRESS,
+      ];
+
+      const jobs = await Job.find({
+        customer: req.user._id,
+        status: { $in: activeStatuses },
+      })
+        .sort({ createdAt: -1 })
+        .populate("customer", "name email role phone")
+        .populate("assignedTo", "name email role phone providerProfile")
+        .limit(50);
+
+      return res.status(200).json({ jobs });
+    } catch (err) {
+      console.error("❌ CUSTOMER ACTIVE (ALIAS) ERROR:", err);
+      return res.status(500).json({
+        message: "Could not fetch customer active jobs",
+        error: err.message,
+      });
+    }
+  }
+);
+
 /**
  * ✅ GET JOB BY ID (Customer + Assigned Provider + Admin)
  * GET /api/jobs/:id
