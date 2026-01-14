@@ -32,13 +32,28 @@ const pricingConfigSchema = new mongoose.Schema(
 
     /**
      * ✅ TowTruck Multipliers (Type based)
+     *
+     * IMPORTANT:
+     * - NEW preferred names are added and aligned cheapest → expensive
+     * - Legacy keys are kept so existing DB values / old clients don’t break
+     * - We do NOT change numbers/fees, only naming + ordering
      */
     towTruckTypeMultipliers: {
-      Flatbed: { type: Number, default: 1.2 },
+      // ✅ Legacy cheapest (kept for backward compatibility)
+      'Pickup with tow hitch': { type: Number, default: 0.9 },
+
+      // ✅ NEW preferred names (cheapest → most expensive)
+      'Hook & Chain': { type: Number, default: 1.0 },
       'Wheel-Lift': { type: Number, default: 1.0 },
+      'Boom Trucks(With Crane)': { type: Number, default: 1.1 },
+      'Flatbed/Roll Back': { type: Number, default: 1.2 },
+      'Integrated / Wrecker': { type: Number, default: 1.2 },
+      'Heavy-Duty Rotator(Recovery)': { type: Number, default: 2.0 },
+
+      // ✅ Legacy names (kept for backward compatibility)
+      Flatbed: { type: Number, default: 1.2 },
       'Hook and Chain': { type: Number, default: 1.0 },
       'Heavy Duty Tow Truck': { type: Number, default: 2.0 },
-      'Pickup with tow hitch': { type: Number, default: 0.9 },
       'Tow Dolly': { type: Number, default: 1.1 }
     },
 

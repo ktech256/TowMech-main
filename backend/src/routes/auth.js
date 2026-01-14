@@ -136,6 +136,11 @@ function isValidPassport(passport) {
 
 /**
  * ✅ Helper: Normalize towTruckTypes
+ *
+ * IMPORTANT:
+ * - Accept NEW preferred names (cheapest → expensive)
+ * - Still accept LEGACY inputs so existing apps/providers don’t break
+ * - Output must match User.js TOW_TRUCK_TYPES enum values
  */
 function normalizeTowTruckTypes(input) {
   if (!input) return [];
@@ -147,12 +152,34 @@ function normalizeTowTruckTypes(input) {
     .map((x) => {
       const lower = x.toLowerCase();
 
-      if (lower === "flatbed") return "Flatbed";
-      if (lower === "rollback") return "Rollback";
+      // ✅ NEW preferred names + common variants
+      if (lower.includes("hook") && lower.includes("chain")) return "Hook & Chain";
+
+      if (lower === "wheel-lift" || lower === "wheel lift") return "Wheel-Lift";
+
+      if (
+        lower === "flatbed" ||
+        lower === "rollback" ||
+        lower === "roll back" ||
+        lower === "flatbed/roll back" ||
+        lower === "flatbed/rollback"
+      )
+        return "Flatbed/Roll Back";
+
+      if (lower.includes("boom")) return "Boom Trucks(With Crane)";
+
+      if (lower.includes("integrated") || lower.includes("wrecker")) return "Integrated / Wrecker";
+
+      if (lower.includes("rotator") || lower.includes("heavy-duty") || lower === "recovery")
+        return "Heavy-Duty Rotator(Recovery)";
+
+      // ✅ Legacy explicit values (keep as-is so old DB values remain valid)
       if (lower === "towtruck") return "TowTruck";
       if (lower === "towtruck-xl" || lower === "towtruck xl") return "TowTruck-XL";
       if (lower === "towtruck-xxl" || lower === "towtruck xxl") return "TowTruck-XXL";
-      if (lower === "recovery") return "Recovery";
+      if (lower === "flatbed") return "Flatbed"; // legacy flatbed enum value
+      if (lower === "rollback") return "Rollback"; // legacy rollback enum value
+      if (lower === "recovery") return "Recovery"; // legacy recovery enum value
 
       return x;
     });

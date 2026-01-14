@@ -15,8 +15,21 @@ export const USER_ROLES = {
 /**
  * ✅ PROVIDER TYPES (TowTruck types)
  * ✅ MUST MATCH PRICING LOGIC EXACTLY
+ *
+ * IMPORTANT:
+ * - We add the NEW preferred names (cheapest → expensive) FIRST for alignment.
+ * - We KEEP legacy names for backward compatibility so existing data and old clients won't break.
  */
 export const TOW_TRUCK_TYPES = [
+  // ✅ NEW preferred names (cheapest → most expensive)
+  "Hook & Chain",
+  "Wheel-Lift",
+  "Flatbed/Roll Back",
+  "Boom Trucks(With Crane)",
+  "Integrated / Wrecker",
+  "Heavy-Duty Rotator(Recovery)",
+
+  // ✅ Legacy values (keep for backward support)
   "TowTruck",
   "Rollback",
   "TowTruck-XL",

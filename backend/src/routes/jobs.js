@@ -18,6 +18,46 @@ import { calculateJobPricing } from "../utils/calculateJobPricing.js";
 const router = express.Router();
 
 /**
+ * ✅ TowTruck Type Normalizer (NEW preferred names + legacy compatibility)
+ * - Keeps system stable while DB/clients may still send old values
+ * - Outputs the new preferred names used in PricingConfig multipliers
+ */
+function normalizeTowTruckType(type) {
+  if (!type) return null;
+  const x = String(type).trim();
+  const lower = x.toLowerCase();
+
+  // ✅ NEW preferred names + common variants
+  if (lower.includes("hook") && lower.includes("chain")) return "Hook & Chain";
+
+  if (lower === "wheel-lift" || lower === "wheel lift") return "Wheel-Lift";
+
+  if (
+    lower === "flatbed" ||
+    lower === "rollback" ||
+    lower === "roll back" ||
+    lower === "flatbed/roll back" ||
+    lower === "flatbed/rollback"
+  )
+    return "Flatbed/Roll Back";
+
+  if (lower.includes("boom")) return "Boom Trucks(With Crane)";
+
+  if (lower.includes("integrated") || lower.includes("wrecker")) return "Integrated / Wrecker";
+
+  if (lower.includes("rotator") || lower.includes("heavy-duty") || lower === "recovery")
+    return "Heavy-Duty Rotator(Recovery)";
+
+  // ✅ Legacy values mapping (safe)
+  if (lower === "towtruck") return "Integrated / Wrecker";
+  if (lower === "towtruck-xl" || lower === "towtruck xl") return "Integrated / Wrecker";
+  if (lower === "towtruck-xxl" || lower === "towtruck xxl") return "Integrated / Wrecker";
+
+  // If it doesn't match anything, keep as-is (don’t break unexpected custom values)
+  return x;
+}
+
+/**
  * ✅ Helper: Recompute rating stats for a target user
  * IMPORTANT: uses Rating schema fields: target + targetRole
  */
@@ -115,6 +155,11 @@ router.post(
         });
       }
 
+      // ✅ Normalize towTruckTypeNeeded (safe: supports old + new)
+      const normalizedTowTruckTypeNeeded = towTruckTypeNeeded
+        ? normalizeTowTruckType(towTruckTypeNeeded)
+        : null;
+
       // ✅ Load PricingConfig
       let config = await PricingConfig.findOne();
       if (!config) config = await PricingConfig.create({});
@@ -125,13 +170,14 @@ router.post(
       if (!towTruckTypes || towTruckTypes.length === 0) {
         console.log("⚠️ towTruckTypes empty → setting defaults...");
 
+        // ✅ NEW preferred list (cheapest → most expensive)
         config.towTruckTypes = [
-          "Flatbed",
-          "TowTruck",
-          "Rollback",
-          "TowTruck-XL",
-          "TowTruck-XXL",
-          "Recovery",
+          "Hook & Chain",
+          "Wheel-Lift",
+          "Flatbed/Roll Back",
+          "Boom Trucks(With Crane)",
+          "Integrated / Wrecker",
+          "Heavy-Duty Rotator(Recovery)",
         ];
 
         await config.save();
@@ -147,14 +193,14 @@ router.post(
           : 0;
 
       // ✅ CASE 1: towTruckTypeNeeded provided → single preview
-      if (towTruckTypeNeeded) {
+      if (normalizedTowTruckTypeNeeded) {
         const pricing = await calculateJobPricing({
           roleNeeded,
           pickupLat,
           pickupLng,
           dropoffLat,
           dropoffLng,
-          towTruckTypeNeeded,
+          towTruckTypeNeeded: normalizedTowTruckTypeNeeded,
           vehicleType,
           distanceKm,
         });
@@ -163,7 +209,7 @@ router.post(
           roleNeeded,
           pickupLng,
           pickupLat,
-          towTruckTypeNeeded,
+          towTruckTypeNeeded: normalizedTowTruckTypeNeeded,
           vehicleType,
           excludedProviders: [],
           maxDistanceMeters: 20000,
@@ -185,13 +231,15 @@ router.post(
       const resultsByTowTruckType = {};
 
       for (const type of towTruckTypes) {
+        const normalizedType = normalizeTowTruckType(type);
+
         const pricing = await calculateJobPricing({
           roleNeeded,
           pickupLat,
           pickupLng,
           dropoffLat,
           dropoffLng,
-          towTruckTypeNeeded: type,
+          towTruckTypeNeeded: normalizedType,
           vehicleType,
           distanceKm,
         });
@@ -200,7 +248,7 @@ router.post(
           roleNeeded,
           pickupLng,
           pickupLat,
-          towTruckTypeNeeded: type,
+          towTruckTypeNeeded: normalizedType,
           vehicleType,
           excludedProviders: [],
           maxDistanceMeters: 20000,
@@ -291,11 +339,16 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
       });
     }
 
+    // ✅ Normalize towTruckTypeNeeded (safe: supports old + new)
+    const normalizedTowTruckTypeNeeded = towTruckTypeNeeded
+      ? normalizeTowTruckType(towTruckTypeNeeded)
+      : null;
+
     const providers = await findNearbyProviders({
       roleNeeded,
       pickupLng,
       pickupLat,
-      towTruckTypeNeeded,
+      towTruckTypeNeeded: normalizedTowTruckTypeNeeded,
       vehicleType,
       excludedProviders: [],
       maxDistanceMeters: 20000,
@@ -321,7 +374,7 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
       pickupLng,
       dropoffLat,
       dropoffLng,
-      towTruckTypeNeeded,
+      towTruckTypeNeeded: normalizedTowTruckTypeNeeded,
       vehicleType,
       distanceKm,
     });
@@ -341,7 +394,7 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
         ? { type: "Point", coordinates: [dropoffLng, dropoffLat] }
         : undefined,
       dropoffAddressText: hasDropoff ? dropoffAddressText : undefined,
-      towTruckTypeNeeded: towTruckTypeNeeded || null,
+      towTruckTypeNeeded: normalizedTowTruckTypeNeeded || null,
       vehicleType: vehicleType || null,
       customer: req.user._id,
       status: JOB_STATUSES.CREATED,
