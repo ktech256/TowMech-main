@@ -186,6 +186,10 @@ router.patch(
 /**
  * ✅ Provider updates online/offline + current location
  * PATCH /api/providers/me/status
+ *
+ * ✅ SAFETY ADDED:
+ * - Refuse ONLINE if request sends lat/lng [0,0]
+ * - Refuse ONLINE if no lat/lng sent AND stored location is missing or [0,0]
  */
 router.patch("/me/status", auth, async (req, res) => {
   try {
@@ -203,11 +207,71 @@ router.patch("/me/status", auth, async (req, res) => {
 
     if (!user.providerProfile) user.providerProfile = {};
 
-    // ✅ ALWAYS UPDATE LOCATION FIRST
-    if (lat !== undefined && lng !== undefined) {
+    // ✅ Determine stored coords (if any)
+    const storedCoords = user.providerProfile?.location?.coordinates;
+    const storedLng = Array.isArray(storedCoords) ? Number(storedCoords[0]) : null;
+    const storedLat = Array.isArray(storedCoords) ? Number(storedCoords[1]) : null;
+    const hasStoredLocation =
+      Array.isArray(storedCoords) &&
+      storedCoords.length === 2 &&
+      Number.isFinite(storedLng) &&
+      Number.isFinite(storedLat);
+
+    const isStoredZeroZero =
+      hasStoredLocation && storedLng === 0 && storedLat === 0;
+
+    // ✅ If lat/lng provided, validate they are numbers
+    const hasIncomingLatLng = lat !== undefined && lng !== undefined;
+    const incomingLat = hasIncomingLatLng ? Number(lat) : null;
+    const incomingLng = hasIncomingLatLng ? Number(lng) : null;
+
+    if (hasIncomingLatLng) {
+      if (!Number.isFinite(incomingLat) || !Number.isFinite(incomingLng)) {
+        return res.status(400).json({
+          message: "Invalid location coordinates",
+          lat,
+          lng,
+        });
+      }
+    }
+
+    // ✅ ENFORCE: refuse turning ONLINE without valid location (not [0,0])
+    if (typeof isOnline === "boolean" && isOnline === true) {
+      // 1) provider must be approved
+      const status = user.providerProfile?.verificationStatus || "PENDING";
+      if (status !== "APPROVED") {
+        await user.save();
+        return res.status(403).json({
+          message: "Provider must be verified by admin before going online",
+          verificationStatus: status,
+          providerProfile: user.providerProfile,
+        });
+      }
+
+      // 2) refuse if request explicitly sends [0,0]
+      if (hasIncomingLatLng && incomingLat === 0 && incomingLng === 0) {
+        return res.status(400).json({
+          message: "Cannot go ONLINE without a valid GPS location (lat/lng is 0,0).",
+        });
+      }
+
+      // 3) refuse if request does NOT send lat/lng AND stored location missing or [0,0]
+      if (!hasIncomingLatLng) {
+        if (!hasStoredLocation || isStoredZeroZero) {
+          return res.status(400).json({
+            message:
+              "Cannot go ONLINE without a valid GPS location. Please refresh location and try again.",
+            storedLocation: hasStoredLocation ? storedCoords : null,
+          });
+        }
+      }
+    }
+
+    // ✅ ALWAYS UPDATE LOCATION FIRST (if provided)
+    if (hasIncomingLatLng) {
       user.providerProfile.location = {
         type: "Point",
-        coordinates: [lng, lat],
+        coordinates: [incomingLng, incomingLat],
       };
     }
 
@@ -219,19 +283,6 @@ router.patch("/me/status", auth, async (req, res) => {
       user.providerProfile.carTypesSupported = carTypesSupported;
 
     if (typeof isOnline === "boolean") {
-      if (isOnline === true) {
-        const status = user.providerProfile?.verificationStatus || "PENDING";
-
-        if (status !== "APPROVED") {
-          await user.save();
-          return res.status(403).json({
-            message: "Provider must be verified by admin before going online",
-            verificationStatus: status,
-            providerProfile: user.providerProfile,
-          });
-        }
-      }
-
       user.providerProfile.isOnline = isOnline;
     }
 
