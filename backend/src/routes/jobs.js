@@ -562,16 +562,43 @@ router.get("/:id", auth, async (req, res) => {
       return res.status(403).json({ message: "Not allowed" });
     }
 
-    // ✅✅✅ DEBUG LOG (ADD THIS)
+    // ✅ Convert to plain object so we can safely inject extra fields
+    const safeJob = job.toObject({ virtuals: true });
+
+    // ✅ Extract provider location from assignedTo.providerProfile.location.coordinates = [lng, lat]
+    let providerLocation = null;
+    let providerLastSeenAt = null;
+
+    const coords = safeJob?.assignedTo?.providerProfile?.location?.coordinates;
+    if (Array.isArray(coords) && coords.length >= 2) {
+      const lng = Number(coords[0]);
+      const lat = Number(coords[1]);
+
+      if (Number.isFinite(lat) && Number.isFinite(lng) && !(lat === 0 && lng === 0)) {
+        // ✅ Inject in multiple formats so ANY Android model can read it
+        safeJob.assignedTo.lat = lat;
+        safeJob.assignedTo.lng = lng;
+
+        safeJob.assignedTo.location = { lat, lng };
+
+        providerLocation = safeJob.assignedTo.providerProfile.location;
+        providerLastSeenAt = safeJob.assignedTo.providerProfile.lastSeenAt || null;
+      }
+    }
+
+    // ✅ Helpful for tracking / debugging
+    safeJob.providerLocation = providerLocation;
+    safeJob.providerLastSeenAt = providerLastSeenAt;
+
     console.log("🛰️ GET /api/jobs/:id TRACKING DEBUG", {
-      jobId: job?._id?.toString(),
-      status: job?.status,
-      assignedToId: job?.assignedTo?._id?.toString?.() || job?.assignedTo?.toString?.(),
-      providerLocation: job?.assignedTo?.providerProfile?.location || null,
-      providerLastSeenAt: job?.assignedTo?.providerProfile?.lastSeenAt || null,
+      jobId: safeJob._id?.toString(),
+      status: safeJob.status,
+      assignedToId: safeJob.assignedTo?._id?.toString(),
+      providerLocation: safeJob.providerLocation,
+      providerLastSeenAt: safeJob.providerLastSeenAt,
     });
 
-    return res.status(200).json({ job });
+    return res.status(200).json({ job: safeJob });
   } catch (err) {
     console.error("❌ GET JOB ERROR:", err);
     return res.status(500).json({
