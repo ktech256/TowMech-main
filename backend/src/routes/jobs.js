@@ -432,14 +432,8 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
 
 /* ============================================================
    ✅✅✅ ADDITIONS (NO DELETIONS): CUSTOMER "MY JOBS" ROUTES
-   Fixes: 404 for GET /api/jobs/my/active and /api/jobs/my/history
-   Placed BEFORE "/:id" route to avoid path conflicts.
    ============================================================ */
 
-/**
- * ✅ CUSTOMER: ACTIVE JOBS
- * GET /api/jobs/my/active
- */
 router.get(
   "/my/active",
   auth,
@@ -459,7 +453,8 @@ router.get(
       })
         .sort({ createdAt: -1 })
         .populate("customer", "name email role phone")
-        .populate("assignedTo", "name email role phone providerProfile")
+        // ✅ include providerProfile in case it has location fields
+        .populate("assignedTo", "name email role phone providerProfile currentLocation location lastLocation")
         .limit(50);
 
       return res.status(200).json({ jobs });
@@ -473,10 +468,6 @@ router.get(
   }
 );
 
-/**
- * ✅ CUSTOMER: JOB HISTORY
- * GET /api/jobs/my/history
- */
 router.get(
   "/my/history",
   auth,
@@ -491,7 +482,7 @@ router.get(
       })
         .sort({ createdAt: -1 })
         .populate("customer", "name email role phone")
-        .populate("assignedTo", "name email role phone providerProfile")
+        .populate("assignedTo", "name email role phone providerProfile currentLocation location lastLocation")
         .limit(100);
 
       return res.status(200).json({ jobs });
@@ -505,10 +496,6 @@ router.get(
   }
 );
 
-/**
- * ✅ OPTIONAL ALIAS (keep old clients stable)
- * GET /api/jobs/customer/active
- */
 router.get(
   "/customer/active",
   auth,
@@ -528,7 +515,7 @@ router.get(
       })
         .sort({ createdAt: -1 })
         .populate("customer", "name email role phone")
-        .populate("assignedTo", "name email role phone providerProfile")
+        .populate("assignedTo", "name email role phone providerProfile currentLocation location lastLocation")
         .limit(50);
 
       return res.status(200).json({ jobs });
@@ -550,7 +537,8 @@ router.get("/:id", auth, async (req, res) => {
   try {
     const job = await Job.findById(req.params.id)
       .populate("customer", "name email role phone")
-      .populate("assignedTo", "name email role phone");
+      // ✅ include providerProfile + possible location fields (if your User schema contains them)
+      .populate("assignedTo", "name email role phone providerProfile currentLocation location lastLocation");
 
     if (!job) return res.status(404).json({ message: "Job not found" });
 
@@ -568,6 +556,7 @@ router.get("/:id", auth, async (req, res) => {
       return res.status(403).json({ message: "Not allowed" });
     }
 
+    // ✅ Return job exactly as before (virtuals now included from Job model)
     return res.status(200).json({ job });
   } catch (err) {
     console.error("❌ GET JOB ERROR:", err);

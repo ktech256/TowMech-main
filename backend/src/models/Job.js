@@ -124,11 +124,42 @@ const jobSchema = new mongoose.Schema(
       }
     ]
   },
-  { timestamps: true }
+  {
+    timestamps: true,
+
+    // ✅ IMPORTANT: include virtuals in API JSON output
+    toJSON: { virtuals: true },
+    toObject: { virtuals: true }
+  }
 );
 
 // ✅ Geo indexes
 jobSchema.index({ pickupLocation: '2dsphere' });
 jobSchema.index({ dropoffLocation: '2dsphere' });
+
+/**
+ * ✅ Virtuals for Android compatibility:
+ * Backend stores coordinates as [lng, lat]
+ * App expects pickupLat/pickupLng, dropoffLat/dropoffLng
+ */
+jobSchema.virtual('pickupLng').get(function () {
+  const c = this.pickupLocation?.coordinates;
+  return Array.isArray(c) && c.length >= 2 ? c[0] : null;
+});
+
+jobSchema.virtual('pickupLat').get(function () {
+  const c = this.pickupLocation?.coordinates;
+  return Array.isArray(c) && c.length >= 2 ? c[1] : null;
+});
+
+jobSchema.virtual('dropoffLng').get(function () {
+  const c = this.dropoffLocation?.coordinates;
+  return Array.isArray(c) && c.length >= 2 ? c[0] : null;
+});
+
+jobSchema.virtual('dropoffLat').get(function () {
+  const c = this.dropoffLocation?.coordinates;
+  return Array.isArray(c) && c.length >= 2 ? c[1] : null;
+});
 
 export default mongoose.model('Job', jobSchema);

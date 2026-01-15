@@ -19,6 +19,75 @@ const upload = multer({
 });
 
 /**
+ * ✅✅✅ NEW: Provider updates live location ONLY (high frequency)
+ * PATCH /api/providers/location
+ *
+ * Body: { lat: Number, lng: Number }
+ *
+ * ✅ Purpose:
+ * - Provider app can call this frequently (every 2-5 seconds) while online/active job
+ * - Customer tracking reads this from populated assignedTo.providerProfile.location
+ *
+ * ✅ Safety:
+ * - Reject [0,0]
+ * - Reject invalid numbers
+ * - Provider role required
+ */
+router.patch("/location", auth, async (req, res) => {
+  try {
+    const providerRoles = [USER_ROLES.MECHANIC, USER_ROLES.TOW_TRUCK];
+    if (!providerRoles.includes(req.user.role)) {
+      return res.status(403).json({ message: "Only providers can update location" });
+    }
+
+    const { lat, lng } = req.body || {};
+
+    const latitude = Number(lat);
+    const longitude = Number(lng);
+
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+      return res.status(400).json({
+        message: "Invalid location coordinates",
+        lat,
+        lng,
+      });
+    }
+
+    // Reject 0,0 so we never store garbage
+    if (latitude === 0 && longitude === 0) {
+      return res.status(400).json({
+        message: "Refused: cannot save 0,0 coordinates",
+      });
+    }
+
+    const user = await User.findById(req.user._id);
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    if (!user.providerProfile) user.providerProfile = {};
+
+    user.providerProfile.location = {
+      type: "Point",
+      coordinates: [longitude, latitude], // [lng, lat]
+    };
+
+    user.providerProfile.lastSeenAt = new Date();
+
+    await user.save();
+
+    return res.status(200).json({
+      message: "Location updated ✅",
+      location: user.providerProfile.location,
+      lastSeenAt: user.providerProfile.lastSeenAt,
+    });
+  } catch (err) {
+    return res.status(500).json({
+      message: "Could not update provider location",
+      error: err.message,
+    });
+  }
+});
+
+/**
  * ✅ Provider profile (fetch what they registered with)
  * GET /api/providers/me
  */
@@ -84,14 +153,6 @@ router.patch("/me", auth, async (req, res) => {
 /**
  * ✅✅✅ ADDED: Upload provider verification documents
  * PATCH /api/providers/me/documents
- *
- * multipart/form-data fields (match Android):
- *  - idDocument
- *  - license
- *  - vehicleProof
- *  - workshopProof
- *
- * ✅ Only allowed if provider is NOT APPROVED
  */
 router.patch(
   "/me/documents",
@@ -120,7 +181,6 @@ router.patch(
 
       const status = user.providerProfile.verificationStatus || "PENDING";
 
-      // ✅ upload only allowed if NOT approved
       if (status === "APPROVED") {
         return res.status(403).json({
           message: "Account already approved. Document upload disabled.",
@@ -159,7 +219,6 @@ router.patch(
       if (workshopProofUrl)
         user.providerProfile.verificationDocs.workshopProofUrl = workshopProofUrl;
 
-      // ✅ if previously rejected, resubmit => PENDING
       if (status === "REJECTED") {
         user.providerProfile.verificationStatus = "PENDING";
         user.providerProfile.verifiedAt = null;
@@ -186,10 +245,6 @@ router.patch(
 /**
  * ✅ Provider updates online/offline + current location
  * PATCH /api/providers/me/status
- *
- * ✅ SAFETY ADDED:
- * - Refuse ONLINE if request sends lat/lng [0,0]
- * - Refuse ONLINE if no lat/lng sent AND stored location is missing or [0,0]
  */
 router.patch("/me/status", auth, async (req, res) => {
   try {
@@ -207,7 +262,6 @@ router.patch("/me/status", auth, async (req, res) => {
 
     if (!user.providerProfile) user.providerProfile = {};
 
-    // ✅ Determine stored coords (if any)
     const storedCoords = user.providerProfile?.location?.coordinates;
     const storedLng = Array.isArray(storedCoords) ? Number(storedCoords[0]) : null;
     const storedLat = Array.isArray(storedCoords) ? Number(storedCoords[1]) : null;
@@ -220,7 +274,6 @@ router.patch("/me/status", auth, async (req, res) => {
     const isStoredZeroZero =
       hasStoredLocation && storedLng === 0 && storedLat === 0;
 
-    // ✅ If lat/lng provided, validate they are numbers
     const hasIncomingLatLng = lat !== undefined && lng !== undefined;
     const incomingLat = hasIncomingLatLng ? Number(lat) : null;
     const incomingLng = hasIncomingLatLng ? Number(lng) : null;
@@ -235,9 +288,7 @@ router.patch("/me/status", auth, async (req, res) => {
       }
     }
 
-    // ✅ ENFORCE: refuse turning ONLINE without valid location (not [0,0])
     if (typeof isOnline === "boolean" && isOnline === true) {
-      // 1) provider must be approved
       const status = user.providerProfile?.verificationStatus || "PENDING";
       if (status !== "APPROVED") {
         await user.save();
@@ -248,14 +299,12 @@ router.patch("/me/status", auth, async (req, res) => {
         });
       }
 
-      // 2) refuse if request explicitly sends [0,0]
       if (hasIncomingLatLng && incomingLat === 0 && incomingLng === 0) {
         return res.status(400).json({
           message: "Cannot go ONLINE without a valid GPS location (lat/lng is 0,0).",
         });
       }
 
-      // 3) refuse if request does NOT send lat/lng AND stored location missing or [0,0]
       if (!hasIncomingLatLng) {
         if (!hasStoredLocation || isStoredZeroZero) {
           return res.status(400).json({
@@ -267,7 +316,6 @@ router.patch("/me/status", auth, async (req, res) => {
       }
     }
 
-    // ✅ ALWAYS UPDATE LOCATION FIRST (if provided)
     if (hasIncomingLatLng) {
       user.providerProfile.location = {
         type: "Point",
@@ -362,9 +410,6 @@ router.get("/jobs/broadcasted/:jobId", auth, async (req, res) => {
 /**
  * ✅ Provider accepts job (first accept wins)
  * PATCH /api/providers/jobs/:jobId/accept
- *
- * ✅ NEW: Notify all other broadcasted providers to dismiss this job
- * (DATA-only push via sendPushToManyUsers)
  */
 router.patch("/jobs/:jobId/accept", auth, async (req, res) => {
   try {
@@ -394,7 +439,6 @@ router.patch("/jobs/:jobId/accept", auth, async (req, res) => {
       });
     }
 
-    // ✅ Notify OTHER providers (everyone who had it, except the accepter)
     const otherProviders = (job.broadcastedTo || [])
       .map((id) => id.toString())
       .filter((id) => id !== req.user._id.toString());
@@ -419,7 +463,7 @@ router.patch("/jobs/:jobId/accept", auth, async (req, res) => {
 });
 
 /**
- * ✅ Provider rejects job (does not accept)
+ * ✅ Provider rejects job
  * PATCH /api/providers/jobs/:jobId/reject
  */
 router.patch("/jobs/:jobId/reject", auth, async (req, res) => {
@@ -508,7 +552,6 @@ router.get("/jobs/history", auth, async (req, res) => {
 /**
  * ✅ Provider fetches a single job by id (assigned to them)
  * GET /api/providers/jobs/:jobId
- * ✅ ObjectId regex prevents conflicts with /assigned and /history
  */
 router.get("/jobs/:jobId([0-9a-fA-F]{24})", auth, async (req, res) => {
   try {

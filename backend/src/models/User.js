@@ -14,14 +14,8 @@ export const USER_ROLES = {
 
 /**
  * ✅ PROVIDER TYPES (TowTruck types)
- * ✅ MUST MATCH PRICING LOGIC EXACTLY
- *
- * IMPORTANT:
- * - We add the NEW preferred names (cheapest → expensive) FIRST for alignment.
- * - We KEEP legacy names for backward compatibility so existing data and old clients won't break.
  */
 export const TOW_TRUCK_TYPES = [
-  // ✅ NEW preferred names (cheapest → most expensive)
   "Hook & Chain",
   "Wheel-Lift",
   "Flatbed/Roll Back",
@@ -29,13 +23,12 @@ export const TOW_TRUCK_TYPES = [
   "Integrated / Wrecker",
   "Heavy-Duty Rotator(Recovery)",
 
-  // ✅ Legacy values (keep for backward support)
   "TowTruck",
   "Rollback",
   "TowTruck-XL",
   "TowTruck-XXL",
   "Recovery",
-  "Flatbed", // ✅ keep flatbed for backward support
+  "Flatbed",
 ];
 
 export const VEHICLE_TYPES = [
@@ -48,33 +41,22 @@ export const VEHICLE_TYPES = [
   "Motorcycle",
 ];
 
-/**
- * ✅ Normalize phone for consistent login + uniqueness
- */
 function normalizePhone(phone) {
   if (!phone) return "";
   let p = String(phone).trim();
 
-  // remove spaces and separators
   p = p.replace(/\s+/g, "");
   p = p.replace(/[-()]/g, "");
 
-  // convert 00 prefix → +
   if (p.startsWith("00")) p = "+" + p.slice(2);
 
   return p;
 }
 
-/**
- * ✅ Admin Permissions Schema (ONLY for Admin role)
- * ✅ MUST MATCH DASHBOARD PERMISSION KEYS
- */
 const permissionsSchema = new mongoose.Schema(
   {
-    // ✅ Overview
     canViewOverview: { type: Boolean, default: false },
 
-    // ✅ Core admin
     canVerifyProviders: { type: Boolean, default: false },
     canApprovePayments: { type: Boolean, default: false },
     canRefundPayments: { type: Boolean, default: false },
@@ -82,27 +64,20 @@ const permissionsSchema = new mongoose.Schema(
     canManageJobs: { type: Boolean, default: false },
     canBroadcastNotifications: { type: Boolean, default: false },
 
-    // ✅ Safety + settings
     canManageSafety: { type: Boolean, default: false },
     canManageSettings: { type: Boolean, default: false },
 
-    // ✅ Zones + Service Categories
     canManageZones: { type: Boolean, default: false },
     canManageServiceCategories: { type: Boolean, default: false },
 
-    // ✅ Analytics + pricing
     canViewAnalytics: { type: Boolean, default: false },
     canManagePricing: { type: Boolean, default: false },
 
-    // ✅ Legacy keys (safe to keep)
     canViewStats: { type: Boolean, default: false },
   },
   { _id: false }
 );
 
-/**
- * ✅ Account Status Schema
- */
 const accountStatusSchema = new mongoose.Schema(
   {
     isSuspended: { type: Boolean, default: false },
@@ -135,9 +110,6 @@ const accountStatusSchema = new mongoose.Schema(
   { _id: false }
 );
 
-/**
- * ✅ Provider Profile Schema
- */
 const providerProfileSchema = new mongoose.Schema(
   {
     isOnline: { type: Boolean, default: false },
@@ -148,10 +120,8 @@ const providerProfileSchema = new mongoose.Schema(
       coordinates: { type: [Number], default: [0, 0] },
     },
 
-    // ✅ TowTruck providers select from these
     towTruckTypes: [{ type: String, enum: TOW_TRUCK_TYPES }],
 
-    // ✅ Mechanic providers may use this later
     carTypesSupported: [{ type: String, enum: VEHICLE_TYPES }],
 
     fcmToken: { type: String, default: null },
@@ -179,9 +149,6 @@ const providerProfileSchema = new mongoose.Schema(
   { _id: false }
 );
 
-/**
- * ✅ Rating Stats Schema (NEW)
- */
 const ratingStatsSchema = new mongoose.Schema(
   {
     asProvider: {
@@ -196,20 +163,13 @@ const ratingStatsSchema = new mongoose.Schema(
   { _id: false }
 );
 
-/**
- * ✅ USER SCHEMA
- */
 const userSchema = new mongoose.Schema(
   {
-    // ✅ Basic identity
     name: { type: String, required: true },
 
     firstName: { type: String, required: true },
     lastName: { type: String, required: true },
 
-    /**
-     * ✅ Phone is now the PRIMARY LOGIN identifier
-     */
     phone: {
       type: String,
       required: true,
@@ -230,7 +190,6 @@ const userSchema = new mongoose.Schema(
     passportNumber: { type: String, default: null },
     country: { type: String, default: null },
 
-    // ✅ Auth
     email: { type: String, required: true, unique: true, lowercase: true },
     password: { type: String, required: true },
 
@@ -247,7 +206,6 @@ const userSchema = new mongoose.Schema(
 
     permissions: { type: permissionsSchema, default: null },
 
-    // ✅ NEW rating stats field
     ratingStats: { type: ratingStatsSchema, default: () => ({}) },
 
     accountStatus: { type: accountStatusSchema, default: () => ({}) },
@@ -257,17 +215,11 @@ const userSchema = new mongoose.Schema(
 
 userSchema.index({ "providerProfile.location": "2dsphere" });
 
-/**
- * ✅ Ensure phone normalization happens even if set() isn't triggered
- */
 userSchema.pre("validate", function (next) {
   if (this.phone) this.phone = normalizePhone(this.phone);
   next();
 });
 
-/**
- * ✅ Hash password
- */
 userSchema.pre("save", async function (next) {
   if (!this.isModified("password")) return next();
 
@@ -276,16 +228,10 @@ userSchema.pre("save", async function (next) {
   next();
 });
 
-/**
- * ✅ Compare password
- */
 userSchema.methods.matchPassword = async function (enteredPassword) {
   return bcrypt.compare(enteredPassword, this.password);
 };
 
-/**
- * ✅ Safe JSON output with role-based visibility
- */
 userSchema.methods.toSafeJSON = function (viewerRole) {
   const obj = this.toObject();
 
@@ -295,13 +241,11 @@ userSchema.methods.toSafeJSON = function (viewerRole) {
 
   const status = obj.accountStatus || {};
 
-  // ❌ Customers and Providers see no accountStatus
   if (![USER_ROLES.ADMIN, USER_ROLES.SUPER_ADMIN].includes(viewerRole)) {
     delete obj.accountStatus;
     return obj;
   }
 
-  // ✅ Admin sees LIMITED fields + reasons
   if (viewerRole === USER_ROLES.ADMIN) {
     obj.accountStatus = {
       isSuspended: status.isSuspended,
@@ -315,7 +259,6 @@ userSchema.methods.toSafeJSON = function (viewerRole) {
     return obj;
   }
 
-  // ✅ SuperAdmin sees FULL accountStatus
   obj.accountStatus = status;
   return obj;
 };
