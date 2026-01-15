@@ -562,6 +562,15 @@ router.get("/:id", auth, async (req, res) => {
       return res.status(403).json({ message: "Not allowed" });
     }
 
+    // ✅✅✅ DEBUG LOG (ADD THIS)
+    console.log("🛰️ GET /api/jobs/:id TRACKING DEBUG", {
+      jobId: job?._id?.toString(),
+      status: job?.status,
+      assignedToId: job?.assignedTo?._id?.toString?.() || job?.assignedTo?.toString?.(),
+      providerLocation: job?.assignedTo?.providerProfile?.location || null,
+      providerLastSeenAt: job?.assignedTo?.providerProfile?.lastSeenAt || null,
+    });
+
     return res.status(200).json({ job });
   } catch (err) {
     console.error("❌ GET JOB ERROR:", err);
