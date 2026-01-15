@@ -155,22 +155,18 @@ router.post(
         });
       }
 
-      // ✅ Normalize towTruckTypeNeeded (safe: supports old + new)
       const normalizedTowTruckTypeNeeded = towTruckTypeNeeded
         ? normalizeTowTruckType(towTruckTypeNeeded)
         : null;
 
-      // ✅ Load PricingConfig
       let config = await PricingConfig.findOne();
       if (!config) config = await PricingConfig.create({});
 
       let towTruckTypes = config.towTruckTypes || [];
 
-      // ✅ Ensure towTruckTypes never empty
       if (!towTruckTypes || towTruckTypes.length === 0) {
         console.log("⚠️ towTruckTypes empty → setting defaults...");
 
-        // ✅ NEW preferred list (cheapest → most expensive)
         config.towTruckTypes = [
           "Hook & Chain",
           "Wheel-Lift",
@@ -184,7 +180,6 @@ router.post(
         towTruckTypes = config.towTruckTypes;
       }
 
-      // ✅ Compute distance (TowTruck jobs only)
       const distanceKm =
         roleNeeded === USER_ROLES.TOW_TRUCK &&
         dropoffLat !== undefined &&
@@ -192,7 +187,6 @@ router.post(
           ? haversineDistanceKm(pickupLat, pickupLng, dropoffLat, dropoffLng)
           : 0;
 
-      // ✅ CASE 1: towTruckTypeNeeded provided → single preview
       if (normalizedTowTruckTypeNeeded) {
         const pricing = await calculateJobPricing({
           roleNeeded,
@@ -227,7 +221,6 @@ router.post(
         });
       }
 
-      // ✅ CASE 2: towTruckTypeNeeded missing → return all types
       const resultsByTowTruckType = {};
 
       for (const type of towTruckTypes) {
@@ -339,7 +332,6 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
       });
     }
 
-    // ✅ Normalize towTruckTypeNeeded (safe: supports old + new)
     const normalizedTowTruckTypeNeeded = towTruckTypeNeeded
       ? normalizeTowTruckType(towTruckTypeNeeded)
       : null;
@@ -434,6 +426,10 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
    ✅✅✅ ADDITIONS (NO DELETIONS): CUSTOMER "MY JOBS" ROUTES
    ============================================================ */
 
+/**
+ * ✅ CUSTOMER: ACTIVE JOBS
+ * GET /api/jobs/my/active
+ */
 router.get(
   "/my/active",
   auth,
@@ -453,8 +449,8 @@ router.get(
       })
         .sort({ createdAt: -1 })
         .populate("customer", "name email role phone")
-        // ✅ include providerProfile in case it has location fields
-        .populate("assignedTo", "name email role phone providerProfile currentLocation location lastLocation")
+        // ✅ FIX: include providerProfile so customer can read GPS coordinates
+        .populate("assignedTo", "name email role phone providerProfile")
         .limit(50);
 
       return res.status(200).json({ jobs });
@@ -468,6 +464,10 @@ router.get(
   }
 );
 
+/**
+ * ✅ CUSTOMER: JOB HISTORY
+ * GET /api/jobs/my/history
+ */
 router.get(
   "/my/history",
   auth,
@@ -482,7 +482,8 @@ router.get(
       })
         .sort({ createdAt: -1 })
         .populate("customer", "name email role phone")
-        .populate("assignedTo", "name email role phone providerProfile currentLocation location lastLocation")
+        // ✅ FIX: include providerProfile (for completed jobs too)
+        .populate("assignedTo", "name email role phone providerProfile")
         .limit(100);
 
       return res.status(200).json({ jobs });
@@ -496,6 +497,10 @@ router.get(
   }
 );
 
+/**
+ * ✅ OPTIONAL ALIAS (keep old clients stable)
+ * GET /api/jobs/customer/active
+ */
 router.get(
   "/customer/active",
   auth,
@@ -515,7 +520,8 @@ router.get(
       })
         .sort({ createdAt: -1 })
         .populate("customer", "name email role phone")
-        .populate("assignedTo", "name email role phone providerProfile currentLocation location lastLocation")
+        // ✅ FIX: include providerProfile so GPS is available
+        .populate("assignedTo", "name email role phone providerProfile")
         .limit(50);
 
       return res.status(200).json({ jobs });
@@ -537,8 +543,8 @@ router.get("/:id", auth, async (req, res) => {
   try {
     const job = await Job.findById(req.params.id)
       .populate("customer", "name email role phone")
-      // ✅ include providerProfile + possible location fields (if your User schema contains them)
-      .populate("assignedTo", "name email role phone providerProfile currentLocation location lastLocation");
+      // ✅ FIX: include providerProfile.location for live tracking
+      .populate("assignedTo", "name email role phone providerProfile");
 
     if (!job) return res.status(404).json({ message: "Job not found" });
 
@@ -556,7 +562,6 @@ router.get("/:id", auth, async (req, res) => {
       return res.status(403).json({ message: "Not allowed" });
     }
 
-    // ✅ Return job exactly as before (virtuals now included from Job model)
     return res.status(200).json({ job });
   } catch (err) {
     console.error("❌ GET JOB ERROR:", err);
@@ -695,7 +700,7 @@ router.post("/rate", auth, async (req, res) => {
         return res.status(400).json({ message: "Cannot rate: no provider assigned" });
       }
       targetUserId = job.assignedTo._id;
-      targetRole = job.assignedTo.role; // TowTruck / Mechanic
+      targetRole = job.assignedTo.role;
     } else {
       if (!job.customer) {
         return res.status(400).json({ message: "Cannot rate: missing job customer" });
@@ -704,7 +709,6 @@ router.post("/rate", auth, async (req, res) => {
       targetRole = USER_ROLES.CUSTOMER;
     }
 
-    // ✅ prevent duplicates (schema uses job+rater unique)
     const existing = await Rating.findOne({ job: job._id, rater: me._id });
     if (existing) return res.status(409).json({ message: "You already rated this job" });
 
