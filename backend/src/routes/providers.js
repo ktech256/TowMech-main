@@ -37,6 +37,13 @@ router.patch("/location", auth, async (req, res) => {
   try {
     const { lat, lng } = req.body || {};
 
+    // ✅✅✅ ADDED LOG (so you can confirm hits in Render logs)
+    console.log("📍 /api/providers/location HIT", {
+      userId: req.user?._id?.toString(),
+      lat,
+      lng,
+    });
+
     const providerRoles = [USER_ROLES.MECHANIC, USER_ROLES.TOW_TRUCK];
     if (!providerRoles.includes(req.user.role)) {
       return res.status(403).json({ message: "Only providers can update location" });
@@ -74,7 +81,7 @@ router.patch("/location", auth, async (req, res) => {
 
     await user.save();
 
-    // ✅ Add log so you can confirm hits in Render logs
+    // ✅ existing log (keep)
     console.log("📍 Provider location updated:", user._id.toString(), latitude, longitude);
 
     return res.status(200).json({
@@ -98,9 +105,7 @@ router.get("/me", auth, async (req, res) => {
   try {
     const providerRoles = [USER_ROLES.MECHANIC, USER_ROLES.TOW_TRUCK];
     if (!providerRoles.includes(req.user.role)) {
-      return res
-        .status(403)
-        .json({ message: "Only providers can view this profile" });
+      return res.status(403).json({ message: "Only providers can view this profile" });
     }
 
     const user = await User.findById(req.user._id).select(
@@ -126,9 +131,7 @@ router.patch("/me", auth, async (req, res) => {
   try {
     const providerRoles = [USER_ROLES.MECHANIC, USER_ROLES.TOW_TRUCK];
     if (!providerRoles.includes(req.user.role)) {
-      return res
-        .status(403)
-        .json({ message: "Only providers can update this profile" });
+      return res.status(403).json({ message: "Only providers can update this profile" });
     }
 
     const { email, phone } = req.body;
@@ -170,9 +173,7 @@ router.patch(
     try {
       const providerRoles = [USER_ROLES.MECHANIC, USER_ROLES.TOW_TRUCK];
       if (!providerRoles.includes(req.user.role)) {
-        return res
-          .status(403)
-          .json({ message: "Only providers can upload documents" });
+        return res.status(403).json({ message: "Only providers can upload documents" });
       }
 
       const user = await User.findById(req.user._id);
@@ -215,8 +216,7 @@ router.patch(
 
       if (idDocumentUrl)
         user.providerProfile.verificationDocs.idDocumentUrl = idDocumentUrl;
-      if (licenseUrl)
-        user.providerProfile.verificationDocs.licenseUrl = licenseUrl;
+      if (licenseUrl) user.providerProfile.verificationDocs.licenseUrl = licenseUrl;
       if (vehicleProofUrl)
         user.providerProfile.verificationDocs.vehicleProofUrl = vehicleProofUrl;
       if (workshopProofUrl)
@@ -255,9 +255,7 @@ router.patch("/me/status", auth, async (req, res) => {
 
     const providerRoles = [USER_ROLES.MECHANIC, USER_ROLES.TOW_TRUCK];
     if (!providerRoles.includes(req.user.role)) {
-      return res
-        .status(403)
-        .json({ message: "Only service providers can update status" });
+      return res.status(403).json({ message: "Only service providers can update status" });
     }
 
     const user = await User.findById(req.user._id);
@@ -274,8 +272,7 @@ router.patch("/me/status", auth, async (req, res) => {
       Number.isFinite(storedLng) &&
       Number.isFinite(storedLat);
 
-    const isStoredZeroZero =
-      hasStoredLocation && storedLng === 0 && storedLat === 0;
+    const isStoredZeroZero = hasStoredLocation && storedLng === 0 && storedLat === 0;
 
     const hasIncomingLatLng = lat !== undefined && lng !== undefined;
     const incomingLat = hasIncomingLatLng ? Number(lat) : null;
@@ -328,8 +325,7 @@ router.patch("/me/status", auth, async (req, res) => {
 
     user.providerProfile.lastSeenAt = new Date();
 
-    if (Array.isArray(towTruckTypes))
-      user.providerProfile.towTruckTypes = towTruckTypes;
+    if (Array.isArray(towTruckTypes)) user.providerProfile.towTruckTypes = towTruckTypes;
     if (Array.isArray(carTypesSupported))
       user.providerProfile.carTypesSupported = carTypesSupported;
 
@@ -359,9 +355,7 @@ router.get("/jobs/broadcasted", auth, async (req, res) => {
   try {
     const providerRoles = [USER_ROLES.MECHANIC, USER_ROLES.TOW_TRUCK];
     if (!providerRoles.includes(req.user.role)) {
-      return res
-        .status(403)
-        .json({ message: "Only providers can view broadcasted jobs" });
+      return res.status(403).json({ message: "Only providers can view broadcasted jobs" });
     }
 
     const jobs = await Job.find({
@@ -389,9 +383,7 @@ router.get("/jobs/broadcasted/:jobId", auth, async (req, res) => {
   try {
     const providerRoles = [USER_ROLES.MECHANIC, USER_ROLES.TOW_TRUCK];
     if (!providerRoles.includes(req.user.role)) {
-      return res
-        .status(403)
-        .json({ message: "Only providers can view broadcasted jobs" });
+      return res.status(403).json({ message: "Only providers can view broadcasted jobs" });
     }
 
     const job = await Job.findOne({
@@ -401,8 +393,7 @@ router.get("/jobs/broadcasted/:jobId", auth, async (req, res) => {
       broadcastedTo: req.user._id,
     });
 
-    if (!job)
-      return res.status(404).json({ message: "Job not found or not available" });
+    if (!job) return res.status(404).json({ message: "Job not found or not available" });
 
     return res.status(200).json(job);
   } catch (err) {
