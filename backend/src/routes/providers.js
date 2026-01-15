@@ -19,7 +19,7 @@ const upload = multer({
 });
 
 /**
- * ✅✅✅ NEW: Provider updates live location ONLY (high frequency)
+ * ✅ Provider updates current GPS location (for customer tracking)
  * PATCH /api/providers/location
  *
  * Body: { lat: Number, lng: Number }
@@ -35,12 +35,12 @@ const upload = multer({
  */
 router.patch("/location", auth, async (req, res) => {
   try {
+    const { lat, lng } = req.body || {};
+
     const providerRoles = [USER_ROLES.MECHANIC, USER_ROLES.TOW_TRUCK];
     if (!providerRoles.includes(req.user.role)) {
       return res.status(403).json({ message: "Only providers can update location" });
     }
-
-    const { lat, lng } = req.body || {};
 
     const latitude = Number(lat);
     const longitude = Number(lng);
@@ -56,7 +56,7 @@ router.patch("/location", auth, async (req, res) => {
     // Reject 0,0 so we never store garbage
     if (latitude === 0 && longitude === 0) {
       return res.status(400).json({
-        message: "Refused: cannot save 0,0 coordinates",
+        message: "Invalid GPS (0,0) refused",
       });
     }
 
@@ -73,6 +73,9 @@ router.patch("/location", auth, async (req, res) => {
     user.providerProfile.lastSeenAt = new Date();
 
     await user.save();
+
+    // ✅ Add log so you can confirm hits in Render logs
+    console.log("📍 Provider location updated:", user._id.toString(), latitude, longitude);
 
     return res.status(200).json({
       message: "Location updated ✅",
