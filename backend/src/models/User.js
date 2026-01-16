@@ -145,6 +145,10 @@ const providerProfileSchema = new mongoose.Schema(
       ref: "User",
       default: null,
     },
+
+    // ✅ NEW: session enforcement (single device login)
+    sessionId: { type: String, default: null },
+    sessionIssuedAt: { type: Date, default: null },
   },
   { _id: false }
 );
@@ -238,6 +242,12 @@ userSchema.methods.toSafeJSON = function (viewerRole) {
   delete obj.password;
   delete obj.otpCode;
   delete obj.otpExpiresAt;
+
+  // ✅ hide provider sessionId from all API responses
+  if (obj.providerProfile) {
+    delete obj.providerProfile.sessionId;
+    delete obj.providerProfile.sessionIssuedAt;
+  }
 
   const status = obj.accountStatus || {};
 

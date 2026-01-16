@@ -15,9 +15,11 @@ if (!process.env.JWT_SECRET) {
   console.error("❌ JWT_SECRET is missing in environment variables");
 }
 
-// ✅ Helper: Generate JWT token
-const generateToken = (userId, role) =>
-  jwt.sign({ id: userId, role }, process.env.JWT_SECRET, { expiresIn: "7d" });
+// ✅ Helper: Generate JWT token (now includes sid to prevent multi-device login)
+const generateToken = (userId, role, sessionId = null) =>
+  jwt.sign({ id: userId, role, sid: sessionId }, process.env.JWT_SECRET, {
+    expiresIn: "7d",
+  });
 
 /**
  * ✅ Normalize phone for consistent login + uniqueness
@@ -32,34 +34,26 @@ function normalizePhone(phone) {
   // If someone sends "00.." convert to +..
   if (p.startsWith("00")) p = "+" + p.slice(2);
 
-  // IMPORTANT:
-  // Do NOT force +27 here unless you're 100% sure all numbers are SA & stored with +27.
-  // Your DB must match whatever normalization produces.
   return p;
 }
 
 /**
  * ✅ build multiple phone candidates to match DB formats
- * Fixes Render login failures when DB stores +27 but user types 07... (or vice versa)
  */
 function buildPhoneCandidates(phone) {
   const p = normalizePhone(phone);
   const candidates = new Set();
   if (!p) return [];
 
-  // as entered/normalized
   candidates.add(p);
 
-  // if starts with +, also try without +
   if (p.startsWith("+")) candidates.add(p.slice(1));
 
-  // SA local: 0XXXXXXXXX => +27XXXXXXXXX and 27XXXXXXXXX
   if (/^0\d{9}$/.test(p)) {
     candidates.add("+27" + p.slice(1));
     candidates.add("27" + p.slice(1));
   }
 
-  // if user enters 27XXXXXXXXX, also try +27XXXXXXXXX
   if (/^27\d{9}$/.test(p)) {
     candidates.add("+" + p);
   }
@@ -77,7 +71,6 @@ async function sendOtpSms(phone, otpCode, purpose = "OTP") {
 
   const safePhone = normalizePhone(phone);
 
-  // ✅ If SMS provider not configured → fallback to console (dev mode)
   if (!sid || !token || !from) {
     console.log("⚠️ TWILIO NOT CONFIGURED → SMS NOT SENT");
     console.log(`📲 ${purpose} SHOULD HAVE BEEN SENT TO:`, safePhone, "| OTP:", otpCode);
@@ -136,11 +129,6 @@ function isValidPassport(passport) {
 
 /**
  * ✅ Helper: Normalize towTruckTypes
- *
- * IMPORTANT:
- * - Accept NEW preferred names (cheapest → expensive)
- * - Still accept LEGACY inputs so existing apps/providers don’t break
- * - Output must match User.js TOW_TRUCK_TYPES enum values
  */
 function normalizeTowTruckTypes(input) {
   if (!input) return [];
@@ -152,9 +140,7 @@ function normalizeTowTruckTypes(input) {
     .map((x) => {
       const lower = x.toLowerCase();
 
-      // ✅ NEW preferred names + common variants
       if (lower.includes("hook") && lower.includes("chain")) return "Hook & Chain";
-
       if (lower === "wheel-lift" || lower === "wheel lift") return "Wheel-Lift";
 
       if (
@@ -167,19 +153,16 @@ function normalizeTowTruckTypes(input) {
         return "Flatbed/Roll Back";
 
       if (lower.includes("boom")) return "Boom Trucks(With Crane)";
-
       if (lower.includes("integrated") || lower.includes("wrecker")) return "Integrated / Wrecker";
-
       if (lower.includes("rotator") || lower.includes("heavy-duty") || lower === "recovery")
         return "Heavy-Duty Rotator(Recovery)";
 
-      // ✅ Legacy explicit values (keep as-is so old DB values remain valid)
       if (lower === "towtruck") return "TowTruck";
       if (lower === "towtruck-xl" || lower === "towtruck xl") return "TowTruck-XL";
       if (lower === "towtruck-xxl" || lower === "towtruck xxl") return "TowTruck-XXL";
-      if (lower === "flatbed") return "Flatbed"; // legacy flatbed enum value
-      if (lower === "rollback") return "Rollback"; // legacy rollback enum value
-      if (lower === "recovery") return "Recovery"; // legacy recovery value
+      if (lower === "flatbed") return "Flatbed";
+      if (lower === "rollback") return "Rollback";
+      if (lower === "recovery") return "Recovery";
 
       return x;
     });
@@ -194,6 +177,13 @@ async function generateAndSaveOtp(user, { minutes = 10 } = {}) {
   user.otpExpiresAt = new Date(Date.now() + minutes * 60 * 1000);
   await user.save();
   return otpCode;
+}
+
+/**
+ * ✅ Helper: Only providers get single-device session enforcement
+ */
+function isProviderRole(role) {
+  return role === USER_ROLES.TOW_TRUCK || role === USER_ROLES.MECHANIC;
 }
 
 /**
@@ -334,6 +324,9 @@ router.post("/register", async (req, res) => {
               towTruckTypes: role === USER_ROLES.TOW_TRUCK ? req.body.towTruckTypes : [],
               isOnline: false,
               verificationStatus: "PENDING",
+              // ✅ session fields (no session until verify-otp)
+              sessionId: null,
+              sessionIssuedAt: null,
             }
           : undefined,
     });
@@ -349,7 +342,7 @@ router.post("/register", async (req, res) => {
 });
 
 /**
- * ✅ Login user (PHONE + PASSWORD) → ALWAYS OTP (including Admin)
+ * ✅ Login user (PHONE + PASSWORD) → ALWAYS OTP
  * POST /api/auth/login
  */
 router.post("/login", async (req, res) => {
@@ -363,7 +356,6 @@ router.post("/login", async (req, res) => {
       return res.status(400).json({ message: "phone and password are required" });
     }
 
-    // ✅ Try multiple phone formats
     const phoneCandidates = buildPhoneCandidates(normalizedPhone);
 
     const user = await User.findOne({ phone: { $in: phoneCandidates } });
@@ -372,7 +364,6 @@ router.post("/login", async (req, res) => {
     const isMatch = await user.matchPassword(password);
     if (!isMatch) return res.status(401).json({ message: "Invalid credentials" });
 
-    // ✅ ALWAYS OTP (admins included)
     const otpCode = await generateAndSaveOtp(user, { minutes: 10 });
 
     console.log("✅ OTP GENERATED FOR:", user.phone, "| OTP:", otpCode);
@@ -381,7 +372,6 @@ router.post("/login", async (req, res) => {
       await sendOtpSms(user.phone, otpCode, "OTP");
     } catch (smsErr) {
       console.error("❌ SMS OTP SEND FAILED:", smsErr.message);
-      // still allow OTP verification if SMS fails (use debug)
     }
 
     const debugEnabled = String(process.env.ENABLE_OTP_DEBUG).toLowerCase() === "true";
@@ -425,11 +415,36 @@ router.post("/verify-otp", async (req, res) => {
       return res.status(401).json({ message: "OTP expired" });
     }
 
+    // ✅ clear OTP
     user.otpCode = null;
     user.otpExpiresAt = null;
+
+    // ✅ SINGLE DEVICE ENFORCEMENT: Only for providers (TowTruck/Mechanic)
+    let sessionId = null;
+
+    if (isProviderRole(user.role)) {
+      // ensure providerProfile exists for older accounts
+      if (!user.providerProfile) {
+        user.providerProfile = {
+          isOnline: false,
+          verificationStatus: "PENDING",
+          location: { type: "Point", coordinates: [0, 0] },
+          towTruckTypes: [],
+        };
+      }
+
+      // generate new session id -> old device becomes invalid
+      sessionId = crypto.randomBytes(24).toString("hex");
+      user.providerProfile.sessionId = sessionId;
+      user.providerProfile.sessionIssuedAt = new Date();
+
+      // OPTIONAL safety: when session changes, force offline
+      user.providerProfile.isOnline = false;
+    }
+
     await user.save();
 
-    const token = generateToken(user._id, user.role);
+    const token = generateToken(user._id, user.role, sessionId);
 
     return res.status(200).json({
       message: "OTP verified ✅",
@@ -526,8 +541,6 @@ router.post("/reset-password", async (req, res) => {
 /**
  * ✅ Get logged-in user profile
  * GET /api/auth/me
- *
- * Works for Customer + Provider + Admin (any logged in user)
  */
 router.get("/me", auth, async (req, res) => {
   try {
