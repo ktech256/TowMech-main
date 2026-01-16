@@ -8,6 +8,11 @@ import admin, { initFirebase } from "../config/firebase.js";
 const router = express.Router();
 
 /**
+ * ✅ Must match Android NotificationChannels.PROVIDER_JOBS_CHANNEL_ID
+ */
+const ANDROID_CHANNEL_ID = "provider_jobs_channel_v2";
+
+/**
  * ✅ Admin broadcast notification
  * POST /api/admin/notifications/broadcast
  */
@@ -70,11 +75,24 @@ router.post(
       }
 
       // ✅ Send push notification (multicast)
+      // NOTE: include BOTH notification (heads-up) + data (your Android service reads data)
       const payload = {
         tokens,
+
         notification: { title, body },
+
+        data: {
+          title: String(title),
+          body: String(body),
+          open: "admin_broadcast",
+          type: "admin_broadcast",
+        },
+
         android: {
           priority: "high",
+          notification: {
+            channelId: ANDROID_CHANNEL_ID,
+          },
         },
       };
 
@@ -100,7 +118,10 @@ router.post(
 
         const result = await User.updateMany(
           {
-            $or: [{ fcmToken: { $in: deadTokens } }, { "providerProfile.fcmToken": { $in: deadTokens } }],
+            $or: [
+              { fcmToken: { $in: deadTokens } },
+              { "providerProfile.fcmToken": { $in: deadTokens } },
+            ],
           },
           {
             $set: {

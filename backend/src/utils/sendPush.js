@@ -32,21 +32,15 @@ function getUserFcmToken(user) {
 
 /**
  * ✅ Must match Android NotificationChannels.PROVIDER_JOBS_CHANNEL_ID
- * IMPORTANT:
- * - Heads-up + sound in Android 8+ depends on this channel settings on the phone.
+ * Your Android is: provider_jobs_channel_v2
  */
-const ANDROID_CHANNEL_ID = "provider_jobs_channel";
+const ANDROID_CHANNEL_ID = "provider_jobs_channel_v2";
 
 /**
  * ✅ Send push notification to a single user (NOTIFICATION + DATA)
  *
  * - notification => Heads-up in background/killed
  * - data         => jobId/open/type etc
- *
- * data can include:
- *  - open: "job_requests"
- *  - jobId: "..."
- *  - type: "job_request"
  */
 export const sendPushToUser = async ({ userId, title, body, data = {} }) => {
   initFirebase();
@@ -79,9 +73,6 @@ export const sendPushToUser = async ({ userId, title, body, data = {} }) => {
       priority: "high",
       notification: {
         channelId: ANDROID_CHANNEL_ID,
-
-        // Optional: keep it visible
-        // clickAction is only useful if you handle it in AndroidManifest / FirebaseMessagingService
       },
     },
   };

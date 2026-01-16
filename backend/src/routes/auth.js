@@ -561,4 +561,57 @@ router.get("/me", auth, async (req, res) => {
   }
 });
 
+/**
+ * ✅ Logout (clears FCM token + invalidates provider session)
+ * POST /api/auth/logout
+ *
+ * - Clears:
+ *   - providerProfile.fcmToken (providers)
+ *   - fcmToken (root, if you have it)
+ * - Providers:
+ *   - set isOnline=false
+ *   - sessionId/sessionIssuedAt cleared so old JWT fails immediately
+ */
+router.post("/logout", auth, async (req, res) => {
+  try {
+    const userId = req.user?._id;
+
+    const user = await User.findById(userId).select("role fcmToken providerProfile");
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    const isProvider = isProviderRole(user.role);
+
+    // Root token (if present in your DB)
+    user.fcmToken = null;
+
+    // Provider token + session invalidation
+    if (isProvider) {
+      if (!user.providerProfile) user.providerProfile = {};
+      user.providerProfile.fcmToken = null;
+      user.providerProfile.isOnline = false;
+
+      // ✅ IMPORTANT: invalidates any existing provider JWT immediately
+      user.providerProfile.sessionId = null;
+      user.providerProfile.sessionIssuedAt = null;
+    }
+
+    await user.save();
+
+    return res.status(200).json({
+      message: "Logged out ✅",
+      cleared: {
+        rootFcmToken: true,
+        providerFcmToken: isProvider,
+        providerSessionInvalidated: isProvider,
+      },
+    });
+  } catch (err) {
+    console.error("❌ LOGOUT ERROR:", err);
+    return res.status(500).json({
+      message: "Logout failed",
+      error: err.message,
+    });
+  }
+});
+
 export default router;
