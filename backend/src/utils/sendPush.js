@@ -32,16 +32,21 @@ function getUserFcmToken(user) {
 
 /**
  * ✅ Must match Android NotificationChannels.PROVIDER_JOBS_CHANNEL_ID
+ * IMPORTANT:
+ * - Heads-up + sound in Android 8+ depends on this channel settings on the phone.
  */
 const ANDROID_CHANNEL_ID = "provider_jobs_channel";
 
 /**
- * ✅ Send push notification to a single user (DATA ONLY)
+ * ✅ Send push notification to a single user (NOTIFICATION + DATA)
+ *
+ * - notification => Heads-up in background/killed
+ * - data         => jobId/open/type etc
  *
  * data can include:
  *  - open: "job_requests"
  *  - jobId: "..."
- *  - pickup, dropoff, amount, currency, distanceKm (strings/numbers ok)
+ *  - type: "job_request"
  */
 export const sendPushToUser = async ({ userId, title, body, data = {} }) => {
   initFirebase();
@@ -61,14 +66,22 @@ export const sendPushToUser = async ({ userId, title, body, data = {} }) => {
   const message = {
     token,
 
-    // ✅ DATA ONLY (NO notification block)
+    // ✅ Heads-up
+    notification: {
+      title: String(title || ""),
+      body: String(body || ""),
+    },
+
+    // ✅ App routing / metadata
     data: safeData,
 
     android: {
       priority: "high",
-      // Safe to keep, but does NOT force system notification since it's data-only.
       notification: {
         channelId: ANDROID_CHANNEL_ID,
+
+        // Optional: keep it visible
+        // clickAction is only useful if you handle it in AndroidManifest / FirebaseMessagingService
       },
     },
   };
@@ -77,7 +90,7 @@ export const sendPushToUser = async ({ userId, title, body, data = {} }) => {
 };
 
 /**
- * ✅ Send push to multiple users (DATA ONLY)
+ * ✅ Send push to multiple users (NOTIFICATION + DATA)
  */
 export const sendPushToManyUsers = async ({ userIds, title, body, data = {} }) => {
   initFirebase();
@@ -101,7 +114,13 @@ export const sendPushToManyUsers = async ({ userIds, title, body, data = {} }) =
   const message = {
     tokens,
 
-    // ✅ DATA ONLY
+    // ✅ Heads-up
+    notification: {
+      title: String(title || ""),
+      body: String(body || ""),
+    },
+
+    // ✅ App routing / metadata
     data: safeData,
 
     android: {
@@ -117,12 +136,6 @@ export const sendPushToManyUsers = async ({ userIds, title, body, data = {} }) =
 
 /**
  * ✅ Helper: Cancel / remove job banner on other providers
- * Call this when:
- *  - another provider accepted the job
- *  - job expired / cancelled
- *
- * The Android app will cancel the notification immediately
- * because it checks open=job_cancelled/job_taken/job_unavailable.
  */
 export const sendCancelJobToManyUsers = async ({ userIds, jobId, reason = "job_taken" }) => {
   return sendPushToManyUsers({
@@ -132,6 +145,7 @@ export const sendCancelJobToManyUsers = async ({ userIds, jobId, reason = "job_t
     data: {
       open: reason, // "job_taken" | "job_cancelled" | "job_unavailable"
       jobId: String(jobId),
+      type: "job_update",
     },
   });
 };

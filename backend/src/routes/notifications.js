@@ -54,7 +54,7 @@ router.post("/register-token", auth, async (req, res) => {
       role: user.role,
       savedRoot: !!user.fcmToken,
       savedProviderProfile: !!user.providerProfile?.fcmToken,
-      tokenLength: fcmToken.length
+      tokenLength: fcmToken.length,
     });
 
     return res.status(200).json({
@@ -62,7 +62,7 @@ router.post("/register-token", auth, async (req, res) => {
       userId: user._id,
       role: user.role,
       savedInRoot: true,
-      savedInProviderProfile: isProvider
+      savedInProviderProfile: isProvider,
     });
   } catch (err) {
     console.error("❌ REGISTER TOKEN ERROR:", err);
@@ -73,6 +73,11 @@ router.post("/register-token", auth, async (req, res) => {
 /**
  * ✅ Send test notification (ADMIN ONLY)
  * POST /api/notifications/send-test
+ *
+ * ✅ UPDATED:
+ * - Sends BOTH notification + data
+ * - Ensures android channelId is set
+ * - Adds open/jobId/type to data for deep linking tests
  */
 router.post("/send-test", auth, authorizeRoles(USER_ROLES.ADMIN), async (req, res) => {
   try {
@@ -92,16 +97,28 @@ router.post("/send-test", auth, authorizeRoles(USER_ROLES.ADMIN), async (req, re
       return res.status(400).json({ message: "User has no saved fcmToken" });
     }
 
+    // ✅✅✅ ONLY CHANGE YOU REQUESTED: replace payload block
     const payload = {
       token,
-      notification: { title, body }
+      notification: { title, body },
+      data: {
+        open: "job_requests",
+        jobId: String(req.body.jobId || ""),
+        type: "job_request",
+        title: String(title),
+        body: String(body),
+      },
+      android: {
+        priority: "high",
+        notification: { channelId: "provider_jobs_channel" },
+      },
     };
 
     const response = await admin.messaging().send(payload);
 
     return res.status(200).json({
       message: "Notification sent successfully ✅",
-      response
+      response,
     });
   } catch (err) {
     console.error("❌ SEND TEST ERROR:", err);
@@ -131,13 +148,13 @@ router.get(
         isOnline: p.providerProfile?.isOnline ?? null,
         verificationStatus: p.providerProfile?.verificationStatus ?? null,
         hasRootToken: !!p.fcmToken,
-        hasProviderProfileToken: !!p.providerProfile?.fcmToken
+        hasProviderProfileToken: !!p.providerProfile?.fcmToken,
       }));
 
       return res.status(200).json({
         total: providers.length,
         withAnyToken: summary.filter((x) => x.hasRootToken || x.hasProviderProfileToken).length,
-        providers: summary
+        providers: summary,
       });
     } catch (err) {
       console.error("❌ DEBUG PROVIDERS TOKENS ERROR:", err);
