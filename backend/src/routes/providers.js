@@ -1,3 +1,4 @@
+// routes/providers.js
 import express from "express";
 import auth from "../middleware/auth.js";
 import User, { USER_ROLES } from "../models/User.js";
@@ -19,25 +20,39 @@ const upload = multer({
 });
 
 /**
+ * ✅ NEW: Provider cancel window (2 minutes)
+ */
+const PROVIDER_CANCEL_WINDOW_MS = 2 * 60 * 1000; // 2 minutes
+
+/**
+ * ✅ Helper: Haversine Distance (km)
+ */
+function haversineDistanceKm(lat1, lng1, lat2, lng2) {
+  const toRad = (v) => (v * Math.PI) / 180;
+
+  const R = 6371;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRad(lat1)) *
+      Math.cos(toRad(lat2)) *
+      Math.sin(dLng / 2) *
+      Math.sin(dLng / 2);
+
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return Number((R * c).toFixed(2));
+}
+
+/**
  * ✅ Provider updates current GPS location (for customer tracking)
  * PATCH /api/providers/location
- *
- * Body: { lat: Number, lng: Number }
- *
- * ✅ Purpose:
- * - Provider app can call this frequently (every 2-5 seconds) while online/active job
- * - Customer tracking reads this from populated assignedTo.providerProfile.location
- *
- * ✅ Safety:
- * - Reject [0,0]
- * - Reject invalid numbers
- * - Provider role required
  */
 router.patch("/location", auth, async (req, res) => {
   try {
     const { lat, lng } = req.body || {};
 
-    // ✅✅✅ ADDED LOG (so you can confirm hits in Render logs)
     console.log("📍 /api/providers/location HIT", {
       userId: req.user?._id?.toString(),
       lat,
@@ -60,7 +75,6 @@ router.patch("/location", auth, async (req, res) => {
       });
     }
 
-    // Reject 0,0 so we never store garbage
     if (latitude === 0 && longitude === 0) {
       return res.status(400).json({
         message: "Invalid GPS (0,0) refused",
@@ -81,7 +95,6 @@ router.patch("/location", auth, async (req, res) => {
 
     await user.save();
 
-    // ✅ existing log (keep)
     console.log("📍 Provider location updated:", user._id.toString(), latitude, longitude);
 
     return res.status(200).json({
@@ -404,12 +417,94 @@ router.get("/jobs/broadcasted/:jobId", auth, async (req, res) => {
 /**
  * ✅ Provider accepts job (first accept wins)
  * PATCH /api/providers/jobs/:jobId/accept
+ *
+ * ✅ ENFORCEMENT:
+ * - provider can have ONLY 1 active job at a time
+ * - can accept ONE extra job only when within 3km of dropoff of current IN_PROGRESS job
+ * - cannot accept more than 1 incoming job (so max total: 2 jobs where:
+ *   - 1 is IN_PROGRESS
+ *   - 1 is ASSIGNED (next))
  */
 router.patch("/jobs/:jobId/accept", auth, async (req, res) => {
   try {
     const providerRoles = [USER_ROLES.MECHANIC, USER_ROLES.TOW_TRUCK];
     if (!providerRoles.includes(req.user.role)) {
       return res.status(403).json({ message: "Only providers can accept jobs" });
+    }
+
+    // ✅ Find provider active jobs (ASSIGNED/IN_PROGRESS)
+    const activeJobs = await Job.find({
+      assignedTo: req.user._id,
+      status: { $in: [JOB_STATUSES.ASSIGNED, JOB_STATUSES.IN_PROGRESS] },
+    }).select("status dropoffLocation pickupLocation title");
+
+    const inProgress = activeJobs.filter((j) => j.status === JOB_STATUSES.IN_PROGRESS);
+    const assigned = activeJobs.filter((j) => j.status === JOB_STATUSES.ASSIGNED);
+
+    if (assigned.length >= 1) {
+      return res.status(409).json({
+        code: "PROVIDER_ALREADY_HAS_ASSIGNED_JOB",
+        message: "You already have a pending assigned job. Finish it before accepting another.",
+      });
+    }
+
+    if (activeJobs.length >= 2) {
+      return res.status(409).json({
+        code: "PROVIDER_MAX_ACTIVE_JOBS",
+        message: "You already have active jobs. Finish them before accepting another.",
+      });
+    }
+
+    if (inProgress.length >= 1) {
+      const current = inProgress[0];
+
+      const coords = current?.dropoffLocation?.coordinates;
+      if (!Array.isArray(coords) || coords.length < 2) {
+        return res.status(409).json({
+          code: "CURRENT_JOB_HAS_NO_DROPOFF",
+          message: "You cannot accept a new job because your current job has no dropoff location.",
+        });
+      }
+
+      const dropoffLng = Number(coords[0]);
+      const dropoffLat = Number(coords[1]);
+
+      const me = await User.findById(req.user._id).select("providerProfile.location");
+      const myCoords = me?.providerProfile?.location?.coordinates;
+
+      if (!Array.isArray(myCoords) || myCoords.length < 2) {
+        return res.status(409).json({
+          code: "PROVIDER_GPS_MISSING",
+          message: "Your GPS location is missing. Please turn on location and try again.",
+        });
+      }
+
+      const myLng = Number(myCoords[0]);
+      const myLat = Number(myCoords[1]);
+
+      if (!Number.isFinite(myLat) || !Number.isFinite(myLng) || (myLat === 0 && myLng === 0)) {
+        return res.status(409).json({
+          code: "PROVIDER_GPS_INVALID",
+          message: "Your GPS location is invalid. Please refresh location and try again.",
+        });
+      }
+
+      const distKm = haversineDistanceKm(myLat, myLng, dropoffLat, dropoffLng);
+
+      if (distKm > 3) {
+        return res.status(409).json({
+          code: "TOO_FAR_FROM_DROPOFF",
+          message:
+            "You can accept the next job only when you are within 3km of completing your current job.",
+          distanceToDropoffKm: distKm,
+          maxAllowedKm: 3,
+        });
+      }
+
+      console.log("✅ Provider allowed to accept next job within 3km of dropoff", {
+        providerId: req.user._id.toString(),
+        distanceToDropoffKm: distKm,
+      });
     }
 
     const job = await Job.findOneAndUpdate(
@@ -570,6 +665,11 @@ router.get("/jobs/:jobId([0-9a-fA-F]{24})", auth, async (req, res) => {
 /**
  * ✅ Provider cancels job → job is re-broadcasted automatically
  * PATCH /api/providers/jobs/:jobId/cancel
+ *
+ * ✅ NEW ENFORCEMENT:
+ * - Only cancel when job.status === ASSIGNED
+ * - Only within 2 minutes after lockedAt
+ * - Cannot cancel IN_PROGRESS
  */
 router.patch("/jobs/:jobId/cancel", auth, async (req, res) => {
   try {
@@ -586,10 +686,48 @@ router.patch("/jobs/:jobId/cancel", auth, async (req, res) => {
       return res.status(403).json({ message: "Not authorized to cancel this job" });
     }
 
+    // ✅ Cannot cancel completed
     if (job.status === JOB_STATUSES.COMPLETED) {
       return res.status(400).json({ message: "Cannot cancel a completed job" });
     }
 
+    // ✅ NEW: Cannot cancel started job
+    if (job.status === JOB_STATUSES.IN_PROGRESS) {
+      return res.status(403).json({
+        code: "PROVIDER_CANNOT_CANCEL_IN_PROGRESS",
+        message: "You cannot cancel a job that has already started.",
+      });
+    }
+
+    // ✅ NEW: Only cancel if ASSIGNED
+    if (job.status !== JOB_STATUSES.ASSIGNED) {
+      return res.status(400).json({
+        code: "PROVIDER_CANCEL_NOT_ALLOWED",
+        message: "You can only cancel immediately after accepting the job (ASSIGNED).",
+        status: job.status,
+      });
+    }
+
+    // ✅ NEW: Enforce 2-minute cancel window using lockedAt
+    const assignedAtMs = job.lockedAt ? new Date(job.lockedAt).getTime() : null;
+    if (!assignedAtMs) {
+      return res.status(400).json({
+        code: "MISSING_LOCKED_AT",
+        message: "Missing assignment time (lockedAt). Cannot validate cancel window.",
+      });
+    }
+
+    const elapsedMs = Date.now() - assignedAtMs;
+    if (elapsedMs > PROVIDER_CANCEL_WINDOW_MS) {
+      return res.status(403).json({
+        code: "PROVIDER_CANCEL_WINDOW_EXPIRED",
+        message: "Cancel window expired (2 minutes). You can no longer cancel this job.",
+        elapsedMs,
+        allowedMs: PROVIDER_CANCEL_WINDOW_MS,
+      });
+    }
+
+    // ✅ existing rebroadcast logic (kept)
     if (!job.excludedProviders) job.excludedProviders = [];
     if (!job.excludedProviders.map(String).includes(req.user._id.toString())) {
       job.excludedProviders.push(req.user._id);
@@ -625,7 +763,7 @@ router.patch("/jobs/:jobId/cancel", auth, async (req, res) => {
     await job.save();
 
     return res.status(200).json({
-      message: "Provider cancelled. Job rebroadcasted.",
+      message: "Provider cancelled within 2 minutes. Job rebroadcasted ✅",
       job,
       broadcastedTo: job.broadcastedTo,
     });

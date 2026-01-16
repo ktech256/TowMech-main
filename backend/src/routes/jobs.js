@@ -18,6 +18,27 @@ import { calculateJobPricing } from "../utils/calculateJobPricing.js";
 const router = express.Router();
 
 /**
+ * ✅ NEW: statuses that should BLOCK a customer from creating another job
+ * - We do NOT include CREATED, because that can be an unpaid/draft job.
+ */
+const CUSTOMER_BLOCK_STATUSES = [
+  JOB_STATUSES.BROADCASTED,
+  JOB_STATUSES.ASSIGNED,
+  JOB_STATUSES.IN_PROGRESS,
+];
+
+/**
+ * ✅ NEW: Customer cancellation windows
+ */
+const CUSTOMER_CANCEL_REFUND_WINDOW_MS = 3 * 60 * 1000; // 3 minutes after ASSIGNED
+const PROVIDER_NO_SHOW_REFUND_WINDOW_MS = 45 * 60 * 1000; // 45 minutes after ASSIGNED
+
+/**
+ * ✅ NEW: Provider start-job distance rule
+ */
+const START_JOB_MAX_DISTANCE_METERS = 30;
+
+/**
  * ✅ TowTruck Type Normalizer (NEW preferred names + legacy compatibility)
  * - Keeps system stable while DB/clients may still send old values
  * - Outputs the new preferred names used in PricingConfig multipliers
@@ -111,6 +132,13 @@ function haversineDistanceKm(lat1, lng1, lat2, lng2) {
 
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   return Number((R * c).toFixed(2));
+}
+
+/**
+ * ✅ Helper: Haversine Distance (meters)
+ */
+function haversineDistanceMeters(lat1, lng1, lat2, lng2) {
+  return Math.round(haversineDistanceKm(lat1, lng1, lat2, lng2) * 1000);
 }
 
 /**
@@ -303,6 +331,27 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
     console.log("✅ CREATE JOB HIT");
     console.log("✅ BODY RECEIVED:", req.body);
 
+    // ✅ Block customer ONLY if they already have a BROADCASTED/ASSIGNED/IN_PROGRESS job
+    const existingActive = await Job.findOne({
+      customer: req.user._id,
+      status: { $in: CUSTOMER_BLOCK_STATUSES },
+    })
+      .select("_id status createdAt")
+      .sort({ createdAt: -1 });
+
+    if (existingActive) {
+      return res.status(409).json({
+        message:
+          "You already have an active job being processed. Please complete it before requesting another.",
+        code: "CUSTOMER_ALREADY_HAS_ACTIVE_JOB",
+        activeJob: {
+          id: existingActive._id,
+          status: existingActive.status,
+          createdAt: existingActive.createdAt,
+        },
+      });
+    }
+
     const {
       title,
       description,
@@ -423,127 +472,135 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
 });
 
 /* ============================================================
-   ✅✅✅ ADDITIONS (NO DELETIONS): CUSTOMER "MY JOBS" ROUTES
+   ✅ NEW: CLEANUP ROUTE FOR UNPAID CREATED JOBS
    ============================================================ */
 
 /**
- * ✅ CUSTOMER: ACTIVE JOBS
- * GET /api/jobs/my/active
+ * ✅ Customer cancels/deletes a CREATED (unpaid draft) job
+ * DELETE /api/jobs/:id/draft
  */
-router.get(
-  "/my/active",
-  auth,
-  authorizeRoles(USER_ROLES.CUSTOMER),
-  async (req, res) => {
-    try {
-      const activeStatuses = [
-        JOB_STATUSES.CREATED,
-        JOB_STATUSES.BROADCASTED,
-        JOB_STATUSES.ASSIGNED,
-        JOB_STATUSES.IN_PROGRESS,
-      ];
+router.delete("/:id/draft", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => {
+  try {
+    const job = await Job.findById(req.params.id);
+    if (!job) return res.status(404).json({ message: "Job not found" });
 
-      const jobs = await Job.find({
-        customer: req.user._id,
-        status: { $in: activeStatuses },
-      })
-        .sort({ createdAt: -1 })
-        .populate("customer", "name email role phone")
-        // ✅ FIX: include providerProfile so customer can read GPS coordinates
-        .populate("assignedTo", "name email role phone providerProfile")
-        .limit(50);
+    if (job.customer?.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ message: "Not allowed" });
+    }
 
-      return res.status(200).json({ jobs });
-    } catch (err) {
-      console.error("❌ MY ACTIVE JOBS ERROR:", err);
-      return res.status(500).json({
-        message: "Could not fetch active jobs",
-        error: err.message,
+    if (job.status !== JOB_STATUSES.CREATED) {
+      return res.status(400).json({
+        message: "Only CREATED (unpaid) jobs can be deleted with this route",
+        status: job.status,
       });
     }
+
+    await Payment.updateMany(
+      { job: job._id, status: PAYMENT_STATUSES.PENDING },
+      { $set: { status: PAYMENT_STATUSES.CANCELLED } }
+    );
+
+    await Job.findByIdAndDelete(job._id);
+
+    return res.status(200).json({
+      message: "Draft job deleted ✅",
+      jobId: req.params.id,
+    });
+  } catch (err) {
+    return res.status(500).json({
+      message: "Could not delete draft job",
+      error: err.message,
+    });
   }
-);
+});
 
-/**
- * ✅ CUSTOMER: JOB HISTORY
- * GET /api/jobs/my/history
- */
-router.get(
-  "/my/history",
-  auth,
-  authorizeRoles(USER_ROLES.CUSTOMER),
-  async (req, res) => {
-    try {
-      const historyStatuses = [JOB_STATUSES.COMPLETED, JOB_STATUSES.CANCELLED];
+/* ============================================================
+   ✅✅✅ ADDITIONS (NO DELETIONS): CUSTOMER "MY JOBS" ROUTES
+   ============================================================ */
 
-      const jobs = await Job.find({
-        customer: req.user._id,
-        status: { $in: historyStatuses },
-      })
-        .sort({ createdAt: -1 })
-        .populate("customer", "name email role phone")
-        // ✅ FIX: include providerProfile (for completed jobs too)
-        .populate("assignedTo", "name email role phone providerProfile")
-        .limit(100);
+router.get("/my/active", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => {
+  try {
+    const activeStatuses = [
+      JOB_STATUSES.CREATED,
+      JOB_STATUSES.BROADCASTED,
+      JOB_STATUSES.ASSIGNED,
+      JOB_STATUSES.IN_PROGRESS,
+    ];
 
-      return res.status(200).json({ jobs });
-    } catch (err) {
-      console.error("❌ MY JOB HISTORY ERROR:", err);
-      return res.status(500).json({
-        message: "Could not fetch job history",
-        error: err.message,
-      });
-    }
+    const jobs = await Job.find({
+      customer: req.user._id,
+      status: { $in: activeStatuses },
+    })
+      .sort({ createdAt: -1 })
+      .populate("customer", "name email role phone")
+      .populate("assignedTo", "name email role phone providerProfile")
+      .limit(50);
+
+    return res.status(200).json({ jobs });
+  } catch (err) {
+    console.error("❌ MY ACTIVE JOBS ERROR:", err);
+    return res.status(500).json({
+      message: "Could not fetch active jobs",
+      error: err.message,
+    });
   }
-);
+});
 
-/**
- * ✅ OPTIONAL ALIAS (keep old clients stable)
- * GET /api/jobs/customer/active
- */
-router.get(
-  "/customer/active",
-  auth,
-  authorizeRoles(USER_ROLES.CUSTOMER),
-  async (req, res) => {
-    try {
-      const activeStatuses = [
-        JOB_STATUSES.CREATED,
-        JOB_STATUSES.BROADCASTED,
-        JOB_STATUSES.ASSIGNED,
-        JOB_STATUSES.IN_PROGRESS,
-      ];
+router.get("/my/history", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => {
+  try {
+    const historyStatuses = [JOB_STATUSES.COMPLETED, JOB_STATUSES.CANCELLED];
 
-      const jobs = await Job.find({
-        customer: req.user._id,
-        status: { $in: activeStatuses },
-      })
-        .sort({ createdAt: -1 })
-        .populate("customer", "name email role phone")
-        // ✅ FIX: include providerProfile so GPS is available
-        .populate("assignedTo", "name email role phone providerProfile")
-        .limit(50);
+    const jobs = await Job.find({
+      customer: req.user._id,
+      status: { $in: historyStatuses },
+    })
+      .sort({ createdAt: -1 })
+      .populate("customer", "name email role phone")
+      .populate("assignedTo", "name email role phone providerProfile")
+      .limit(100);
 
-      return res.status(200).json({ jobs });
-    } catch (err) {
-      console.error("❌ CUSTOMER ACTIVE (ALIAS) ERROR:", err);
-      return res.status(500).json({
-        message: "Could not fetch customer active jobs",
-        error: err.message,
-      });
-    }
+    return res.status(200).json({ jobs });
+  } catch (err) {
+    console.error("❌ MY JOB HISTORY ERROR:", err);
+    return res.status(500).json({
+      message: "Could not fetch job history",
+      error: err.message,
+    });
   }
-);
+});
 
-/**
- * ✅ GET JOB BY ID (Customer + Assigned Provider + Admin)
- * GET /api/jobs/:id
- */
+router.get("/customer/active", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => {
+  try {
+    const activeStatuses = [
+      JOB_STATUSES.CREATED,
+      JOB_STATUSES.BROADCASTED,
+      JOB_STATUSES.ASSIGNED,
+      JOB_STATUSES.IN_PROGRESS,
+    ];
+
+    const jobs = await Job.find({
+      customer: req.user._id,
+      status: { $in: activeStatuses },
+    })
+      .sort({ createdAt: -1 })
+      .populate("customer", "name email role phone")
+      .populate("assignedTo", "name email role phone providerProfile")
+      .limit(50);
+
+    return res.status(200).json({ jobs });
+  } catch (err) {
+    console.error("❌ CUSTOMER ACTIVE (ALIAS) ERROR:", err);
+    return res.status(500).json({
+      message: "Could not fetch customer active jobs",
+      error: err.message,
+    });
+  }
+});
+
 router.get("/:id", auth, async (req, res) => {
   try {
     const job = await Job.findById(req.params.id)
       .populate("customer", "name email role phone")
-      // ✅ FIX: include providerProfile.location for live tracking
       .populate("assignedTo", "name email role phone providerProfile");
 
     if (!job) return res.status(404).json({ message: "Job not found" });
@@ -562,10 +619,8 @@ router.get("/:id", auth, async (req, res) => {
       return res.status(403).json({ message: "Not allowed" });
     }
 
-    // ✅ Convert to plain object so we can safely inject extra fields
     const safeJob = job.toObject({ virtuals: true });
 
-    // ✅ Extract provider location from assignedTo.providerProfile.location.coordinates = [lng, lat]
     let providerLocation = null;
     let providerLastSeenAt = null;
 
@@ -575,10 +630,8 @@ router.get("/:id", auth, async (req, res) => {
       const lat = Number(coords[1]);
 
       if (Number.isFinite(lat) && Number.isFinite(lng) && !(lat === 0 && lng === 0)) {
-        // ✅ Inject in multiple formats so ANY Android model can read it
         safeJob.assignedTo.lat = lat;
         safeJob.assignedTo.lng = lng;
-
         safeJob.assignedTo.location = { lat, lng };
 
         providerLocation = safeJob.assignedTo.providerProfile.location;
@@ -586,7 +639,6 @@ router.get("/:id", auth, async (req, res) => {
       }
     }
 
-    // ✅ Helpful for tracking / debugging
     safeJob.providerLocation = providerLocation;
     safeJob.providerLastSeenAt = providerLastSeenAt;
 
@@ -608,9 +660,120 @@ router.get("/:id", auth, async (req, res) => {
   }
 });
 
+/* ============================================================
+   ✅ NEW: CUSTOMER CANCEL ROUTE WITH REFUND RULES
+   ============================================================ */
+
+router.patch("/:id/cancel", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => {
+  try {
+    const job = await Job.findById(req.params.id);
+    if (!job) return res.status(404).json({ message: "Job not found" });
+
+    if (job.customer?.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ message: "Not allowed: job not yours" });
+    }
+
+    if (job.status === JOB_STATUSES.COMPLETED) {
+      return res.status(400).json({ message: "Cannot cancel a completed job" });
+    }
+
+    if (job.status === JOB_STATUSES.CANCELLED) {
+      return res.status(400).json({ message: "Job already cancelled" });
+    }
+
+    const nowMs = Date.now();
+    const assignedAtMs = job.lockedAt ? new Date(job.lockedAt).getTime() : null;
+
+    let refundBookingFee = false;
+    let refundReason = null;
+
+    if (job.status === JOB_STATUSES.ASSIGNED && assignedAtMs) {
+      const elapsed = nowMs - assignedAtMs;
+
+      if (elapsed <= CUSTOMER_CANCEL_REFUND_WINDOW_MS) {
+        refundBookingFee = true;
+        refundReason = "cancel_within_3_minutes";
+      } else if (elapsed >= PROVIDER_NO_SHOW_REFUND_WINDOW_MS) {
+        refundBookingFee = true;
+        refundReason = "provider_no_show_45_minutes";
+      } else {
+        refundBookingFee = false;
+        refundReason = "cancel_after_3_minutes_no_refund";
+      }
+    } else if (job.status === JOB_STATUSES.ASSIGNED && !assignedAtMs) {
+      refundBookingFee = false;
+      refundReason = "missing_lockedAt_no_refund";
+    } else if (job.status === JOB_STATUSES.BROADCASTED) {
+      refundBookingFee = false;
+      refundReason = "cancel_broadcasted_no_refund_rule";
+    } else if (job.status === JOB_STATUSES.IN_PROGRESS) {
+      refundBookingFee = false;
+      refundReason = "cancel_in_progress_no_refund";
+    } else if (job.status === JOB_STATUSES.CREATED) {
+      return res.status(400).json({
+        message: "This job is still a draft (CREATED). Use DELETE /api/jobs/:id/draft instead.",
+        code: "USE_DRAFT_DELETE",
+      });
+    }
+
+    job.status = JOB_STATUSES.CANCELLED;
+    job.cancelledBy = req.user._id;
+    job.cancelReason = req.body?.reason || "Cancelled by customer";
+    job.cancelledAt = new Date();
+
+    if (job.pricing) {
+      if (refundBookingFee) {
+        job.pricing.bookingFeeStatus = "REFUND_REQUESTED";
+        job.pricing.bookingFeeRefundedAt = new Date();
+      } else {
+        job.pricing.bookingFeeStatus = job.pricing.bookingFeeStatus || "PENDING";
+      }
+    }
+
+    await job.save();
+
+    const payment = await Payment.findOne({ job: job._id }).sort({ createdAt: -1 });
+
+    if (payment) {
+      if (refundBookingFee) {
+        payment.status = PAYMENT_STATUSES.REFUNDED || PAYMENT_STATUSES.CANCELLED;
+        await payment.save();
+      } else {
+        if (payment.status === PAYMENT_STATUSES.PENDING) {
+          payment.status = PAYMENT_STATUSES.CANCELLED;
+          await payment.save();
+        }
+      }
+    }
+
+    return res.status(200).json({
+      message: "Job cancelled ✅",
+      job,
+      refund: {
+        bookingFeeRefunded: refundBookingFee,
+        reason: refundReason,
+        windows: {
+          cancelRefundWindowMinutes: 3,
+          providerNoShowRefundMinutes: 45,
+        },
+      },
+    });
+  } catch (err) {
+    console.error("❌ CUSTOMER CANCEL ERROR:", err);
+    return res.status(500).json({
+      message: "Could not cancel job",
+      error: err.message,
+    });
+  }
+});
+
 /**
  * ✅ UPDATE JOB STATUS
  * PATCH /api/jobs/:id/status
+ *
+ * ✅ NEW ENFORCEMENT:
+ * - Provider can only start job (ASSIGNED -> IN_PROGRESS)
+ *   when within 30 meters of pickup location.
  */
 router.patch("/:id/status", auth, async (req, res) => {
   try {
@@ -645,6 +808,69 @@ router.patch("/:id/status", auth, async (req, res) => {
           current,
           attempted: status,
           allowedTransitions: ["ASSIGNED -> IN_PROGRESS", "IN_PROGRESS -> COMPLETED"],
+        });
+      }
+
+      /**
+       * ✅ NEW: Start-job distance enforcement
+       */
+      if (current === JOB_STATUSES.ASSIGNED && status === JOB_STATUSES.IN_PROGRESS) {
+        const pickupCoords = job?.pickupLocation?.coordinates; // [lng, lat]
+        if (!Array.isArray(pickupCoords) || pickupCoords.length < 2) {
+          return res.status(400).json({
+            code: "PICKUP_LOCATION_MISSING",
+            message: "Pickup location is missing. Cannot start job.",
+          });
+        }
+
+        const pickupLng = Number(pickupCoords[0]);
+        const pickupLat = Number(pickupCoords[1]);
+
+        if (!Number.isFinite(pickupLat) || !Number.isFinite(pickupLng)) {
+          return res.status(400).json({
+            code: "PICKUP_LOCATION_INVALID",
+            message: "Pickup location is invalid. Cannot start job.",
+            pickupCoords,
+          });
+        }
+
+        // Provider current GPS from profile
+        const me = await User.findById(req.user._id).select("providerProfile.location");
+        const myCoords = me?.providerProfile?.location?.coordinates; // [lng, lat]
+
+        if (!Array.isArray(myCoords) || myCoords.length < 2) {
+          return res.status(409).json({
+            code: "PROVIDER_GPS_MISSING",
+            message: "Your GPS location is missing. Turn on location and try again.",
+          });
+        }
+
+        const myLng = Number(myCoords[0]);
+        const myLat = Number(myCoords[1]);
+
+        if (!Number.isFinite(myLat) || !Number.isFinite(myLng) || (myLat === 0 && myLng === 0)) {
+          return res.status(409).json({
+            code: "PROVIDER_GPS_INVALID",
+            message: "Your GPS location is invalid. Refresh location and try again.",
+          });
+        }
+
+        const distMeters = haversineDistanceMeters(myLat, myLng, pickupLat, pickupLng);
+
+        if (distMeters > START_JOB_MAX_DISTANCE_METERS) {
+          return res.status(409).json({
+            code: "TOO_FAR_FROM_PICKUP",
+            message: `You must be within ${START_JOB_MAX_DISTANCE_METERS} meters of pickup to start this job.`,
+            distanceMeters: distMeters,
+            maxAllowedMeters: START_JOB_MAX_DISTANCE_METERS,
+          });
+        }
+
+        console.log("✅ Start-job allowed (within pickup radius)", {
+          providerId: req.user._id.toString(),
+          jobId: job._id.toString(),
+          distanceMeters: distMeters,
+          maxAllowedMeters: START_JOB_MAX_DISTANCE_METERS,
         });
       }
 
