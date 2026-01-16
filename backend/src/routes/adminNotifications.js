@@ -8,57 +8,8 @@ import admin, { initFirebase } from "../config/firebase.js";
 const router = express.Router();
 
 /**
- * Helper: get a user's best token (providerProfile first, then root)
- * and track where it came from so we can delete safely.
- */
-function resolveUserToken(user) {
-  const providerToken = user?.providerProfile?.fcmToken;
-  const rootToken = user?.fcmToken;
-
-  if (providerToken) return { token: providerToken, field: "providerProfile.fcmToken" };
-  if (rootToken) return { token: rootToken, field: "fcmToken" };
-
-  return { token: null, field: null };
-}
-
-/**
- * FCM data values must be strings
- */
-function normalizeFcmData(data = {}) {
-  const out = {};
-  for (const [k, v] of Object.entries(data || {})) {
-    if (v === undefined || v === null) continue;
-    if (typeof v === "string") out[k] = v;
-    else if (typeof v === "number" || typeof v === "boolean") out[k] = String(v);
-    else out[k] = JSON.stringify(v);
-  }
-  return out;
-}
-
-/**
- * These error codes mean the token is dead and should be removed.
- * (Firebase Admin SDK typically provides error.code like "messaging/registration-token-not-registered")
- */
-function isDeadTokenErrorCode(code = "") {
-  const c = String(code || "").toLowerCase();
-  return (
-    c.includes("registration-token-not-registered") ||
-    c.includes("invalid-registration-token") ||
-    c.includes("invalid-argument") // sometimes shown for bad tokens
-  );
-}
-
-/**
  * ✅ Admin broadcast notification
  * POST /api/admin/notifications/broadcast
- *
- * Body:
- * {
- *   "audience": "ALL" | "CUSTOMERS" | "PROVIDERS",
- *   "providerRole": "ALL" | "TOW_TRUCK" | "MECHANIC",
- *   "title": "Hello",
- *   "body": "Message..."
- * }
  */
 router.post(
   "/broadcast",
@@ -91,23 +42,24 @@ router.post(
         if (chosenProviderRole === "MECHANIC") query.role = USER_ROLES.MECHANIC;
       }
 
-      // ✅ Fetch users with tokens (include _id so we can clean invalid tokens)
-      const users = await User.find(query).select("_id fcmToken providerProfile.fcmToken role");
+      // ✅ Fetch users with tokens
+      const users = await User.find(query).select("_id role fcmToken providerProfile.fcmToken");
 
-      // Build token targets with mapping so we can delete dead tokens safely
-      const targets = [];
-      for (const u of users) {
-        const { token, field } = resolveUserToken(u);
-        if (!token) continue;
+      // keep mapping so we can delete dead tokens later
+      const tokenRows = users
+        .map((u) => {
+          const token = u.fcmToken || u.providerProfile?.fcmToken || null;
+          if (!token) return null;
 
-        targets.push({
-          userId: u._id,
-          token,
-          field, // "providerProfile.fcmToken" OR "fcmToken"
-        });
-      }
+          return {
+            userId: u._id.toString(),
+            token,
+            field: u.fcmToken ? "fcmToken" : "providerProfile.fcmToken",
+          };
+        })
+        .filter(Boolean);
 
-      const tokens = targets.map((t) => t.token);
+      const tokens = tokenRows.map((x) => x.token);
       const totalTargets = tokens.length;
 
       if (totalTargets === 0) {
@@ -118,95 +70,47 @@ router.post(
       }
 
       // ✅ Send push notification (multicast)
-      // IMPORTANT:
-      // - notification => Android system shows heads-up (if channel importance is HIGH on device)
-      // - data => app can handle custom sound / routing
-      const safeData = normalizeFcmData({
-        open: "admin_broadcast",
-        title,
-        body,
-        audience: chosenAudience,
-        providerRole: chosenAudience === "PROVIDERS" ? chosenProviderRole : "ALL",
-      });
-
       const payload = {
         tokens,
-
-        // ✅ Heads-up / visible notification
         notification: { title, body },
-
-        // ✅ Data for app logic (sound, navigation, etc.)
-        data: safeData,
-
         android: {
           priority: "high",
-          notification: {
-            // Do NOT force a channelId here (prevents mismatch across apps/roles).
-            // Let Android use the app default/fallback channel.
-            // sound is controlled by channel on Android 8+, but keeping "default" is harmless.
-            sound: "default",
-          },
         },
       };
 
       const response = await admin.messaging().sendEachForMulticast(payload);
 
-      // ✅ Extract failures with real error codes
-      const failures = response.responses
+      // ✅ Auto-remove dead tokens
+      const deadTokenIndexes = response.responses
         .map((r, idx) => {
           if (r.success) return null;
-
-          const err = r.error || {};
-          return {
-            index: idx,
-            token: tokens[idx],
-            userId: String(targets[idx]?.userId || ""),
-            field: targets[idx]?.field || "",
-            code: err.code || "",
-            message: err.message || "",
-          };
+          const code = r.error?.code || "";
+          if (code === "messaging/registration-token-not-registered") return idx;
+          if (code === "messaging/invalid-registration-token") return idx;
+          return null;
         })
-        .filter(Boolean);
+        .filter((x) => x !== null);
 
-      // ✅ Log failures clearly (Render logs)
-      if (failures.length > 0) {
-        console.error("❌ FCM BROADCAST FAILURES:", failures);
-      } else {
-        console.log("✅ FCM BROADCAST: all delivered", {
-          totalTargets,
-          successCount: response.successCount,
-        });
-      }
+      const deadRows = deadTokenIndexes.map((idx) => tokenRows[idx]);
 
-      // ✅ Remove dead tokens automatically
-      const dead = failures.filter((f) => isDeadTokenErrorCode(f.code));
-      for (const f of dead) {
-        try {
-          if (!f.userId) continue;
+      // clear both places for safety
+      let removedCount = 0;
+      if (deadRows.length > 0) {
+        const deadTokens = deadRows.map((x) => x.token);
 
-          // Remove token from the correct field
-          if (f.field === "providerProfile.fcmToken") {
-            await User.updateOne(
-              { _id: f.userId },
-              { $unset: { "providerProfile.fcmToken": 1 } }
-            );
-          } else if (f.field === "fcmToken") {
-            await User.updateOne({ _id: f.userId }, { $unset: { fcmToken: 1 } });
+        const result = await User.updateMany(
+          {
+            $or: [{ fcmToken: { $in: deadTokens } }, { "providerProfile.fcmToken": { $in: deadTokens } }],
+          },
+          {
+            $set: {
+              fcmToken: null,
+              "providerProfile.fcmToken": null,
+            },
           }
+        );
 
-          // Safety: also unset root token if it matches (prevents duplicates)
-          await User.updateOne({ _id: f.userId, fcmToken: f.token }, { $unset: { fcmToken: 1 } });
-          await User.updateOne(
-            { _id: f.userId, "providerProfile.fcmToken": f.token },
-            { $unset: { "providerProfile.fcmToken": 1 } }
-          );
-        } catch (e) {
-          console.error("❌ Failed to cleanup dead token", {
-            userId: f.userId,
-            token: f.token,
-            error: e?.message,
-          });
-        }
+        removedCount = result.modifiedCount || 0;
       }
 
       const log = await NotificationLog.create({
@@ -218,14 +122,10 @@ router.post(
         totalTargets,
         sentCount: response.successCount,
         failedCount: response.failureCount,
-
-        // Store useful error details
-        errors: failures.map((f) => ({
-          userId: f.userId,
-          field: f.field,
-          code: f.code,
-          message: f.message,
-        })),
+        removedInvalidTokens: removedCount,
+        errors: response.responses
+          .map((r) => (r.success ? null : { code: r.error?.code, message: r.error?.message }))
+          .filter(Boolean),
       });
 
       return res.status(200).json({
@@ -234,13 +134,11 @@ router.post(
           totalTargets,
           success: response.successCount,
           failed: response.failureCount,
-          deadTokensRemoved: dead.length,
+          removedInvalidTokens: removedCount,
         },
-        failures, // include in response so you can see exact reason quickly
         log,
       });
     } catch (err) {
-      console.error("❌ Broadcast error:", err);
       return res.status(500).json({
         message: "Failed to send broadcast ❌",
         error: err.message,
@@ -249,10 +147,6 @@ router.post(
   }
 );
 
-/**
- * ✅ Fetch broadcast logs
- * GET /api/admin/notifications/logs
- */
 router.get(
   "/logs",
   auth,
