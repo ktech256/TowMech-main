@@ -1,3 +1,4 @@
+// src/routes/jobs.js
 import express from "express";
 import mongoose from "mongoose"; // ✅ needed for aggregation ObjectId
 import Job, { JOB_STATUSES } from "../models/Job.js";
@@ -46,17 +47,13 @@ const MECHANIC_FINAL_FEE_DISCLAIMER =
 
 /**
  * ✅ TowTruck Type Normalizer (NEW preferred names + legacy compatibility)
- * - Keeps system stable while DB/clients may still send old values
- * - Outputs the new preferred names used in PricingConfig multipliers
  */
 function normalizeTowTruckType(type) {
   if (!type) return null;
   const x = String(type).trim();
   const lower = x.toLowerCase();
 
-  // ✅ NEW preferred names + common variants
   if (lower.includes("hook") && lower.includes("chain")) return "Hook & Chain";
-
   if (lower === "wheel-lift" || lower === "wheel lift") return "Wheel-Lift";
 
   if (
@@ -69,7 +66,6 @@ function normalizeTowTruckType(type) {
     return "Flatbed/Roll Back";
 
   if (lower.includes("boom")) return "Boom Trucks(With Crane)";
-
   if (lower.includes("integrated") || lower.includes("wrecker"))
     return "Integrated / Wrecker";
 
@@ -81,7 +77,6 @@ function normalizeTowTruckType(type) {
   if (lower === "towtruck-xl" || lower === "towtruck xl") return "Integrated / Wrecker";
   if (lower === "towtruck-xxl" || lower === "towtruck xxl") return "Integrated / Wrecker";
 
-  // If it doesn't match anything, keep as-is (don’t break unexpected custom values)
   return x;
 }
 
@@ -92,13 +87,11 @@ function normalizeTowTruckType(type) {
 async function recomputeUserRatingStats(userId) {
   const targetId = new mongoose.Types.ObjectId(userId);
 
-  // Provider stats: targetRole != "Customer"
   const providerAgg = await Rating.aggregate([
     { $match: { target: targetId, targetRole: { $ne: "Customer" } } },
     { $group: { _id: "$target", avg: { $avg: "$rating" }, count: { $sum: 1 } } },
   ]);
 
-  // Customer stats: targetRole == "Customer"
   const customerAgg = await Rating.aggregate([
     { $match: { target: targetId, targetRole: "Customer" } },
     { $group: { _id: "$target", avg: { $avg: "$rating" }, count: { $sum: 1 } } },
@@ -152,238 +145,169 @@ function haversineDistanceMeters(lat1, lng1, lat2, lng2) {
  * ✅ PREVIEW JOB
  * POST /api/jobs/preview
  */
-router.post(
-  "/preview",
-  auth,
-  authorizeRoles(USER_ROLES.CUSTOMER),
-  async (req, res) => {
-    try {
-      console.log("✅ PREVIEW HIT");
-      console.log("✅ BODY RECEIVED:", req.body);
+router.post("/preview", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => {
+  try {
+    console.log("✅ PREVIEW HIT");
+    console.log("✅ BODY RECEIVED:", req.body);
 
-      const {
-        title,
-        description,
+    const {
+      title,
+      description,
+      roleNeeded,
+      pickupLat,
+      pickupLng,
+      pickupAddressText,
+      dropoffLat,
+      dropoffLng,
+      dropoffAddressText,
+      towTruckTypeNeeded,
+      vehicleType,
+
+      // ✅ NEW: mechanic category selection
+      mechanicCategoryNeeded,
+
+      // ✅ NEW: customer can describe problem briefly
+      customerProblemDescription,
+    } = req.body;
+
+    if (!title || !roleNeeded || pickupLat === undefined || pickupLng === undefined) {
+      return res.status(400).json({
+        message: "title, roleNeeded, pickupLat, pickupLng are required",
+      });
+    }
+
+    // ✅ TowTruck requires dropoff
+    if (
+      roleNeeded === USER_ROLES.TOW_TRUCK &&
+      (dropoffLat === undefined || dropoffLng === undefined)
+    ) {
+      return res.status(400).json({
+        message: "TowTruck jobs require dropoffLat and dropoffLng",
+      });
+    }
+
+    // ✅ Mechanic requires mechanicCategoryNeeded
+    if (roleNeeded === USER_ROLES.MECHANIC) {
+      if (!mechanicCategoryNeeded) {
+        return res.status(400).json({
+          message: "mechanicCategoryNeeded is required for Mechanic jobs",
+        });
+      }
+    }
+
+    const normalizedTowTruckTypeNeeded = towTruckTypeNeeded
+      ? normalizeTowTruckType(towTruckTypeNeeded)
+      : null;
+
+    let config = await PricingConfig.findOne();
+    if (!config) config = await PricingConfig.create({});
+
+    let towTruckTypes = config.towTruckTypes || [];
+
+    if (!towTruckTypes || towTruckTypes.length === 0) {
+      console.log("⚠️ towTruckTypes empty → setting defaults...");
+
+      config.towTruckTypes = [
+        "Hook & Chain",
+        "Wheel-Lift",
+        "Flatbed/Roll Back",
+        "Boom Trucks(With Crane)",
+        "Integrated / Wrecker",
+        "Heavy-Duty Rotator(Recovery)",
+      ];
+
+      await config.save();
+      towTruckTypes = config.towTruckTypes;
+    }
+
+    const distanceKm =
+      roleNeeded === USER_ROLES.TOW_TRUCK &&
+      dropoffLat !== undefined &&
+      dropoffLng !== undefined
+        ? haversineDistanceKm(pickupLat, pickupLng, dropoffLat, dropoffLng)
+        : 0;
+
+    /**
+     * ============================================================
+     * ✅ MECHANIC PREVIEW FLOW
+     * ============================================================
+     */
+    if (roleNeeded === USER_ROLES.MECHANIC) {
+      const pricing = await calculateJobPricing({
         roleNeeded,
         pickupLat,
         pickupLng,
-        pickupAddressText,
-        dropoffLat,
-        dropoffLng,
-        dropoffAddressText,
-        towTruckTypeNeeded,
+
+        dropoffLat: undefined,
+        dropoffLng: undefined,
+
+        towTruckTypeNeeded: null,
         vehicleType,
+        distanceKm: 0,
 
-        // ✅ NEW: mechanic category selection
-        mechanicCategoryNeeded,
-
-        // ✅ NEW: customer can describe problem briefly
-        customerProblemDescription,
-      } = req.body;
-
-      if (!title || !roleNeeded || pickupLat === undefined || pickupLng === undefined) {
-        return res.status(400).json({
-          message: "title, roleNeeded, pickupLat, pickupLng are required",
-        });
-      }
-
-      // ✅ TowTruck requires dropoff
-      if (
-        roleNeeded === USER_ROLES.TOW_TRUCK &&
-        (dropoffLat === undefined || dropoffLng === undefined)
-      ) {
-        return res.status(400).json({
-          message: "TowTruck jobs require dropoffLat and dropoffLng",
-        });
-      }
-
-      // ✅ Mechanic requires mechanicCategoryNeeded
-      if (roleNeeded === USER_ROLES.MECHANIC) {
-        if (!mechanicCategoryNeeded) {
-          return res.status(400).json({
-            message: "mechanicCategoryNeeded is required for Mechanic jobs",
-          });
-        }
-      }
-
-      const normalizedTowTruckTypeNeeded = towTruckTypeNeeded
-        ? normalizeTowTruckType(towTruckTypeNeeded)
-        : null;
-
-      let config = await PricingConfig.findOne();
-      if (!config) config = await PricingConfig.create({});
-
-      let towTruckTypes = config.towTruckTypes || [];
-
-      if (!towTruckTypes || towTruckTypes.length === 0) {
-        console.log("⚠️ towTruckTypes empty → setting defaults...");
-
-        config.towTruckTypes = [
-          "Hook & Chain",
-          "Wheel-Lift",
-          "Flatbed/Roll Back",
-          "Boom Trucks(With Crane)",
-          "Integrated / Wrecker",
-          "Heavy-Duty Rotator(Recovery)",
-        ];
-
-        await config.save();
-        towTruckTypes = config.towTruckTypes;
-      }
-
-      const distanceKm =
-        roleNeeded === USER_ROLES.TOW_TRUCK &&
-        dropoffLat !== undefined &&
-        dropoffLng !== undefined
-          ? haversineDistanceKm(pickupLat, pickupLng, dropoffLat, dropoffLng)
-          : 0;
-
-      /**
-       * ============================================================
-       * ✅ MECHANIC PREVIEW FLOW (NEW)
-       * - Booking fee only
-       * - Final fee not predetermined
-       * ============================================================
-       */
-      if (roleNeeded === USER_ROLES.MECHANIC) {
-        const pricing = await calculateJobPricing({
-          roleNeeded,
-          pickupLat,
-          pickupLng,
-
-          // mechanic has no dropoff
-          dropoffLat: undefined,
-          dropoffLng: undefined,
-
-          towTruckTypeNeeded: null,
-          vehicleType,
-          distanceKm: 0,
-
-          // ✅ IMPORTANT FIX:
-          // calculateJobPricing expects mechanicCategory (NOT mechanicCategoryNeeded)
-          mechanicCategory: mechanicCategoryNeeded,
-        });
-
-        const providers = await findNearbyProviders({
-          roleNeeded,
-          pickupLng,
-          pickupLat,
-          towTruckTypeNeeded: null,
-          vehicleType,
-          mechanicCategoryNeeded, // ✅ filter mechanics by category
-          excludedProviders: [],
-          maxDistanceMeters: 20000,
-          limit: 10,
-        });
-
-        return res.status(200).json({
-          providersFound: providers.length > 0,
-          providerCount: providers.length,
-          message:
-            providers.length > 0
-              ? "Mechanics found ✅ Please pay booking fee to proceed"
-              : "No mechanics online within range. Booking fee not required.",
-          disclaimer: {
-            mechanicFinalFeeNotPredetermined: true,
-            text: MECHANIC_FINAL_FEE_DISCLAIMER,
-          },
-          preview: {
-            currency: pricing.currency,
-            bookingFee: pricing.bookingFee,
-
-            // keep these for compatibility (but set safe values)
-            estimatedTotal: 0,
-            estimatedDistanceKm: 0,
-
-            mechanicCategoryNeeded,
-            customerProblemDescription: customerProblemDescription || null,
-          },
-        });
-      }
-
-      /**
-       * ============================================================
-       * ✅ TOWTRUCK PREVIEW FLOW (UNCHANGED)
-       * ============================================================
-       */
-      if (normalizedTowTruckTypeNeeded) {
-        const pricing = await calculateJobPricing({
-          roleNeeded,
-          pickupLat,
-          pickupLng,
-          dropoffLat,
-          dropoffLng,
-          towTruckTypeNeeded: normalizedTowTruckTypeNeeded,
-          vehicleType,
-          distanceKm,
-        });
-
-        const providers = await findNearbyProviders({
-          roleNeeded,
-          pickupLng,
-          pickupLat,
-          towTruckTypeNeeded: normalizedTowTruckTypeNeeded,
-          vehicleType,
-          excludedProviders: [],
-          maxDistanceMeters: 20000,
-          limit: 10,
-        });
-
-        return res.status(200).json({
-          providersFound: providers.length > 0,
-          providerCount: providers.length,
-          message:
-            providers.length > 0
-              ? "Providers found ✅ Please pay booking fee to proceed"
-              : "No providers online within range. Booking fee not required.",
-          preview: pricing,
-        });
-      }
-
-      const resultsByTowTruckType = {};
-
-      for (const type of towTruckTypes) {
-        const normalizedType = normalizeTowTruckType(type);
-
-        const pricing = await calculateJobPricing({
-          roleNeeded,
-          pickupLat,
-          pickupLng,
-          dropoffLat,
-          dropoffLng,
-          towTruckTypeNeeded: normalizedType,
-          vehicleType,
-          distanceKm,
-        });
-
-        const providersForType = await findNearbyProviders({
-          roleNeeded,
-          pickupLng,
-          pickupLat,
-          towTruckTypeNeeded: normalizedType,
-          vehicleType,
-          excludedProviders: [],
-          maxDistanceMeters: 20000,
-          limit: 10,
-        });
-
-        resultsByTowTruckType[type] = {
-          estimatedTotal: pricing.estimatedTotal,
-          bookingFee: pricing.bookingFee,
-          currency: pricing.currency,
-          estimatedDistanceKm: pricing.estimatedDistanceKm,
-          towTruckTypeMultiplier: pricing.towTruckTypeMultiplier,
-          vehicleTypeMultiplier: pricing.vehicleTypeMultiplier,
-          providersCount: providersForType.length,
-          status: providersForType.length > 0 ? "ONLINE" : "OFFLINE",
-        };
-      }
+        // NOTE: calculateJobPricing currently does NOT use mechanicCategory,
+        // but we keep this param to avoid breaking future extensions.
+        mechanicCategory: mechanicCategoryNeeded,
+      });
 
       const providers = await findNearbyProviders({
         roleNeeded,
         pickupLng,
         pickupLat,
         towTruckTypeNeeded: null,
+        vehicleType,
+        mechanicCategoryNeeded,
+        excludedProviders: [],
+        maxDistanceMeters: 20000,
+        limit: 10,
+      });
+
+      return res.status(200).json({
+        providersFound: providers.length > 0,
+        providerCount: providers.length,
+        message:
+          providers.length > 0
+            ? "Mechanics found ✅ Please pay booking fee to proceed"
+            : "No mechanics online within range. Booking fee not required.",
+        disclaimer: {
+          mechanicFinalFeeNotPredetermined: true,
+          text: MECHANIC_FINAL_FEE_DISCLAIMER,
+        },
+        preview: {
+          currency: pricing.currency,
+          bookingFee: pricing.bookingFee,
+
+          estimatedTotal: 0,
+          estimatedDistanceKm: 0,
+
+          mechanicCategoryNeeded,
+          customerProblemDescription: customerProblemDescription || null,
+        },
+      });
+    }
+
+    /**
+     * ============================================================
+     * ✅ TOWTRUCK PREVIEW FLOW
+     * ============================================================
+     */
+    if (normalizedTowTruckTypeNeeded) {
+      const pricing = await calculateJobPricing({
+        roleNeeded,
+        pickupLat,
+        pickupLng,
+        dropoffLat,
+        dropoffLng,
+        towTruckTypeNeeded: normalizedTowTruckTypeNeeded,
+        vehicleType,
+        distanceKm,
+      });
+
+      const providers = await findNearbyProviders({
+        roleNeeded,
+        pickupLng,
+        pickupLat,
+        towTruckTypeNeeded: normalizedTowTruckTypeNeeded,
         vehicleType,
         excludedProviders: [],
         maxDistanceMeters: 20000,
@@ -395,23 +319,83 @@ router.post(
         providerCount: providers.length,
         message:
           providers.length > 0
-            ? "Providers found ✅ Please select tow truck type"
-            : "No providers online within range.",
-        preview: {
-          currency: config.currency || "ZAR",
-          distanceKm,
-          resultsByTowTruckType,
-        },
-      });
-    } catch (err) {
-      console.error("❌ PREVIEW ERROR:", err);
-      return res.status(500).json({
-        message: "Could not preview job",
-        error: err.message,
+            ? "Providers found ✅ Please pay booking fee to proceed"
+            : "No providers online within range. Booking fee not required.",
+        preview: pricing,
       });
     }
+
+    const resultsByTowTruckType = {};
+
+    for (const type of towTruckTypes) {
+      const normalizedType = normalizeTowTruckType(type);
+
+      const pricing = await calculateJobPricing({
+        roleNeeded,
+        pickupLat,
+        pickupLng,
+        dropoffLat,
+        dropoffLng,
+        towTruckTypeNeeded: normalizedType,
+        vehicleType,
+        distanceKm,
+      });
+
+      const providersForType = await findNearbyProviders({
+        roleNeeded,
+        pickupLng,
+        pickupLat,
+        towTruckTypeNeeded: normalizedType,
+        vehicleType,
+        excludedProviders: [],
+        maxDistanceMeters: 20000,
+        limit: 10,
+      });
+
+      resultsByTowTruckType[type] = {
+        estimatedTotal: pricing.estimatedTotal,
+        bookingFee: pricing.bookingFee,
+        currency: pricing.currency,
+        estimatedDistanceKm: pricing.estimatedDistanceKm,
+        towTruckTypeMultiplier: pricing.towTruckTypeMultiplier,
+        vehicleTypeMultiplier: pricing.vehicleTypeMultiplier,
+        providersCount: providersForType.length,
+        status: providersForType.length > 0 ? "ONLINE" : "OFFLINE",
+      };
+    }
+
+    const providers = await findNearbyProviders({
+      roleNeeded,
+      pickupLng,
+      pickupLat,
+      towTruckTypeNeeded: null,
+      vehicleType,
+      excludedProviders: [],
+      maxDistanceMeters: 20000,
+      limit: 10,
+    });
+
+    return res.status(200).json({
+      providersFound: providers.length > 0,
+      providerCount: providers.length,
+      message:
+        providers.length > 0
+          ? "Providers found ✅ Please select tow truck type"
+          : "No providers online within range.",
+      preview: {
+        currency: config.currency || "ZAR",
+        distanceKm,
+        resultsByTowTruckType,
+      },
+    });
+  } catch (err) {
+    console.error("❌ PREVIEW ERROR:", err);
+    return res.status(500).json({
+      message: "Could not preview job",
+      error: err.message,
+    });
   }
-);
+});
 
 /**
  * ✅ CUSTOMER creates job
@@ -422,7 +406,6 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
     console.log("✅ CREATE JOB HIT");
     console.log("✅ BODY RECEIVED:", req.body);
 
-    // ✅ Block customer ONLY if they already have a BROADCASTED/ASSIGNED/IN_PROGRESS job
     const existingActive = await Job.findOne({
       customer: req.user._id,
       status: { $in: CUSTOMER_BLOCK_STATUSES },
@@ -469,7 +452,6 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
       });
     }
 
-    // ✅ TowTruck requires dropoff
     if (
       roleNeeded === USER_ROLES.TOW_TRUCK &&
       (dropoffLat === undefined || dropoffLng === undefined)
@@ -479,7 +461,6 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
       });
     }
 
-    // ✅ Mechanic requires category
     if (roleNeeded === USER_ROLES.MECHANIC) {
       if (!mechanicCategoryNeeded) {
         return res.status(400).json({
@@ -535,8 +516,8 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
       vehicleType,
       distanceKm,
 
-      // ✅ IMPORTANT FIX:
-      // calculateJobPricing expects mechanicCategory
+      // NOTE: calculateJobPricing currently does NOT use mechanicCategory,
+      // but we keep this param to avoid breaking future extensions.
       mechanicCategory:
         roleNeeded === USER_ROLES.MECHANIC ? mechanicCategoryNeeded : null,
     });
@@ -546,16 +527,9 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
       dropoffLat !== undefined &&
       dropoffLng !== undefined;
 
-    // ✅ FIX: must match Job model enum
-    // TowTruck: direct-to-provider, Mechanic: pay-after-completion
+    // ✅ FIX: Job model enum expects PAY_AFTER_COMPLETION (NOT PAY_AFTER_SERVICE)
     const paymentMode =
       roleNeeded === USER_ROLES.TOW_TRUCK ? "DIRECT_TO_PROVIDER" : "PAY_AFTER_COMPLETION";
-
-    // ✅ extra safety (never write invalid value even if role string is weird)
-    const safePaymentMode =
-      paymentMode === "DIRECT_TO_PROVIDER" || paymentMode === "PAY_AFTER_COMPLETION"
-        ? paymentMode
-        : "PAY_AFTER_COMPLETION";
 
     // ✅ Mechanic: force estimatedTotal to 0 (final fee unknown)
     const safePricing =
@@ -569,11 +543,8 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
 
     const job = await Job.create({
       title,
-
-      // keep original description
       description,
 
-      // optional extra (safe)
       customerProblemDescription: customerProblemDescription || null,
 
       roleNeeded,
@@ -589,7 +560,6 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
 
       towTruckTypeNeeded: normalizedTowTruckTypeNeeded || null,
 
-      // ✅ NEW (mechanic)
       mechanicCategoryNeeded:
         roleNeeded === USER_ROLES.MECHANIC ? mechanicCategoryNeeded : null,
 
@@ -597,9 +567,8 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
 
       customer: req.user._id,
       status: JOB_STATUSES.CREATED,
-      paymentMode: safePaymentMode,
+      paymentMode,
 
-      // ✅ NEW disclaimer block (safe even if schema strict = false)
       disclaimers:
         roleNeeded === USER_ROLES.MECHANIC
           ? {
@@ -649,10 +618,6 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
   }
 });
 
-/* ============================================================
-   ✅ NEW: CLEANUP ROUTE FOR UNPAID CREATED JOBS
-   ============================================================ */
-
 /**
  * ✅ Customer cancels/deletes a CREATED (unpaid draft) job
  * DELETE /api/jobs/:id/draft
@@ -693,7 +658,7 @@ router.delete("/:id/draft", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (re
 });
 
 /* ============================================================
-   ✅✅✅ ADDITIONS (NO DELETIONS): CUSTOMER "MY JOBS" ROUTES
+   ✅ CUSTOMER "MY JOBS" ROUTES
    ============================================================ */
 
 router.get("/my/active", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => {
@@ -838,10 +803,9 @@ router.get("/:id", auth, async (req, res) => {
   }
 });
 
-/* ============================================================
-   ✅ NEW: CUSTOMER CANCEL ROUTE WITH REFUND RULES
-   ============================================================ */
-
+/**
+ * ✅ CUSTOMER CANCEL ROUTE WITH REFUND RULES
+ */
 router.patch("/:id/cancel", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => {
   try {
     const job = await Job.findById(req.params.id);
@@ -947,11 +911,6 @@ router.patch("/:id/cancel", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (re
 
 /**
  * ✅ UPDATE JOB STATUS
- * PATCH /api/jobs/:id/status
- *
- * ✅ NEW ENFORCEMENT:
- * - Provider can only start job (ASSIGNED -> IN_PROGRESS)
- *   when within 30 meters of pickup location.
  */
 router.patch("/:id/status", auth, async (req, res) => {
   try {
@@ -989,11 +948,8 @@ router.patch("/:id/status", auth, async (req, res) => {
         });
       }
 
-      /**
-       * ✅ NEW: Start-job distance enforcement
-       */
       if (current === JOB_STATUSES.ASSIGNED && status === JOB_STATUSES.IN_PROGRESS) {
-        const pickupCoords = job?.pickupLocation?.coordinates; // [lng, lat]
+        const pickupCoords = job?.pickupLocation?.coordinates;
         if (!Array.isArray(pickupCoords) || pickupCoords.length < 2) {
           return res.status(400).json({
             code: "PICKUP_LOCATION_MISSING",
@@ -1012,9 +968,8 @@ router.patch("/:id/status", auth, async (req, res) => {
           });
         }
 
-        // Provider current GPS from profile
         const me = await User.findById(req.user._id).select("providerProfile.location");
-        const myCoords = me?.providerProfile?.location?.coordinates; // [lng, lat]
+        const myCoords = me?.providerProfile?.location?.coordinates;
 
         if (!Array.isArray(myCoords) || myCoords.length < 2) {
           return res.status(409).json({
@@ -1043,13 +998,6 @@ router.patch("/:id/status", auth, async (req, res) => {
             maxAllowedMeters: START_JOB_MAX_DISTANCE_METERS,
           });
         }
-
-        console.log("✅ Start-job allowed (within pickup radius)", {
-          providerId: req.user._id.toString(),
-          jobId: job._id.toString(),
-          distanceMeters: distMeters,
-          maxAllowedMeters: START_JOB_MAX_DISTANCE_METERS,
-        });
       }
 
       job.status = status;
@@ -1099,8 +1047,6 @@ router.patch("/:id/status", auth, async (req, res) => {
 
 /**
  * ✅ RATE JOB
- * POST /api/jobs/rate
- * Body: { jobId, rating, comment }
  */
 router.post("/rate", auth, async (req, res) => {
   try {
