@@ -1,8 +1,16 @@
 // routes/providers.js
 import express from "express";
 import auth from "../middleware/auth.js";
-import User, { USER_ROLES } from "../models/User.js";
+import User, {
+  USER_ROLES,
+  TOW_TRUCK_TYPES,
+  MECHANIC_CATEGORIES,
+  VEHICLE_TYPES,
+} from "../models/User.js";
 import Job, { JOB_STATUSES } from "../models/Job.js";
+
+// ✅ NEW: PricingConfig source of truth for dashboard-controlled categories/types
+import PricingConfig from "../models/PricingConfig.js";
 
 // ✅✅✅ ADDED (for documents upload)
 import multer from "multer";
@@ -43,6 +51,48 @@ function haversineDistanceKm(lat1, lng1, lat2, lng2) {
 
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   return Number((R * c).toFixed(2));
+}
+
+/**
+ * ✅ Helpers: normalize inputs
+ */
+function normalizeStringArray(input) {
+  if (!input) return [];
+  const list = Array.isArray(input) ? input : [input];
+  return list
+    .map((x) => String(x).trim())
+    .filter(Boolean);
+}
+
+/**
+ * ✅ NEW: Allowed types/categories should come from PricingConfig (dashboard)
+ * Falls back to constants for safety.
+ */
+async function getAllowedProviderTypesFromPricingConfig() {
+  let pricing = await PricingConfig.findOne();
+  if (!pricing) pricing = await PricingConfig.create({});
+
+  const allowedTowTruckTypes =
+    Array.isArray(pricing.towTruckTypes) && pricing.towTruckTypes.length > 0
+      ? pricing.towTruckTypes
+      : TOW_TRUCK_TYPES;
+
+  const allowedMechanicCategories =
+    Array.isArray(pricing.mechanicCategories) && pricing.mechanicCategories.length > 0
+      ? pricing.mechanicCategories
+      : MECHANIC_CATEGORIES;
+
+  const allowedVehicleTypes =
+    Array.isArray(pricing.vehicleTypes) && pricing.vehicleTypes.length > 0
+      ? pricing.vehicleTypes
+      : VEHICLE_TYPES;
+
+  return {
+    pricing,
+    allowedTowTruckTypes,
+    allowedMechanicCategories,
+    allowedVehicleTypes,
+  };
 }
 
 /**
@@ -137,8 +187,15 @@ router.get("/me", auth, async (req, res) => {
 });
 
 /**
- * ✅ Provider profile update (ONLY email + phone editable)
+ * ✅ Provider profile update
  * PATCH /api/providers/me
+ *
+ * ✅ UPDATED:
+ * - still supports email + phone
+ * - ALSO allows providers to update:
+ *    - mechanicCategories (Mechanic only)
+ *    - towTruckTypes (TowTruck only)
+ *    - carTypesSupported (both)
  */
 router.patch("/me", auth, async (req, res) => {
   try {
@@ -147,20 +204,69 @@ router.patch("/me", auth, async (req, res) => {
       return res.status(403).json({ message: "Only providers can update this profile" });
     }
 
-    const { email, phone } = req.body;
+    const { email, phone, mechanicCategories, towTruckTypes, carTypesSupported } = req.body || {};
 
-    const update = {};
-    if (typeof email === "string") update.email = email.trim();
-    if (typeof phone === "string") update.phone = phone.trim();
+    const { allowedTowTruckTypes, allowedMechanicCategories, allowedVehicleTypes } =
+      await getAllowedProviderTypesFromPricingConfig();
 
-    const user = await User.findByIdAndUpdate(req.user._id, update, {
-      new: true,
-      runValidators: true,
-    }).select("name email phone role providerProfile createdAt updatedAt");
-
+    const user = await User.findById(req.user._id);
     if (!user) return res.status(404).json({ message: "User not found" });
+    if (!user.providerProfile) user.providerProfile = {};
 
-    return res.status(200).json({ user });
+    // email/phone update (existing behavior)
+    if (typeof email === "string" && email.trim()) user.email = email.trim();
+    if (typeof phone === "string" && phone.trim()) user.phone = phone.trim();
+
+    // car types (both roles)
+    if (Array.isArray(carTypesSupported) && carTypesSupported.length > 0) {
+      const normalizedCars = normalizeStringArray(carTypesSupported);
+      const invalidCars = normalizedCars.filter((v) => !allowedVehicleTypes.includes(v));
+      if (invalidCars.length > 0) {
+        return res.status(400).json({
+          message: `Invalid carTypesSupported: ${invalidCars.join(", ")}`,
+          allowed: allowedVehicleTypes,
+        });
+      }
+      user.providerProfile.carTypesSupported = normalizedCars;
+    }
+
+    // mechanic categories (mechanic only)
+    if (req.user.role === USER_ROLES.MECHANIC) {
+      if (Array.isArray(mechanicCategories) && mechanicCategories.length > 0) {
+        const normalizedCats = normalizeStringArray(mechanicCategories);
+        const invalid = normalizedCats.filter((c) => !allowedMechanicCategories.includes(c));
+        if (invalid.length > 0) {
+          return res.status(400).json({
+            message: `Invalid mechanicCategories: ${invalid.join(", ")}`,
+            allowed: allowedMechanicCategories,
+          });
+        }
+        user.providerProfile.mechanicCategories = normalizedCats;
+      }
+    }
+
+    // tow truck types (tow truck only)
+    if (req.user.role === USER_ROLES.TOW_TRUCK) {
+      if (Array.isArray(towTruckTypes) && towTruckTypes.length > 0) {
+        const normalizedTypes = normalizeStringArray(towTruckTypes);
+        const invalid = normalizedTypes.filter((t) => !allowedTowTruckTypes.includes(t));
+        if (invalid.length > 0) {
+          return res.status(400).json({
+            message: `Invalid towTruckTypes: ${invalid.join(", ")}`,
+            allowed: allowedTowTruckTypes,
+          });
+        }
+        user.providerProfile.towTruckTypes = normalizedTypes;
+      }
+    }
+
+    await user.save();
+
+    const fresh = await User.findById(user._id).select(
+      "name email phone role providerProfile createdAt updatedAt"
+    );
+
+    return res.status(200).json({ user: fresh });
   } catch (err) {
     return res.status(500).json({
       message: "Could not update provider profile",
@@ -276,6 +382,9 @@ router.patch("/me/status", auth, async (req, res) => {
       return res.status(403).json({ message: "Only service providers can update status" });
     }
 
+    const { allowedTowTruckTypes, allowedMechanicCategories, allowedVehicleTypes } =
+      await getAllowedProviderTypesFromPricingConfig();
+
     const user = await User.findById(req.user._id);
     if (!user) return res.status(404).json({ message: "User not found" });
 
@@ -332,6 +441,34 @@ router.patch("/me/status", auth, async (req, res) => {
           });
         }
       }
+
+      // ✅ IMPORTANT: Mechanics should not go online without categories saved
+      if (req.user.role === USER_ROLES.MECHANIC) {
+        const existingCats = user.providerProfile.mechanicCategories || [];
+        const incomingCats =
+          Array.isArray(mechanicCategories) && mechanicCategories.length > 0
+            ? normalizeStringArray(mechanicCategories)
+            : [];
+
+        const finalCats = incomingCats.length > 0 ? incomingCats : existingCats;
+
+        if (!finalCats || finalCats.length === 0) {
+          return res.status(400).json({
+            message: "Cannot go ONLINE: mechanicCategories missing. Please select categories.",
+            code: "MECHANIC_CATEGORIES_MISSING",
+          });
+        }
+
+        const invalid = finalCats.filter((c) => !allowedMechanicCategories.includes(c));
+        if (invalid.length > 0) {
+          return res.status(400).json({
+            message: `Invalid mechanicCategories: ${invalid.join(", ")}`,
+            allowed: allowedMechanicCategories,
+          });
+        }
+
+        user.providerProfile.mechanicCategories = finalCats;
+      }
     }
 
     if (hasIncomingLatLng) {
@@ -343,22 +480,46 @@ router.patch("/me/status", auth, async (req, res) => {
 
     user.providerProfile.lastSeenAt = new Date();
 
-    // ✅ Save supported car types for both roles
-    if (Array.isArray(carTypesSupported)) {
-      user.providerProfile.carTypesSupported = carTypesSupported;
+    // ✅ Save supported car types for both roles (only if non-empty to avoid wiping)
+    if (Array.isArray(carTypesSupported) && carTypesSupported.length > 0) {
+      const normalizedCars = normalizeStringArray(carTypesSupported);
+      const invalidCars = normalizedCars.filter((v) => !allowedVehicleTypes.includes(v));
+      if (invalidCars.length > 0) {
+        return res.status(400).json({
+          message: `Invalid carTypesSupported: ${invalidCars.join(", ")}`,
+          allowed: allowedVehicleTypes,
+        });
+      }
+      user.providerProfile.carTypesSupported = normalizedCars;
     }
 
-    // ✅ TowTruck role: only allow towTruckTypes
+    // ✅ TowTruck role: only allow towTruckTypes (only if non-empty to avoid wiping)
     if (req.user.role === USER_ROLES.TOW_TRUCK) {
-      if (Array.isArray(towTruckTypes)) {
-        user.providerProfile.towTruckTypes = towTruckTypes;
+      if (Array.isArray(towTruckTypes) && towTruckTypes.length > 0) {
+        const normalizedTypes = normalizeStringArray(towTruckTypes);
+        const invalid = normalizedTypes.filter((t) => !allowedTowTruckTypes.includes(t));
+        if (invalid.length > 0) {
+          return res.status(400).json({
+            message: `Invalid towTruckTypes: ${invalid.join(", ")}`,
+            allowed: allowedTowTruckTypes,
+          });
+        }
+        user.providerProfile.towTruckTypes = normalizedTypes;
       }
     }
 
-    // ✅ Mechanic role: only allow mechanicCategories
+    // ✅ Mechanic role: allow mechanicCategories update (only if non-empty to avoid wiping)
     if (req.user.role === USER_ROLES.MECHANIC) {
-      if (Array.isArray(mechanicCategories)) {
-        user.providerProfile.mechanicCategories = mechanicCategories;
+      if (Array.isArray(mechanicCategories) && mechanicCategories.length > 0) {
+        const normalizedCats = normalizeStringArray(mechanicCategories);
+        const invalid = normalizedCats.filter((c) => !allowedMechanicCategories.includes(c));
+        if (invalid.length > 0) {
+          return res.status(400).json({
+            message: `Invalid mechanicCategories: ${invalid.join(", ")}`,
+            allowed: allowedMechanicCategories,
+          });
+        }
+        user.providerProfile.mechanicCategories = normalizedCats;
       }
     }
 
