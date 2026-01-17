@@ -1,6 +1,7 @@
 import Job, { JOB_STATUSES } from "../models/Job.js";
 import { sendPushToManyUsers } from "./sendPush.js";
 import { findNearbyProviders } from "./findNearbyProviders.js";
+import { USER_ROLES } from "../models/User.js";
 
 /**
  * ✅ Broadcast job to nearest 10 matching providers
@@ -38,13 +39,30 @@ export const broadcastJobToProviders = async (jobId) => {
     return { message: "Job missing pickup coordinates", providers: [] };
   }
 
-  // ✅ Find providers using shared helper
+  /**
+   * ✅ Mechanic category needed
+   * Comes from Job model: mechanicCategoryNeeded
+   */
+  const mechanicCategoryNeeded =
+    job.mechanicCategoryNeeded || job.mechanicCategory || null;
+
+  /**
+   * ✅ Find providers using shared helper
+   * TowTruck -> towTruckTypeNeeded + vehicleType
+   * Mechanic -> mechanicCategoryNeeded
+   */
   const providers = await findNearbyProviders({
     roleNeeded: job.roleNeeded,
     pickupLng,
     pickupLat,
+
+    // TowTruck filters
     towTruckTypeNeeded: job.towTruckTypeNeeded,
     vehicleType: job.vehicleType,
+
+    // Mechanic filter
+    mechanicCategoryNeeded,
+
     excludedProviders: job.excludedProviders || [],
     maxDistanceMeters: 20000,
     limit: 10,
@@ -69,8 +87,16 @@ export const broadcastJobToProviders = async (jobId) => {
   await job.save();
 
   /**
-   * ✅ Compute provider payout (total - bookingFee commission)
-   * NOTE: adjust these fields if your pricing uses different names.
+   * ✅ Pricing display logic
+   *
+   * TowTruck:
+   * - totalFee exists (estimatedTotal)
+   * - providerPayout = totalFee - bookingFee
+   *
+   * Mechanic:
+   * - final fee unknown
+   * - totalFee should be 0
+   * - providerPayout should be 0 (do not mislead)
    */
   const bookingFee = Number(job.pricing?.bookingFee || 0);
 
@@ -85,18 +111,22 @@ export const broadcastJobToProviders = async (jobId) => {
     job.totalAmount,
   ].map((v) => (v == null ? null : Number(v)));
 
-  const totalFee = totalCandidates.find((v) => typeof v === "number" && !Number.isNaN(v)) || 0;
+  const detectedTotalFee =
+    totalCandidates.find((v) => typeof v === "number" && !Number.isNaN(v)) || 0;
 
-  const providerPayout = Math.max(0, totalFee - bookingFee);
   const currency = job.pricing?.currency || "ZAR";
+
+  // ✅ Force mechanic total to 0 (as requested)
+  const totalFee = job.roleNeeded === USER_ROLES.MECHANIC ? 0 : detectedTotalFee;
+
+  // ✅ Provider payout:
+  // TowTruck: total - bookingFee
+  // Mechanic: 0 (final fee decided later)
+  const providerPayout =
+    job.roleNeeded === USER_ROLES.MECHANIC ? 0 : Math.max(0, totalFee - bookingFee);
 
   /**
    * ✅ SEND PUSH NOTIFICATIONS
-   *
-   * IMPORTANT:
-   * - You MUST include "open" + "jobId" in DATA
-   * - For distance: multicast uses same data for all providers,
-   *   so we send pickupLat/Lng and compute distance on Android per provider.
    */
   try {
     const providersWithTokens = providers
@@ -109,13 +139,27 @@ export const broadcastJobToProviders = async (jobId) => {
     console.log("✅ Providers with tokens:", providersWithTokens.length);
 
     if (providersWithTokens.length > 0) {
-      const pushTitle = "🚨 New Job Request Near You";
+      const pushTitle =
+        job.roleNeeded === USER_ROLES.MECHANIC
+          ? "🔧 New Mechanic Job Near You"
+          : "🚨 New Job Request Near You";
 
+      // TowTruck extras
       const towType = job.towTruckTypeNeeded ? `Tow Type: ${job.towTruckTypeNeeded}` : "";
       const vehicle = job.vehicleType ? `Vehicle: ${job.vehicleType}` : "";
+
+      // Mechanic extras
+      const mechCategory = mechanicCategoryNeeded
+        ? `Category: ${mechanicCategoryNeeded}`
+        : "";
+
       const pickupText = job.pickupAddressText ? `Pickup: ${job.pickupAddressText}` : "";
 
-      const pushBody = `${job.title || "TowMech Service"}\n${[towType, vehicle, pickupText]
+      const pushBody = `${job.title || "TowMech Service"}\n${[
+        job.roleNeeded === USER_ROLES.MECHANIC ? mechCategory : towType,
+        job.roleNeeded === USER_ROLES.MECHANIC ? "" : vehicle,
+        pickupText,
+      ]
         .filter(Boolean)
         .join(" | ")}`;
 
@@ -124,36 +168,42 @@ export const broadcastJobToProviders = async (jobId) => {
         title: pushTitle,
         body: pushBody,
 
-        // ✅ DATA is what your Android app uses to route + show popup content
-        // ✅ Keep values simple; FCM requires strings (your sendPush.js normalizes, but we also stringify here)
+        // ✅ DATA used by Android app routing + popup content
         data: {
           open: "job_requests",
           jobId: job._id.toString(),
 
-          // ✅ helpful for foreground handling
+          // Helpful for foreground handling
           title: pushTitle,
           body: pushBody,
 
-          // ✅ Popup details
+          // Popup details
           pickup: String(job.pickupAddressText || ""),
           dropoff: String(job.dropoffAddressText || ""),
+
           roleNeeded: String(job.roleNeeded || ""),
+
+          // TowTruck
           towTruckTypeNeeded: String(job.towTruckTypeNeeded || ""),
           vehicleType: String(job.vehicleType || ""),
 
-          // ✅ Amount display (provider payout)
+          // Mechanic
+          mechanicCategoryNeeded: String(mechanicCategoryNeeded || ""),
+
+          // ✅ Customer problem description (correct field)
+          customerProblemDescription: String(job.customerProblemDescription || ""),
+
+          // Amount display
           currency: String(currency),
           bookingFee: String(bookingFee),
+
+          // TowTruck only (Mechanic stays 0)
           totalFee: String(totalFee),
           providerPayout: String(providerPayout),
 
-          // ✅ Distance: compute per provider on Android (since multicast is same for all)
+          // Distance: compute per provider on Android
           pickupLat: String(pickupLat),
           pickupLng: String(pickupLng),
-
-          // Optional if you want
-          // dropoffLat: String(job.dropoffLocation?.coordinates?.[1] ?? ""),
-          // dropoffLng: String(job.dropoffLocation?.coordinates?.[0] ?? ""),
         },
       });
 

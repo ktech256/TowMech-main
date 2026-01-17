@@ -2,7 +2,14 @@ import express from "express";
 import crypto from "crypto";
 import jwt from "jsonwebtoken";
 import auth from "../middleware/auth.js";
-import User, { USER_ROLES, TOW_TRUCK_TYPES } from "../models/User.js";
+import User, {
+  USER_ROLES,
+  TOW_TRUCK_TYPES,
+  MECHANIC_CATEGORIES,
+} from "../models/User.js";
+
+// ✅ NEW: PricingConfig source of truth for dashboard-controlled categories/types
+import PricingConfig from "../models/PricingConfig.js";
 
 // ✅ SMS provider (Twilio) — SAFE import for ESM/Render
 import twilioPkg from "twilio";
@@ -157,6 +164,7 @@ function normalizeTowTruckTypes(input) {
       if (lower.includes("rotator") || lower.includes("heavy-duty") || lower === "recovery")
         return "Heavy-Duty Rotator(Recovery)";
 
+      // Legacy compatibility
       if (lower === "towtruck") return "TowTruck";
       if (lower === "towtruck-xl" || lower === "towtruck xl") return "TowTruck-XL";
       if (lower === "towtruck-xxl" || lower === "towtruck xxl") return "TowTruck-XXL";
@@ -166,6 +174,43 @@ function normalizeTowTruckTypes(input) {
 
       return x;
     });
+}
+
+/**
+ * ✅ Helper: Normalize mechanic categories
+ */
+function normalizeMechanicCategories(input) {
+  if (!input) return [];
+  const list = Array.isArray(input) ? input : [input];
+
+  return list
+    .map((x) => String(x).trim())
+    .filter(Boolean);
+}
+
+/**
+ * ✅ NEW: Allowed types/categories should come from PricingConfig (dashboard)
+ * Falls back to constants for safety.
+ */
+async function getAllowedProviderTypesFromPricingConfig() {
+  let pricing = await PricingConfig.findOne();
+  if (!pricing) pricing = await PricingConfig.create({});
+
+  const allowedTowTruckTypes =
+    Array.isArray(pricing.towTruckTypes) && pricing.towTruckTypes.length > 0
+      ? pricing.towTruckTypes
+      : TOW_TRUCK_TYPES;
+
+  const allowedMechanicCategories =
+    Array.isArray(pricing.mechanicCategories) && pricing.mechanicCategories.length > 0
+      ? pricing.mechanicCategories
+      : MECHANIC_CATEGORIES;
+
+  return {
+    pricing,
+    allowedTowTruckTypes,
+    allowedMechanicCategories,
+  };
 }
 
 /**
@@ -209,7 +254,9 @@ router.post("/register", async (req, res) => {
       country,
 
       role = USER_ROLES.CUSTOMER,
+
       towTruckTypes,
+      mechanicCategories, // ✅ NEW
     } = req.body;
 
     if (!Object.values(USER_ROLES).includes(role)) {
@@ -274,24 +321,48 @@ router.post("/register", async (req, res) => {
       }
     }
 
-    if (role === USER_ROLES.TOW_TRUCK) {
-      const normalizedTypes = normalizeTowTruckTypes(towTruckTypes);
+    // ✅ Load allowed types/categories from PricingConfig (dashboard controlled)
+    const { allowedTowTruckTypes, allowedMechanicCategories } =
+      await getAllowedProviderTypesFromPricingConfig();
 
-      if (!normalizedTypes.length) {
+    // ✅ Tow truck onboarding validation
+    let normalizedTowTypes = [];
+    if (role === USER_ROLES.TOW_TRUCK) {
+      normalizedTowTypes = normalizeTowTruckTypes(towTruckTypes);
+
+      if (!normalizedTowTypes.length) {
         return res.status(400).json({
           message: "TowTruck providers must select at least 1 towTruckType",
         });
       }
 
-      const invalid = normalizedTypes.filter((t) => !TOW_TRUCK_TYPES.includes(t));
+      const invalid = normalizedTowTypes.filter((t) => !allowedTowTruckTypes.includes(t));
       if (invalid.length > 0) {
         return res.status(400).json({
           message: `Invalid towTruckTypes: ${invalid.join(", ")}`,
-          allowed: TOW_TRUCK_TYPES,
+          allowed: allowedTowTruckTypes,
+        });
+      }
+    }
+
+    // ✅ Mechanic onboarding validation
+    let normalizedMechCats = [];
+    if (role === USER_ROLES.MECHANIC) {
+      normalizedMechCats = normalizeMechanicCategories(mechanicCategories);
+
+      if (!normalizedMechCats.length) {
+        return res.status(400).json({
+          message: "Mechanics must select at least 1 mechanic category",
         });
       }
 
-      req.body.towTruckTypes = normalizedTypes;
+      const invalid = normalizedMechCats.filter((c) => !allowedMechanicCategories.includes(c));
+      if (invalid.length > 0) {
+        return res.status(400).json({
+          message: `Invalid mechanicCategories: ${invalid.join(", ")}`,
+          allowed: allowedMechanicCategories,
+        });
+      }
     }
 
     const existingEmail = await User.findOne({ email });
@@ -321,10 +392,11 @@ router.post("/register", async (req, res) => {
       providerProfile:
         role !== USER_ROLES.CUSTOMER
           ? {
-              towTruckTypes: role === USER_ROLES.TOW_TRUCK ? req.body.towTruckTypes : [],
+              towTruckTypes: role === USER_ROLES.TOW_TRUCK ? normalizedTowTypes : [],
+              mechanicCategories: role === USER_ROLES.MECHANIC ? normalizedMechCats : [],
               isOnline: false,
               verificationStatus: "PENDING",
-              // ✅ session fields (no session until verify-otp)
+
               sessionId: null,
               sessionIssuedAt: null,
             }
@@ -423,22 +495,20 @@ router.post("/verify-otp", async (req, res) => {
     let sessionId = null;
 
     if (isProviderRole(user.role)) {
-      // ensure providerProfile exists for older accounts
       if (!user.providerProfile) {
         user.providerProfile = {
           isOnline: false,
           verificationStatus: "PENDING",
           location: { type: "Point", coordinates: [0, 0] },
           towTruckTypes: [],
+          mechanicCategories: [],
         };
       }
 
-      // generate new session id -> old device becomes invalid
       sessionId = crypto.randomBytes(24).toString("hex");
       user.providerProfile.sessionId = sessionId;
       user.providerProfile.sessionIssuedAt = new Date();
 
-      // OPTIONAL safety: when session changes, force offline
       user.providerProfile.isOnline = false;
     }
 
@@ -564,13 +634,6 @@ router.get("/me", auth, async (req, res) => {
 /**
  * ✅ Logout (clears FCM token + invalidates provider session)
  * POST /api/auth/logout
- *
- * - Clears:
- *   - providerProfile.fcmToken (providers)
- *   - fcmToken (root, if you have it)
- * - Providers:
- *   - set isOnline=false
- *   - sessionId/sessionIssuedAt cleared so old JWT fails immediately
  */
 router.post("/logout", auth, async (req, res) => {
   try {
@@ -590,7 +653,7 @@ router.post("/logout", auth, async (req, res) => {
       user.providerProfile.fcmToken = null;
       user.providerProfile.isOnline = false;
 
-      // ✅ IMPORTANT: invalidates any existing provider JWT immediately
+      // ✅ invalidates any existing provider JWT immediately
       user.providerProfile.sessionId = null;
       user.providerProfile.sessionIssuedAt = null;
     }

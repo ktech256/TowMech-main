@@ -25,21 +25,27 @@ function haversineDistanceKm(lat1, lng1, lat2, lng2) {
 
 /**
  * ✅ Find nearby matching providers within range
+ *
  * ✅ Keeps your existing behavior:
  * - 20km geo radius
  * - towTruckTypes filter
  * - vehicleType filter that does NOT exclude providers with empty carTypesSupported
  *
- * ✅ NEW broadcast rules added:
- * 1) Exclude providers who already have 2 active jobs (IN_PROGRESS + ASSIGNED)
- * 2) Exclude providers who have IN_PROGRESS and are > 3km from dropoff
- * 3) Exclude providers who already have 1 ASSIGNED job (they already “stacked” a next job)
+ * ✅ Adds Mechanic category filtering:
+ * - mechanicCategoryNeeded -> providerProfile.mechanicCategories
+ *
+ * ✅ Broadcast rules retained with a fix:
+ * - The "IN_PROGRESS + >3km from dropoff" rule ONLY applies to TowTruck,
+ *   because mechanic jobs typically have no dropoffLocation.
  */
 export const findNearbyProviders = async ({
   roleNeeded,
   pickupLng,
   pickupLat,
+
   towTruckTypeNeeded = undefined,
+  mechanicCategoryNeeded = undefined, // ✅ NEW
+
   vehicleType = null,
   excludedProviders = [],
   maxDistanceMeters = 20000,
@@ -58,7 +64,7 @@ export const findNearbyProviders = async ({
   };
 
   /**
-   * ✅ TowTruck type filter
+   * ✅ TowTruck filters
    */
   if (roleNeeded === USER_ROLES.TOW_TRUCK) {
     const normalizedTowTruckType =
@@ -84,6 +90,24 @@ export const findNearbyProviders = async ({
         { "providerProfile.carTypesSupported": { $exists: false } },
         { "providerProfile.carTypesSupported": { $size: 0 } },
       ];
+    }
+  }
+
+  /**
+   * ✅ Mechanic filters (NEW)
+   */
+  if (roleNeeded === USER_ROLES.MECHANIC) {
+    const normalizedCategory =
+      typeof mechanicCategoryNeeded === "string"
+        ? mechanicCategoryNeeded.trim()
+        : mechanicCategoryNeeded;
+
+    if (
+      normalizedCategory &&
+      normalizedCategory !== "null" &&
+      normalizedCategory !== "undefined"
+    ) {
+      providerQuery["providerProfile.mechanicCategories"] = normalizedCategory;
     }
   }
 
@@ -137,7 +161,6 @@ export const findNearbyProviders = async ({
     }
   }
 
-  // ✅ Apply your new broadcast rules
   const eligible = [];
 
   for (const provider of preProviders) {
@@ -156,13 +179,22 @@ export const findNearbyProviders = async ({
     // 2) Has 1 ASSIGNED job (and not in-progress) => exclude (already stacked next job)
     if (info.assignedCount >= 1 && info.inProgressCount === 0) continue;
 
-    // 3) If IN_PROGRESS, allow only if within 3km of dropoff
+    /**
+     * 3) If IN_PROGRESS:
+     * - TowTruck: allow only if within 3km of dropoff
+     * - Mechanic: exclude (mechanic jobs usually don’t have dropoff; don’t stack)
+     */
     if (info.inProgressCount >= 1) {
+      if (roleNeeded === USER_ROLES.MECHANIC) {
+        // ✅ mechanic should not receive new jobs while already in progress
+        continue;
+      }
+
       const job = info.inProgressJob;
 
       const dropCoords = job?.dropoffLocation?.coordinates;
       if (!Array.isArray(dropCoords) || dropCoords.length < 2) {
-        // no dropoff => cannot judge “close to finishing” => exclude
+        // TowTruck with missing dropoff => exclude (cannot determine closeness)
         continue;
       }
 
@@ -175,11 +207,7 @@ export const findNearbyProviders = async ({
       const myLng = Number(myCoords[0]);
       const myLat = Number(myCoords[1]);
 
-      if (
-        !Number.isFinite(myLat) ||
-        !Number.isFinite(myLng) ||
-        (myLat === 0 && myLng === 0)
-      ) {
+      if (!Number.isFinite(myLat) || !Number.isFinite(myLng) || (myLat === 0 && myLng === 0)) {
         continue;
       }
 
@@ -187,16 +215,14 @@ export const findNearbyProviders = async ({
 
       if (distKm > 3) continue;
 
-      // ✅ within 3km => eligible for 1 incoming job
       eligible.push(provider);
       continue;
     }
 
-    // ✅ 0 active jobs => eligible
     eligible.push(provider);
   }
 
   console.log("✅ Providers found (eligible):", eligible.length);
 
   return eligible.slice(0, limit);
-}
+};

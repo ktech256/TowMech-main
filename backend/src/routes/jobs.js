@@ -39,6 +39,12 @@ const PROVIDER_NO_SHOW_REFUND_WINDOW_MS = 45 * 60 * 1000; // 45 minutes after AS
 const START_JOB_MAX_DISTANCE_METERS = 30;
 
 /**
+ * ✅ Mechanic disclaimer text (shown on multiple screens)
+ */
+const MECHANIC_FINAL_FEE_DISCLAIMER =
+  "⚠️ Mechanic final fee will be determined after diagnosis. Only the booking fee is paid now.";
+
+/**
  * ✅ TowTruck Type Normalizer (NEW preferred names + legacy compatibility)
  * - Keeps system stable while DB/clients may still send old values
  * - Outputs the new preferred names used in PricingConfig multipliers
@@ -64,7 +70,8 @@ function normalizeTowTruckType(type) {
 
   if (lower.includes("boom")) return "Boom Trucks(With Crane)";
 
-  if (lower.includes("integrated") || lower.includes("wrecker")) return "Integrated / Wrecker";
+  if (lower.includes("integrated") || lower.includes("wrecker"))
+    return "Integrated / Wrecker";
 
   if (lower.includes("rotator") || lower.includes("heavy-duty") || lower === "recovery")
     return "Heavy-Duty Rotator(Recovery)";
@@ -166,6 +173,12 @@ router.post(
         dropoffAddressText,
         towTruckTypeNeeded,
         vehicleType,
+
+        // ✅ NEW: mechanic category selection
+        mechanicCategoryNeeded,
+
+        // ✅ NEW: customer can describe problem briefly
+        customerProblemDescription,
       } = req.body;
 
       if (!title || !roleNeeded || pickupLat === undefined || pickupLng === undefined) {
@@ -174,6 +187,7 @@ router.post(
         });
       }
 
+      // ✅ TowTruck requires dropoff
       if (
         roleNeeded === USER_ROLES.TOW_TRUCK &&
         (dropoffLat === undefined || dropoffLng === undefined)
@@ -181,6 +195,15 @@ router.post(
         return res.status(400).json({
           message: "TowTruck jobs require dropoffLat and dropoffLng",
         });
+      }
+
+      // ✅ Mechanic requires mechanicCategoryNeeded
+      if (roleNeeded === USER_ROLES.MECHANIC) {
+        if (!mechanicCategoryNeeded) {
+          return res.status(400).json({
+            message: "mechanicCategoryNeeded is required for Mechanic jobs",
+          });
+        }
       }
 
       const normalizedTowTruckTypeNeeded = towTruckTypeNeeded
@@ -215,6 +238,74 @@ router.post(
           ? haversineDistanceKm(pickupLat, pickupLng, dropoffLat, dropoffLng)
           : 0;
 
+      /**
+       * ============================================================
+       * ✅ MECHANIC PREVIEW FLOW (NEW)
+       * - Booking fee only
+       * - Final fee not predetermined
+       * ============================================================
+       */
+      if (roleNeeded === USER_ROLES.MECHANIC) {
+        const pricing = await calculateJobPricing({
+          roleNeeded,
+          pickupLat,
+          pickupLng,
+
+          // mechanic has no dropoff
+          dropoffLat: undefined,
+          dropoffLng: undefined,
+
+          towTruckTypeNeeded: null,
+          vehicleType,
+          distanceKm: 0,
+
+          // ✅ IMPORTANT FIX:
+          // calculateJobPricing expects mechanicCategory (NOT mechanicCategoryNeeded)
+          mechanicCategory: mechanicCategoryNeeded,
+        });
+
+        const providers = await findNearbyProviders({
+          roleNeeded,
+          pickupLng,
+          pickupLat,
+          towTruckTypeNeeded: null,
+          vehicleType,
+          mechanicCategoryNeeded, // ✅ filter mechanics by category
+          excludedProviders: [],
+          maxDistanceMeters: 20000,
+          limit: 10,
+        });
+
+        return res.status(200).json({
+          providersFound: providers.length > 0,
+          providerCount: providers.length,
+          message:
+            providers.length > 0
+              ? "Mechanics found ✅ Please pay booking fee to proceed"
+              : "No mechanics online within range. Booking fee not required.",
+          disclaimer: {
+            mechanicFinalFeeNotPredetermined: true,
+            text: MECHANIC_FINAL_FEE_DISCLAIMER,
+          },
+          preview: {
+            currency: pricing.currency,
+            bookingFee: pricing.bookingFee,
+
+            // keep these for compatibility (but set safe values)
+            estimatedTotal: 0,
+            estimatedDistanceKm: 0,
+
+            mechanicCategoryNeeded,
+            customerProblemDescription: customerProblemDescription || null,
+          },
+        });
+      }
+
+      /**
+       * ============================================================
+       * ✅ TOWTRUCK PREVIEW FLOW (UNCHANGED)
+       * ============================================================
+       */
       if (normalizedTowTruckTypeNeeded) {
         const pricing = await calculateJobPricing({
           roleNeeded,
@@ -364,6 +455,12 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
       dropoffAddressText,
       towTruckTypeNeeded,
       vehicleType,
+
+      // ✅ NEW: mechanic category
+      mechanicCategoryNeeded,
+
+      // ✅ NEW: customer describes issue briefly
+      customerProblemDescription,
     } = req.body;
 
     if (!title || !roleNeeded || pickupLat === undefined || pickupLng === undefined) {
@@ -372,6 +469,7 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
       });
     }
 
+    // ✅ TowTruck requires dropoff
     if (
       roleNeeded === USER_ROLES.TOW_TRUCK &&
       (dropoffLat === undefined || dropoffLng === undefined)
@@ -379,6 +477,15 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
       return res.status(400).json({
         message: "TowTruck jobs require dropoffLat and dropoffLng",
       });
+    }
+
+    // ✅ Mechanic requires category
+    if (roleNeeded === USER_ROLES.MECHANIC) {
+      if (!mechanicCategoryNeeded) {
+        return res.status(400).json({
+          message: "mechanicCategoryNeeded is required for Mechanic jobs",
+        });
+      }
     }
 
     const normalizedTowTruckTypeNeeded = towTruckTypeNeeded
@@ -389,8 +496,13 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
       roleNeeded,
       pickupLng,
       pickupLat,
+
       towTruckTypeNeeded: normalizedTowTruckTypeNeeded,
       vehicleType,
+
+      mechanicCategoryNeeded:
+        roleNeeded === USER_ROLES.MECHANIC ? mechanicCategoryNeeded : null,
+
       excludedProviders: [],
       maxDistanceMeters: 20000,
       limit: 10,
@@ -413,35 +525,86 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
       roleNeeded,
       pickupLat,
       pickupLng,
-      dropoffLat,
-      dropoffLng,
-      towTruckTypeNeeded: normalizedTowTruckTypeNeeded,
+
+      dropoffLat: roleNeeded === USER_ROLES.TOW_TRUCK ? dropoffLat : undefined,
+      dropoffLng: roleNeeded === USER_ROLES.TOW_TRUCK ? dropoffLng : undefined,
+
+      towTruckTypeNeeded:
+        roleNeeded === USER_ROLES.TOW_TRUCK ? normalizedTowTruckTypeNeeded : null,
+
       vehicleType,
       distanceKm,
+
+      // ✅ IMPORTANT FIX:
+      // calculateJobPricing expects mechanicCategory
+      mechanicCategory:
+        roleNeeded === USER_ROLES.MECHANIC ? mechanicCategoryNeeded : null,
     });
 
-    const hasDropoff = dropoffLat !== undefined && dropoffLng !== undefined;
+    const hasDropoff =
+      roleNeeded === USER_ROLES.TOW_TRUCK &&
+      dropoffLat !== undefined &&
+      dropoffLng !== undefined;
 
     const paymentMode =
       roleNeeded === USER_ROLES.TOW_TRUCK ? "DIRECT_TO_PROVIDER" : "PAY_AFTER_SERVICE";
 
+    // ✅ Mechanic: force estimatedTotal to 0 (final fee unknown)
+    const safePricing =
+      roleNeeded === USER_ROLES.MECHANIC
+        ? {
+            ...pricing,
+            estimatedTotal: 0,
+            estimatedDistanceKm: 0,
+          }
+        : pricing;
+
     const job = await Job.create({
       title,
+
+      // keep original description
       description,
+
+      // optional extra (safe)
+      customerProblemDescription: customerProblemDescription || null,
+
       roleNeeded,
+
       pickupLocation: { type: "Point", coordinates: [pickupLng, pickupLat] },
       pickupAddressText: pickupAddressText || null,
+
       dropoffLocation: hasDropoff
         ? { type: "Point", coordinates: [dropoffLng, dropoffLat] }
         : undefined,
+
       dropoffAddressText: hasDropoff ? dropoffAddressText : undefined,
+
       towTruckTypeNeeded: normalizedTowTruckTypeNeeded || null,
+
+      // ✅ NEW (mechanic)
+      mechanicCategoryNeeded:
+        roleNeeded === USER_ROLES.MECHANIC ? mechanicCategoryNeeded : null,
+
       vehicleType: vehicleType || null,
+
       customer: req.user._id,
       status: JOB_STATUSES.CREATED,
       paymentMode,
+
+      // ✅ NEW disclaimer block (safe even if schema strict = false)
+      disclaimers:
+        roleNeeded === USER_ROLES.MECHANIC
+          ? {
+              mechanicFinalFeeNotPredetermined: true,
+              text: MECHANIC_FINAL_FEE_DISCLAIMER,
+            }
+          : {
+              mechanicFinalFeeNotPredetermined: false,
+              text: null,
+            },
+
       pricing: {
-        ...pricing,
+        ...safePricing,
         bookingFeeStatus: "PENDING",
         bookingFeePaidAt: null,
         bookingFeeRefundedAt: null,
@@ -451,14 +614,21 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
     const payment = await Payment.create({
       job: job._id,
       customer: req.user._id,
-      amount: pricing.bookingFee,
-      currency: pricing.currency,
+      amount: safePricing.bookingFee,
+      currency: safePricing.currency,
       status: PAYMENT_STATUSES.PENDING,
       provider: "SIMULATION",
     });
 
     return res.status(201).json({
       message: `Job created ✅ Providers found: ${providers.length}. Booking fee required.`,
+      disclaimer:
+        roleNeeded === USER_ROLES.MECHANIC
+          ? {
+              mechanicFinalFeeNotPredetermined: true,
+              text: MECHANIC_FINAL_FEE_DISCLAIMER,
+            }
+          : null,
       job,
       payment,
     });

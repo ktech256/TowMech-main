@@ -12,7 +12,8 @@ function normalizeFcmData(data = {}) {
     if (value === undefined || value === null) continue;
 
     if (typeof value === "string") normalized[key] = value;
-    else if (typeof value === "number" || typeof value === "boolean") normalized[key] = String(value);
+    else if (typeof value === "number" || typeof value === "boolean")
+      normalized[key] = String(value);
     else normalized[key] = JSON.stringify(value);
   }
 
@@ -38,9 +39,6 @@ const ANDROID_CHANNEL_ID = "provider_jobs_channel_v2";
 
 /**
  * ✅ Send push notification to a single user (NOTIFICATION + DATA)
- *
- * - notification => Heads-up in background/killed
- * - data         => jobId/open/type etc
  */
 export const sendPushToUser = async ({ userId, title, body, data = {} }) => {
   initFirebase();
@@ -51,6 +49,7 @@ export const sendPushToUser = async ({ userId, title, body, data = {} }) => {
   const token = getUserFcmToken(user);
   if (!token) return null;
 
+  // ✅ Supports sending mechanicCategoryNeeded, customerProblemDescription, etc.
   const safeData = normalizeFcmData({
     ...data,
     title,
@@ -60,13 +59,11 @@ export const sendPushToUser = async ({ userId, title, body, data = {} }) => {
   const message = {
     token,
 
-    // ✅ Heads-up
     notification: {
       title: String(title || ""),
       body: String(body || ""),
     },
 
-    // ✅ App routing / metadata
     data: safeData,
 
     android: {
@@ -88,9 +85,7 @@ export const sendPushToManyUsers = async ({ userIds, title, body, data = {} }) =
 
   const users = await User.find({ _id: { $in: userIds } });
 
-  const tokens = users
-    .map((u) => getUserFcmToken(u))
-    .filter(Boolean);
+  const tokens = users.map((u) => getUserFcmToken(u)).filter(Boolean);
 
   if (tokens.length === 0) {
     return { successCount: 0, failureCount: 0, responses: [] };
@@ -105,13 +100,11 @@ export const sendPushToManyUsers = async ({ userIds, title, body, data = {} }) =
   const message = {
     tokens,
 
-    // ✅ Heads-up
     notification: {
       title: String(title || ""),
       body: String(body || ""),
     },
 
-    // ✅ App routing / metadata
     data: safeData,
 
     android: {
@@ -134,7 +127,7 @@ export const sendCancelJobToManyUsers = async ({ userIds, jobId, reason = "job_t
     title: "Job Update",
     body: "Job no longer available",
     data: {
-      open: reason, // "job_taken" | "job_cancelled" | "job_unavailable"
+      open: reason,
       jobId: String(jobId),
       type: "job_update",
     },

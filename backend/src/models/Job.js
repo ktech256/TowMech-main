@@ -23,7 +23,17 @@ export const PAYMENT_MODES = {
 const jobSchema = new mongoose.Schema(
   {
     title: { type: String, required: true },
+
+    /**
+     * description = general job notes (legacy)
+     */
     description: { type: String },
+
+    /**
+     * ✅ NEW: customer brief problem description for mechanic jobs
+     * This will help mechanic diagnose before arrival
+     */
+    customerProblemDescription: { type: String, default: null },
 
     roleNeeded: { type: String, required: true },
 
@@ -47,7 +57,17 @@ const jobSchema = new mongoose.Schema(
     pickupAddressText: { type: String, default: null },
     dropoffAddressText: { type: String, default: null },
 
+    /**
+     * TowTruck job requirement
+     */
     towTruckTypeNeeded: { type: String, default: null },
+
+    /**
+     * ✅ NEW: Mechanic category requirement
+     * Used for mechanic onboarding + filtering during mechanic job request
+     */
+    mechanicCategoryNeeded: { type: String, default: null },
+
     vehicleType: { type: String, default: null },
 
     /**
@@ -67,6 +87,11 @@ const jobSchema = new mongoose.Schema(
       vehicleTypeMultiplier: { type: Number, default: 1 },
 
       surgeMultiplier: { type: Number, default: 1 },
+
+      /**
+       * estimatedTotal is meaningful for TowTruck
+       * For Mechanic we will keep it 0 (final fee unknown)
+       */
       estimatedTotal: { type: Number, default: 0 },
 
       /**
@@ -91,6 +116,23 @@ const jobSchema = new mongoose.Schema(
        */
       commissionAmount: { type: Number, default: 0 },
       providerAmountDue: { type: Number, default: 0 }
+    },
+
+    /**
+     * ✅ Disclaimers for mechanic pricing behavior
+     */
+    disclaimers: {
+      _id: false,
+
+      mechanicFinalFeeNotPredetermined: {
+        type: Boolean,
+        default: false
+      },
+
+      text: {
+        type: String,
+        default: null
+      }
     },
 
     paymentMode: {

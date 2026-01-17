@@ -1,8 +1,8 @@
-import express from 'express';
-import PricingConfig from '../models/PricingConfig.js';
-import auth from '../middleware/auth.js';
-import authorizeRoles from '../middleware/role.js';
-import { USER_ROLES } from '../models/User.js';
+import express from "express";
+import PricingConfig from "../models/PricingConfig.js";
+import auth from "../middleware/auth.js";
+import authorizeRoles from "../middleware/role.js";
+import { USER_ROLES } from "../models/User.js";
 
 const router = express.Router();
 
@@ -11,7 +11,7 @@ const router = express.Router();
  * GET /api/pricing-config
  * Public route (used by app)
  */
-router.get('/', async (req, res) => {
+router.get("/", async (req, res) => {
   try {
     let config = await PricingConfig.findOne();
 
@@ -21,8 +21,8 @@ router.get('/', async (req, res) => {
     return res.status(200).json({ config });
   } catch (err) {
     return res.status(500).json({
-      message: 'Could not fetch pricing config',
-      error: err.message
+      message: "Could not fetch pricing config",
+      error: err.message,
     });
   }
 });
@@ -33,38 +33,36 @@ router.get('/', async (req, res) => {
  * ✅ Only SuperAdmin OR Admin with canManagePricing ✅
  */
 router.patch(
-  '/',
+  "/",
   auth,
-  authorizeRoles(USER_ROLES.ADMIN, USER_ROLES.SUPER_ADMIN, 'canManagePricing'),
+  authorizeRoles(USER_ROLES.ADMIN, USER_ROLES.SUPER_ADMIN, "canManagePricing"),
   async (req, res) => {
     try {
       let config = await PricingConfig.findOne();
-
       if (!config) config = await PricingConfig.create({});
 
       /**
        * ✅ SAFE UPDATE (Whitelist fields)
-       * Prevent injecting random unwanted fields
        */
       const allowedUpdates = [
-        'currency',
-        'baseFee',
-        'perKmFee',
+        "currency",
+        "baseFee",
+        "perKmFee",
 
-        // ✅ provider type base pricing (global fallback pricing)
-        'providerBasePricing',
+        "providerBasePricing",
 
-        // ✅ NEW ✅ TowTruck per-type pricing (PRIMARY admin settings)
-        'towTruckTypePricing',
+        "towTruckTypePricing",
+        "towTruckTypeMultipliers",
+        "vehicleTypeMultipliers",
 
-        // ✅ multipliers + other settings (kept for compatibility)
-        'towTruckTypeMultipliers',
-        'vehicleTypeMultipliers',
-        'bookingFees',
-        'payoutSplit',
-        'surgePricing',
-        'refundRules',
-        'payoutRules'
+        "bookingFees",
+        "payoutSplit",
+        "surgePricing",
+        "refundRules",
+        "payoutRules",
+
+        // ✅ NEW: mechanic categories booking fee config
+        "mechanicCategoryPricing",
       ];
 
       allowedUpdates.forEach((field) => {
@@ -76,13 +74,13 @@ router.patch(
       await config.save();
 
       return res.status(200).json({
-        message: 'Pricing config updated ✅',
-        config
+        message: "Pricing config updated ✅",
+        config,
       });
     } catch (err) {
       return res.status(500).json({
-        message: 'Could not update pricing config',
-        error: err.message
+        message: "Could not update pricing config",
+        error: err.message,
       });
     }
   }

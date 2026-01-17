@@ -193,8 +193,7 @@ router.patch(
       if (!user) return res.status(404).json({ message: "User not found" });
 
       if (!user.providerProfile) user.providerProfile = {};
-      if (!user.providerProfile.verificationDocs)
-        user.providerProfile.verificationDocs = {};
+      if (!user.providerProfile.verificationDocs) user.providerProfile.verificationDocs = {};
 
       const status = user.providerProfile.verificationStatus || "PENDING";
 
@@ -227,13 +226,10 @@ router.patch(
       const vehicleProofUrl = await uploadOne(vehicleProofFile, "vehicleProof");
       const workshopProofUrl = await uploadOne(workshopProofFile, "workshopProof");
 
-      if (idDocumentUrl)
-        user.providerProfile.verificationDocs.idDocumentUrl = idDocumentUrl;
+      if (idDocumentUrl) user.providerProfile.verificationDocs.idDocumentUrl = idDocumentUrl;
       if (licenseUrl) user.providerProfile.verificationDocs.licenseUrl = licenseUrl;
-      if (vehicleProofUrl)
-        user.providerProfile.verificationDocs.vehicleProofUrl = vehicleProofUrl;
-      if (workshopProofUrl)
-        user.providerProfile.verificationDocs.workshopProofUrl = workshopProofUrl;
+      if (vehicleProofUrl) user.providerProfile.verificationDocs.vehicleProofUrl = vehicleProofUrl;
+      if (workshopProofUrl) user.providerProfile.verificationDocs.workshopProofUrl = workshopProofUrl;
 
       if (status === "REJECTED") {
         user.providerProfile.verificationStatus = "PENDING";
@@ -264,7 +260,16 @@ router.patch(
  */
 router.patch("/me/status", auth, async (req, res) => {
   try {
-    const { isOnline, lat, lng, towTruckTypes, carTypesSupported } = req.body;
+    const {
+      isOnline,
+      lat,
+      lng,
+
+      towTruckTypes,
+      carTypesSupported,
+
+      mechanicCategories, // ✅ NEW
+    } = req.body;
 
     const providerRoles = [USER_ROLES.MECHANIC, USER_ROLES.TOW_TRUCK];
     if (!providerRoles.includes(req.user.role)) {
@@ -338,9 +343,24 @@ router.patch("/me/status", auth, async (req, res) => {
 
     user.providerProfile.lastSeenAt = new Date();
 
-    if (Array.isArray(towTruckTypes)) user.providerProfile.towTruckTypes = towTruckTypes;
-    if (Array.isArray(carTypesSupported))
+    // ✅ Save supported car types for both roles
+    if (Array.isArray(carTypesSupported)) {
       user.providerProfile.carTypesSupported = carTypesSupported;
+    }
+
+    // ✅ TowTruck role: only allow towTruckTypes
+    if (req.user.role === USER_ROLES.TOW_TRUCK) {
+      if (Array.isArray(towTruckTypes)) {
+        user.providerProfile.towTruckTypes = towTruckTypes;
+      }
+    }
+
+    // ✅ Mechanic role: only allow mechanicCategories
+    if (req.user.role === USER_ROLES.MECHANIC) {
+      if (Array.isArray(mechanicCategories)) {
+        user.providerProfile.mechanicCategories = mechanicCategories;
+      }
+    }
 
     if (typeof isOnline === "boolean") {
       user.providerProfile.isOnline = isOnline;
@@ -417,13 +437,6 @@ router.get("/jobs/broadcasted/:jobId", auth, async (req, res) => {
 /**
  * ✅ Provider accepts job (first accept wins)
  * PATCH /api/providers/jobs/:jobId/accept
- *
- * ✅ ENFORCEMENT:
- * - provider can have ONLY 1 active job at a time
- * - can accept ONE extra job only when within 3km of dropoff of current IN_PROGRESS job
- * - cannot accept more than 1 incoming job (so max total: 2 jobs where:
- *   - 1 is IN_PROGRESS
- *   - 1 is ASSIGNED (next))
  */
 router.patch("/jobs/:jobId/accept", auth, async (req, res) => {
   try {
@@ -432,7 +445,6 @@ router.patch("/jobs/:jobId/accept", auth, async (req, res) => {
       return res.status(403).json({ message: "Only providers can accept jobs" });
     }
 
-    // ✅ Find provider active jobs (ASSIGNED/IN_PROGRESS)
     const activeJobs = await Job.find({
       assignedTo: req.user._id,
       status: { $in: [JOB_STATUSES.ASSIGNED, JOB_STATUSES.IN_PROGRESS] },
@@ -665,11 +677,6 @@ router.get("/jobs/:jobId([0-9a-fA-F]{24})", auth, async (req, res) => {
 /**
  * ✅ Provider cancels job → job is re-broadcasted automatically
  * PATCH /api/providers/jobs/:jobId/cancel
- *
- * ✅ NEW ENFORCEMENT:
- * - Only cancel when job.status === ASSIGNED
- * - Only within 2 minutes after lockedAt
- * - Cannot cancel IN_PROGRESS
  */
 router.patch("/jobs/:jobId/cancel", auth, async (req, res) => {
   try {
@@ -686,12 +693,10 @@ router.patch("/jobs/:jobId/cancel", auth, async (req, res) => {
       return res.status(403).json({ message: "Not authorized to cancel this job" });
     }
 
-    // ✅ Cannot cancel completed
     if (job.status === JOB_STATUSES.COMPLETED) {
       return res.status(400).json({ message: "Cannot cancel a completed job" });
     }
 
-    // ✅ NEW: Cannot cancel started job
     if (job.status === JOB_STATUSES.IN_PROGRESS) {
       return res.status(403).json({
         code: "PROVIDER_CANNOT_CANCEL_IN_PROGRESS",
@@ -699,7 +704,6 @@ router.patch("/jobs/:jobId/cancel", auth, async (req, res) => {
       });
     }
 
-    // ✅ NEW: Only cancel if ASSIGNED
     if (job.status !== JOB_STATUSES.ASSIGNED) {
       return res.status(400).json({
         code: "PROVIDER_CANCEL_NOT_ALLOWED",
@@ -708,7 +712,6 @@ router.patch("/jobs/:jobId/cancel", auth, async (req, res) => {
       });
     }
 
-    // ✅ NEW: Enforce 2-minute cancel window using lockedAt
     const assignedAtMs = job.lockedAt ? new Date(job.lockedAt).getTime() : null;
     if (!assignedAtMs) {
       return res.status(400).json({
@@ -727,7 +730,6 @@ router.patch("/jobs/:jobId/cancel", auth, async (req, res) => {
       });
     }
 
-    // ✅ existing rebroadcast logic (kept)
     if (!job.excludedProviders) job.excludedProviders = [];
     if (!job.excludedProviders.map(String).includes(req.user._id.toString())) {
       job.excludedProviders.push(req.user._id);

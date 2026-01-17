@@ -31,6 +31,19 @@ export const TOW_TRUCK_TYPES = [
   "Flatbed",
 ];
 
+/**
+ * ✅ MECHANIC CATEGORIES (NEW)
+ * Used for mechanic onboarding + filtering during mechanic job requests
+ */
+export const MECHANIC_CATEGORIES = [
+  "General Mechanic",
+  "Engine Mechanic",
+  "Gearbox Mechanic",
+  "Suspension & Alignment",
+  "Tyre and rims",
+  "Car wiring and Diagnosis",
+];
+
 export const VEHICLE_TYPES = [
   "Sedan",
   "SUV",
@@ -120,7 +133,11 @@ const providerProfileSchema = new mongoose.Schema(
       coordinates: { type: [Number], default: [0, 0] },
     },
 
+    // ✅ TowTruck only
     towTruckTypes: [{ type: String, enum: TOW_TRUCK_TYPES }],
+
+    // ✅ Mechanic only (NEW)
+    mechanicCategories: [{ type: String, enum: MECHANIC_CATEGORIES }],
 
     carTypesSupported: [{ type: String, enum: VEHICLE_TYPES }],
 
@@ -146,7 +163,7 @@ const providerProfileSchema = new mongoose.Schema(
       default: null,
     },
 
-    // ✅ NEW: session enforcement (single device login)
+    // ✅ session enforcement (single device login)
     sessionId: { type: String, default: null },
     sessionIssuedAt: { type: Date, default: null },
   },
