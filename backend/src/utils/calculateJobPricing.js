@@ -153,7 +153,12 @@ export const calculateJobPricing = async ({
 
   /**
    * ============================================================
-   * ✅ Mechanic booking fee (category-based)
+   * ✅ Mechanic booking fee (Dashboard wiring FIX)
+   * Priority:
+   * 1) mechanicCategoryPricing[category] if it has a meaningful baseFee (>0)
+   * 2) providerBasePricing.mechanic (dashboard edits THIS)
+   * 3) bookingFees.mechanicFixed
+   * 4) hard fallback 200
    * ============================================================
    */
   const chosenMechanicCategory =
@@ -161,37 +166,51 @@ export const calculateJobPricing = async ({
     (typeof mechanicCategory === "string" && mechanicCategory.trim()) ||
     null;
 
-  // Normalize category key (case-insensitive match)
-  let categoryKey = chosenMechanicCategory;
-  if (categoryKey && pricingConfig.mechanicCategoryPricing) {
-    const keys = Object.keys(pricingConfig.mechanicCategoryPricing || {});
-    const match = keys.find((k) => k.trim().toLowerCase() === categoryKey.trim().toLowerCase());
-    if (match) categoryKey = match;
-  }
-
   const mechanicCategoryPricing =
-    categoryKey && pricingConfig.mechanicCategoryPricing
-      ? pricingConfig.mechanicCategoryPricing[categoryKey] || null
+    chosenMechanicCategory && pricingConfig.mechanicCategoryPricing
+      ? pricingConfig.mechanicCategoryPricing[chosenMechanicCategory] || null
       : null;
 
-  const mechanicBase = mechanicCategoryPricing?.baseFee ?? null;
-  const mechanicNight = mechanicCategoryPricing?.nightFee ?? 0;
-  const mechanicWeekend = mechanicCategoryPricing?.weekendFee ?? 0;
+  const categoryBaseRaw = mechanicCategoryPricing?.baseFee;
+  const categoryBase =
+    typeof categoryBaseRaw === "number" && categoryBaseRaw > 0 ? categoryBaseRaw : null;
 
-  const fallbackMechanicFixed = pricingConfig.bookingFees?.mechanicFixed ?? 200;
+  // ✅ Dashboard "Mechanic" tab edits these:
+  const providerMechBase =
+    typeof providerPricing?.baseFee === "number" && providerPricing.baseFee > 0
+      ? providerPricing.baseFee
+      : null;
 
-  const mechanicBookingFee =
-    mechanicBase !== null
-      ? Math.round(
-          (Number(mechanicBase) +
-            (isNightTime() ? Number(mechanicNight) : 0) +
-            (isWeekend() ? Number(mechanicWeekend) : 0)) *
-            (pricingConfig.surgePricing?.mechanicBookingFeeMultiplier || 1)
-        )
-      : Math.round(
-          Number(fallbackMechanicFixed) *
-            (pricingConfig.surgePricing?.mechanicBookingFeeMultiplier || 1)
-        );
+  const providerMechNight =
+    typeof providerPricing?.nightFee === "number" ? providerPricing.nightFee : 0;
+
+  const providerMechWeekend =
+    typeof providerPricing?.weekendFee === "number" ? providerPricing.weekendFee : 0;
+
+  const mechanicNight =
+    typeof mechanicCategoryPricing?.nightFee === "number"
+      ? mechanicCategoryPricing.nightFee
+      : providerMechNight;
+
+  const mechanicWeekend =
+    typeof mechanicCategoryPricing?.weekendFee === "number"
+      ? mechanicCategoryPricing.weekendFee
+      : providerMechWeekend;
+
+  const fallbackMechanicFixed =
+    providerMechBase ??
+    (typeof pricingConfig.bookingFees?.mechanicFixed === "number"
+      ? pricingConfig.bookingFees.mechanicFixed
+      : 200);
+
+  const mechanicBaseToUse = categoryBase ?? fallbackMechanicFixed;
+
+  const mechanicBookingFee = Math.round(
+    (mechanicBaseToUse +
+      (isNightTime() ? mechanicNight : 0) +
+      (isWeekend() ? mechanicWeekend : 0)) *
+      (pricingConfig.surgePricing?.mechanicBookingFeeMultiplier || 1)
+  );
 
   /**
    * ✅ Booking fee for TowTruck (existing)
