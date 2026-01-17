@@ -153,8 +153,15 @@ export const calculateJobPricing = async ({
 
   /**
    * ============================================================
-   * ✅ Mechanic booking fee (NEW: category based)
-   * bookingFee = baseFee + nightFee + weekendFee (dashboard)
+   * ✅ Mechanic booking fee (FIXED)
+   *
+   * IMPORTANT:
+   * - Your schema defaults category baseFee=0
+   * - baseFee=0 should NOT override dashboard mechanicFixed
+   *
+   * Rule:
+   * - If category baseFee is a positive number -> use it (+ night/weekend)
+   * - Otherwise -> fallback to bookingFees.mechanicFixed
    * ============================================================
    */
   const chosenMechanicCategory =
@@ -162,29 +169,39 @@ export const calculateJobPricing = async ({
     (typeof mechanicCategory === "string" && mechanicCategory.trim()) ||
     null;
 
+  // Normalize key lookup (trim only; don’t change case to avoid breaking stored keys)
+  const normalizedCat = chosenMechanicCategory ? chosenMechanicCategory.trim() : null;
+
   const mechanicCategoryPricing =
-    chosenMechanicCategory && pricingConfig.mechanicCategoryPricing
-      ? pricingConfig.mechanicCategoryPricing[chosenMechanicCategory] || null
+    normalizedCat && pricingConfig.mechanicCategoryPricing
+      ? pricingConfig.mechanicCategoryPricing[normalizedCat] || null
       : null;
 
-  const mechanicBase = mechanicCategoryPricing?.baseFee ?? null;
-  const mechanicNight = mechanicCategoryPricing?.nightFee ?? 0;
-  const mechanicWeekend = mechanicCategoryPricing?.weekendFee ?? 0;
+  const rawBase = mechanicCategoryPricing?.baseFee;
+  const rawNight = mechanicCategoryPricing?.nightFee;
+  const rawWeekend = mechanicCategoryPricing?.weekendFee;
 
-  const fallbackMechanicFixed = pricingConfig.bookingFees?.mechanicFixed || 200;
+  const mechanicBase = Number.isFinite(Number(rawBase)) ? Number(rawBase) : 0;
+  const mechanicNight = Number.isFinite(Number(rawNight)) ? Number(rawNight) : 0;
+  const mechanicWeekend = Number.isFinite(Number(rawWeekend)) ? Number(rawWeekend) : 0;
+
+  const fallbackMechanicFixed = Number.isFinite(Number(pricingConfig.bookingFees?.mechanicFixed))
+    ? Number(pricingConfig.bookingFees.mechanicFixed)
+    : 200;
+
+  const bookingMult = Number.isFinite(Number(pricingConfig.surgePricing?.mechanicBookingFeeMultiplier))
+    ? Number(pricingConfig.surgePricing.mechanicBookingFeeMultiplier)
+    : 1;
 
   const mechanicBookingFee =
-    mechanicBase !== null
+    mechanicBase > 0
       ? Math.round(
           (mechanicBase +
             (isNightTime() ? mechanicNight : 0) +
             (isWeekend() ? mechanicWeekend : 0)) *
-            (pricingConfig.surgePricing?.mechanicBookingFeeMultiplier || 1)
+            bookingMult
         )
-      : Math.round(
-          fallbackMechanicFixed *
-            (pricingConfig.surgePricing?.mechanicBookingFeeMultiplier || 1)
-        );
+      : Math.round(fallbackMechanicFixed * bookingMult);
 
   /**
    * ✅ Booking fee for TowTruck (existing)
@@ -238,6 +255,6 @@ export const calculateJobPricing = async ({
     providerAmountDue,
 
     // ✅ extra debug for mechanic category
-    mechanicCategory: chosenMechanicCategory,
+    mechanicCategory: normalizedCat,
   };
 };

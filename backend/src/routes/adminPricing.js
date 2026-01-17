@@ -65,11 +65,26 @@ router.patch(
         "mechanicCategoryPricing",
       ];
 
+      let touchedMechanicCategoryPricing = false;
+
       allowedUpdates.forEach((field) => {
         if (req.body[field] !== undefined) {
           config[field] = req.body[field];
+
+          if (field === "mechanicCategoryPricing") {
+            touchedMechanicCategoryPricing = true;
+          }
         }
       });
+
+      /**
+       * ✅ IMPORTANT:
+       * mechanicCategoryPricing is Mixed.
+       * Ensure mongoose persists nested changes reliably.
+       */
+      if (touchedMechanicCategoryPricing) {
+        config.markModified("mechanicCategoryPricing");
+      }
 
       await config.save();
 
