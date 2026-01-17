@@ -546,8 +546,16 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
       dropoffLat !== undefined &&
       dropoffLng !== undefined;
 
+    // ✅ FIX: must match Job model enum
+    // TowTruck: direct-to-provider, Mechanic: pay-after-completion
     const paymentMode =
-      roleNeeded === USER_ROLES.TOW_TRUCK ? "DIRECT_TO_PROVIDER" : "PAY_AFTER_SERVICE";
+      roleNeeded === USER_ROLES.TOW_TRUCK ? "DIRECT_TO_PROVIDER" : "PAY_AFTER_COMPLETION";
+
+    // ✅ extra safety (never write invalid value even if role string is weird)
+    const safePaymentMode =
+      paymentMode === "DIRECT_TO_PROVIDER" || paymentMode === "PAY_AFTER_COMPLETION"
+        ? paymentMode
+        : "PAY_AFTER_COMPLETION";
 
     // ✅ Mechanic: force estimatedTotal to 0 (final fee unknown)
     const safePricing =
@@ -589,7 +597,7 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
 
       customer: req.user._id,
       status: JOB_STATUSES.CREATED,
-      paymentMode,
+      paymentMode: safePaymentMode,
 
       // ✅ NEW disclaimer block (safe even if schema strict = false)
       disclaimers:
