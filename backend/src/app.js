@@ -1,3 +1,4 @@
+// app.js
 import express from "express";
 import cors from "cors";
 
@@ -40,6 +41,10 @@ import adminNotificationsRoutes from "./routes/adminNotifications.js";
 
 // ✅ ✅ ✅ RATINGS ROUTES (NEW)
 import ratingRoutes from "./routes/rating.routes.js";
+
+// ✅ ✅ ✅ CHAT ROUTES (NEW)
+import chatRoutes from "./routes/chat.routes.js";
+import adminChatRoutes from "./routes/adminChat.routes.js";
 
 const app = express();
 
@@ -89,6 +94,14 @@ app.use("/api/notifications", notificationRoutes);
  */
 app.use("/api/jobs", ratingRoutes);
 app.use("/api/admin", ratingRoutes);
+
+/**
+ * ✅ ✅ ✅ CHAT ROUTES
+ * - Mobile uses: /api/chat/...
+ * - Admin uses: /api/admin/chats/...
+ */
+app.use("/api/chat", chatRoutes);
+app.use("/api/admin/chats", adminChatRoutes);
 
 /**
  * ✅ SAFETY ROUTES (PUBLIC)

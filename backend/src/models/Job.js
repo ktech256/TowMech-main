@@ -1,23 +1,26 @@
-import mongoose from 'mongoose';
+import mongoose from "mongoose";
 
 export const JOB_STATUSES = {
-  CREATED: 'CREATED',
-  BROADCASTED: 'BROADCASTED',
-  ASSIGNED: 'ASSIGNED',
-  IN_PROGRESS: 'IN_PROGRESS',
-  COMPLETED: 'COMPLETED',
-  CANCELLED: 'CANCELLED'
+  // ✅ Added for compatibility (safe)
+  PENDING: "PENDING",
+
+  CREATED: "CREATED",
+  BROADCASTED: "BROADCASTED",
+  ASSIGNED: "ASSIGNED",
+  IN_PROGRESS: "IN_PROGRESS",
+  COMPLETED: "COMPLETED",
+  CANCELLED: "CANCELLED",
 };
 
 export const BOOKING_FEE_STATUSES = {
-  PENDING: 'PENDING',
-  PAID: 'PAID',
-  REFUNDED: 'REFUNDED'
+  PENDING: "PENDING",
+  PAID: "PAID",
+  REFUNDED: "REFUNDED",
 };
 
 export const PAYMENT_MODES = {
-  DIRECT_TO_PROVIDER: 'DIRECT_TO_PROVIDER', // TowTruck: customer pays provider directly
-  PAY_AFTER_COMPLETION: 'PAY_AFTER_COMPLETION' // Mechanic: customer pays after completion
+  DIRECT_TO_PROVIDER: "DIRECT_TO_PROVIDER", // TowTruck: customer pays provider directly
+  PAY_AFTER_COMPLETION: "PAY_AFTER_COMPLETION", // Mechanic: customer pays after completion
 };
 
 const jobSchema = new mongoose.Schema(
@@ -38,20 +41,20 @@ const jobSchema = new mongoose.Schema(
     roleNeeded: { type: String, required: true },
 
     pickupLocation: {
-      type: { type: String, enum: ['Point'], default: 'Point' },
-      coordinates: { type: [Number], required: true } // [lng, lat]
+      type: { type: String, enum: ["Point"], default: "Point" },
+      coordinates: { type: [Number], required: true }, // [lng, lat]
     },
 
     dropoffLocation: {
       type: {
         type: String,
-        enum: ['Point'],
-        default: undefined
+        enum: ["Point"],
+        default: undefined,
       },
       coordinates: {
         type: [Number],
-        default: undefined
-      }
+        default: undefined,
+      },
     },
 
     pickupAddressText: { type: String, default: null },
@@ -76,7 +79,7 @@ const jobSchema = new mongoose.Schema(
     pricing: {
       _id: false,
 
-      currency: { type: String, default: 'ZAR' },
+      currency: { type: String, default: "ZAR" },
 
       baseFee: { type: Number, default: 0 },
       perKmFee: { type: Number, default: 0 },
@@ -102,7 +105,7 @@ const jobSchema = new mongoose.Schema(
       bookingFeeStatus: {
         type: String,
         enum: Object.values(BOOKING_FEE_STATUSES),
-        default: BOOKING_FEE_STATUSES.PENDING
+        default: BOOKING_FEE_STATUSES.PENDING,
       },
 
       bookingFeePaidAt: { type: Date, default: null },
@@ -115,7 +118,7 @@ const jobSchema = new mongoose.Schema(
        * ✅ Revenue Split
        */
       commissionAmount: { type: Number, default: 0 },
-      providerAmountDue: { type: Number, default: 0 }
+      providerAmountDue: { type: Number, default: 0 },
     },
 
     /**
@@ -126,82 +129,94 @@ const jobSchema = new mongoose.Schema(
 
       mechanicFinalFeeNotPredetermined: {
         type: Boolean,
-        default: false
+        default: false,
       },
 
       text: {
         type: String,
-        default: null
-      }
+        default: null,
+      },
     },
 
     paymentMode: {
       type: String,
       enum: Object.values(PAYMENT_MODES),
-      default: PAYMENT_MODES.DIRECT_TO_PROVIDER
+      default: PAYMENT_MODES.DIRECT_TO_PROVIDER,
     },
 
-    customer: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    customer: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: true,
+    },
 
-    broadcastedTo: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
-    excludedProviders: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User', default: [] }],
+    broadcastedTo: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
+    excludedProviders: [
+      { type: mongoose.Schema.Types.ObjectId, ref: "User", default: [] },
+    ],
 
-    assignedTo: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+    assignedTo: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+
+    // ✅ used for chat unlock + cancel/refund windows
     lockedAt: { type: Date, default: null },
 
     status: {
       type: String,
       enum: Object.values(JOB_STATUSES),
-      default: JOB_STATUSES.CREATED
+      default: JOB_STATUSES.CREATED,
     },
 
-    cancelledBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+    cancelledBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
     cancelReason: { type: String, default: null },
     cancelledAt: { type: Date, default: null },
 
     dispatchAttempts: [
       {
-        providerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
-        attemptedAt: { type: Date, default: Date.now }
-      }
-    ]
+        providerId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+        attemptedAt: { type: Date, default: Date.now },
+      },
+    ],
   },
   {
     timestamps: true,
 
     // ✅ IMPORTANT: include virtuals in API JSON output
     toJSON: { virtuals: true },
-    toObject: { virtuals: true }
+    toObject: { virtuals: true },
   }
 );
 
 // ✅ Geo indexes
-jobSchema.index({ pickupLocation: '2dsphere' });
-jobSchema.index({ dropoffLocation: '2dsphere' });
+jobSchema.index({ pickupLocation: "2dsphere" });
+jobSchema.index({ dropoffLocation: "2dsphere" });
+
+// ✅ Helpful indexes (non-breaking, performance only)
+jobSchema.index({ lockedAt: 1 });
+jobSchema.index({ assignedTo: 1, status: 1 });
 
 /**
  * ✅ Virtuals for Android compatibility:
  * Backend stores coordinates as [lng, lat]
  * App expects pickupLat/pickupLng, dropoffLat/dropoffLng
  */
-jobSchema.virtual('pickupLng').get(function () {
+jobSchema.virtual("pickupLng").get(function () {
   const c = this.pickupLocation?.coordinates;
   return Array.isArray(c) && c.length >= 2 ? c[0] : null;
 });
 
-jobSchema.virtual('pickupLat').get(function () {
+jobSchema.virtual("pickupLat").get(function () {
   const c = this.pickupLocation?.coordinates;
   return Array.isArray(c) && c.length >= 2 ? c[1] : null;
 });
 
-jobSchema.virtual('dropoffLng').get(function () {
+jobSchema.virtual("dropoffLng").get(function () {
   const c = this.dropoffLocation?.coordinates;
   return Array.isArray(c) && c.length >= 2 ? c[0] : null;
 });
 
-jobSchema.virtual('dropoffLat').get(function () {
+jobSchema.virtual("dropoffLat").get(function () {
   const c = this.dropoffLocation?.coordinates;
   return Array.isArray(c) && c.length >= 2 ? c[1] : null;
 });
 
-export default mongoose.model('Job', jobSchema);
+export default mongoose.model("Job", jobSchema);

@@ -598,6 +598,11 @@ router.get("/jobs/broadcasted/:jobId", auth, async (req, res) => {
 /**
  * ✅ Provider accepts job (first accept wins)
  * PATCH /api/providers/jobs/:jobId/accept
+ *
+ * ✅ PATCHED SAFELY:
+ * - Ensures job.status = ASSIGNED
+ * - Ensures job.lockedAt = new Date() IF NOT SET
+ * - Does NOT break existing logic (first accept wins)
  */
 router.patch("/jobs/:jobId/accept", auth, async (req, res) => {
   try {
@@ -680,6 +685,14 @@ router.patch("/jobs/:jobId/accept", auth, async (req, res) => {
       });
     }
 
+    /**
+     * ✅ IMPORTANT:
+     * We keep the atomic "first accept wins" behavior by using findOneAndUpdate with a strict filter.
+     * We also set lockedAt ONLY if it wasn't set (using aggregation pipeline update).
+     *
+     * MongoDB supports pipeline updates in findOneAndUpdate on modern versions.
+     * If your Mongo version is old and pipeline update fails, tell me and I’ll give the fallback.
+     */
     const job = await Job.findOneAndUpdate(
       {
         _id: req.params.jobId,
@@ -687,11 +700,17 @@ router.patch("/jobs/:jobId/accept", auth, async (req, res) => {
         assignedTo: null,
         broadcastedTo: req.user._id,
       },
-      {
-        assignedTo: req.user._id,
-        status: JOB_STATUSES.ASSIGNED,
-        lockedAt: new Date(),
-      },
+      [
+        {
+          $set: {
+            assignedTo: req.user._id,
+            status: JOB_STATUSES.ASSIGNED,
+
+            // ✅ Only set lockedAt if missing
+            lockedAt: { $ifNull: ["$lockedAt", new Date()] },
+          },
+        },
+      ],
       { new: true }
     );
 

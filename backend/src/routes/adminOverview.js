@@ -6,6 +6,15 @@ import Job, { JOB_STATUSES } from "../models/Job.js";
 import Payment, { PAYMENT_STATUSES } from "../models/Payment.js";
 import SupportTicket from "../models/SupportTicket.js";
 
+// ✅ Optional: chats count (safe if file exists)
+let ChatThread = null;
+try {
+  // If you created /backend/src/models/ChatThread.js
+  ChatThread = (await import("../models/ChatThread.js")).default;
+} catch (_) {
+  ChatThread = null;
+}
+
 const router = express.Router();
 
 /**
@@ -52,7 +61,15 @@ router.get(
 
       // ✅ ACTIVE JOBS
       const activeJobs = await Job.countDocuments({
-        status: { $in: [JOB_STATUSES.PENDING, JOB_STATUSES.ASSIGNED, JOB_STATUSES.IN_PROGRESS] },
+        status: {
+          $in: [
+            JOB_STATUSES.PENDING,
+            JOB_STATUSES.CREATED,
+            JOB_STATUSES.BROADCASTED,
+            JOB_STATUSES.ASSIGNED,
+            JOB_STATUSES.IN_PROGRESS,
+          ],
+        },
       });
 
       // ✅ PENDING PAYMENTS
@@ -68,7 +85,9 @@ router.get(
       // ✅ LIVE PROVIDERS COUNT (those who have updated location recently)
       const liveProviders = await User.countDocuments({
         role: { $in: [USER_ROLES.TOW_TRUCK, USER_ROLES.MECHANIC] },
-        "providerProfile.lastLocationUpdate": { $gte: new Date(Date.now() - 10 * 60 * 1000) }, // last 10 mins
+        "providerProfile.lastLocationUpdate": {
+          $gte: new Date(Date.now() - 10 * 60 * 1000),
+        }, // last 10 mins
       });
 
       // ✅ TOTAL REVENUE
@@ -92,6 +111,14 @@ router.get(
         { $limit: 5 },
       ]);
 
+      // ✅ ACTIVE CHATS (safe optional)
+      let activeChats = 0;
+      if (ChatThread) {
+        activeChats = await ChatThread.countDocuments({
+          status: { $in: ["OPEN", "ACTIVE"] },
+        }).catch(() => 0);
+      }
+
       return res.status(200).json({
         users: totalUsers,
         providers: totalProviders,
@@ -104,6 +131,7 @@ router.get(
           name: s._id,
           count: s.count,
         })),
+        activeChats,
       });
     } catch (err) {
       console.error("❌ OVERVIEW ERROR:", err);
