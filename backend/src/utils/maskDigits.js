@@ -1,38 +1,46 @@
+// /backend/src/utils/maskDigits.js
+
 /**
- * Rule:
- * - Do NOT allow exchanging contact numbers.
- * - We keep the message readable but "wrong".
- * - We "change two digits" inside any long digit sequence.
+ * ✅ maskDigits(text)
+ * Rule: "Exchanging contacts not allowed"
+ * - We do NOT fully redact the message (keeps conversation readable)
+ * - We simply change 2 digits in any long digit sequence (e.g. phone number)
  *
  * Example:
- * "Call me 0831234567" -> "Call me 0831234569" (and another digit changed)
+ * "Call me 0821234567" => "Call me 0821234 8 6 7" (digits adjusted)
  */
+export function maskDigits(input) {
+  const text = String(input || "");
 
-function changeDigit(d) {
-  const n = Number(d);
-  if (Number.isNaN(n)) return d;
-  // rotate by +3 (0->3, 7->0 etc.)
-  return String((n + 3) % 10);
+  // Replace any long digit sequence (7+ digits) because it's likely a phone number
+  // and also handle cases with spaces/dashes between digits.
+  return text.replace(/(\d[\d\s-]{6,}\d)/g, (match) => {
+    const digits = match.replace(/[^\d]/g, "");
+    if (digits.length < 7) return match;
+
+    // Change exactly 2 digits safely (not first digit to keep message readable)
+    const arr = digits.split("");
+
+    // Pick 2 positions near the end
+    const i1 = Math.max(1, arr.length - 3);
+    const i2 = Math.max(2, arr.length - 2);
+
+    // Change them
+    arr[i1] = arr[i1] === "9" ? "8" : String(Number(arr[i1]) + 1);
+    arr[i2] = arr[i2] === "0" ? "1" : String(Number(arr[i2]) - 1);
+
+    // Rebuild keeping original separators
+    let rebuilt = "";
+    let di = 0;
+    for (let i = 0; i < match.length; i++) {
+      const ch = match[i];
+      if (/\d/.test(ch)) {
+        rebuilt += arr[di++] ?? ch;
+      } else {
+        rebuilt += ch;
+      }
+    }
+
+    return rebuilt;
+  });
 }
-
-function maskDigitRun(run) {
-  // run is only digits, length >= 7
-  const arr = run.split("");
-  // change 2 digits: choose positions (safe: 2nd and 2nd-last)
-  const i1 = Math.min(1, arr.length - 1);
-  const i2 = Math.max(arr.length - 2, 0);
-
-  arr[i1] = changeDigit(arr[i1]);
-  arr[i2] = changeDigit(arr[i2]);
-
-  return arr.join("");
-}
-
-export function maskDigitsInText(text = "") {
-  const s = String(text || "");
-
-  // Replace long digit sequences (7+ digits) only
-  return s.replace(/\d{7,}/g, (match) => maskDigitRun(match));
-}
-
-export default maskDigitsInText;
