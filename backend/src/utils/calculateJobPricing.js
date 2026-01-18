@@ -38,7 +38,10 @@ const isWeekend = () => {
 };
 
 async function getLatestPricingConfig() {
-  let pricingConfig = await PricingConfig.findOne().sort({ updatedAt: -1, createdAt: -1 });
+  let pricingConfig = await PricingConfig.findOne().sort({
+    updatedAt: -1,
+    createdAt: -1,
+  });
   if (!pricingConfig) pricingConfig = await PricingConfig.create({});
   return pricingConfig;
 }
@@ -146,7 +149,10 @@ export const calculateJobPricing = async ({
    * ✅ TowTruck estimated total (existing)
    */
   const towTruckEstimatedTotal =
-    (baseFee + perKmFee * estimatedDistanceKm + applyNightFee + applyWeekendFee) *
+    (baseFee +
+      perKmFee * estimatedDistanceKm +
+      applyNightFee +
+      applyWeekendFee) *
     towMult *
     vehicleMult *
     (surgeEnabled ? surgeMultiplier : 1);
@@ -161,19 +167,24 @@ export const calculateJobPricing = async ({
    * 4) hard fallback 200
    * ============================================================
    */
-  const chosenMechanicCategory =
-    (typeof mechanicCategoryNeeded === "string" && mechanicCategoryNeeded.trim()) ||
+
+  // ✅ "categoryKey" is the normalized category name (string or null)
+  const categoryKey =
+    (typeof mechanicCategoryNeeded === "string" &&
+      mechanicCategoryNeeded.trim()) ||
     (typeof mechanicCategory === "string" && mechanicCategory.trim()) ||
     null;
 
   const mechanicCategoryPricing =
-    chosenMechanicCategory && pricingConfig.mechanicCategoryPricing
-      ? pricingConfig.mechanicCategoryPricing[chosenMechanicCategory] || null
+    categoryKey && pricingConfig.mechanicCategoryPricing
+      ? pricingConfig.mechanicCategoryPricing[categoryKey] || null
       : null;
 
   const categoryBaseRaw = mechanicCategoryPricing?.baseFee;
   const categoryBase =
-    typeof categoryBaseRaw === "number" && categoryBaseRaw > 0 ? categoryBaseRaw : null;
+    typeof categoryBaseRaw === "number" && categoryBaseRaw > 0
+      ? categoryBaseRaw
+      : null;
 
   // ✅ Dashboard "Mechanic" tab edits these:
   const providerMechBase =
@@ -185,7 +196,9 @@ export const calculateJobPricing = async ({
     typeof providerPricing?.nightFee === "number" ? providerPricing.nightFee : 0;
 
   const providerMechWeekend =
-    typeof providerPricing?.weekendFee === "number" ? providerPricing.weekendFee : 0;
+    typeof providerPricing?.weekendFee === "number"
+      ? providerPricing.weekendFee
+      : 0;
 
   const mechanicNight =
     typeof mechanicCategoryPricing?.nightFee === "number"
@@ -216,10 +229,13 @@ export const calculateJobPricing = async ({
    * ✅ Booking fee for TowTruck (existing)
    */
   const towBookingPercent = pricingConfig.bookingFees?.towTruckPercent || 15;
-  const towTruckBookingFee = Math.round((towTruckEstimatedTotal * towBookingPercent) / 100);
+  const towTruckBookingFee = Math.round(
+    (towTruckEstimatedTotal * towBookingPercent) / 100
+  );
 
   // ✅ Commission + provider share (TowTruck only)
-  const towTruckCompanyPercent = pricingConfig.payoutSplit?.towTruckCompanyPercent || 15;
+  const towTruckCompanyPercent =
+    pricingConfig.payoutSplit?.towTruckCompanyPercent || 15;
 
   const commissionAmount =
     roleNeeded === USER_ROLES.TOW_TRUCK
@@ -261,6 +277,7 @@ export const calculateJobPricing = async ({
     commissionAmount,
     providerAmountDue,
 
+    // ✅ FIX: return the actual mechanic category used (or null)
     mechanicCategory: categoryKey,
   };
 };
