@@ -1,108 +1,95 @@
+// /backend/src/middleware/chatRules.js
+import mongoose from "mongoose";
 import Job, { JOB_STATUSES } from "../models/Job.js";
-import { USER_ROLES } from "../models/User.js";
-
-const CHAT_UNLOCK_DELAY_MS = 3 * 60 * 1000; // 3 minutes after provider assigned (lockedAt)
+import User, { USER_ROLES } from "../models/User.js";
 
 /**
- * Ensures:
- * - job exists
- * - provider assigned
- * - status active (ASSIGNED/IN_PROGRESS)
- * - lockedAt exists and 3 minutes passed
- * - user is allowed participant (customer/provider/admin)
+ * Chat rules:
+ * ✅ only ASSIGNED / IN_PROGRESS
+ * ✅ unlock after 3 minutes from lockedAt
+ * ✅ admin/super admin can access any chat
+ * ✅ customer/provider can access only if part of job
  */
-export async function ensureChatAllowed(req, res, next) {
-  try {
-    const jobId = req.params.jobId || req.body?.jobId || req.query?.jobId;
-    if (!jobId) return res.status(400).json({ message: "jobId is required for chat" });
 
-    const job = await Job.findById(jobId)
-      .populate("customer", "role")
-      .populate("assignedTo", "role");
+function normalizeStatus(raw) {
+  return String(raw || "")
+    .trim()
+    .toUpperCase()
+    .replace(" ", "_")
+    .replace("-", "_");
+}
 
-    if (!job) return res.status(404).json({ message: "Job not found" });
+function isChatActive(st) {
+  return st === JOB_STATUSES.ASSIGNED || st === JOB_STATUSES.IN_PROGRESS;
+}
 
-    const status = job.status;
-
-    // Not allowed after completion/cancel
-    if ([JOB_STATUSES.COMPLETED, JOB_STATUSES.CANCELLED].includes(status)) {
-      return res.status(403).json({
-        code: "CHAT_CLOSED_JOB",
-        message: "Chat is not available after job is completed/cancelled.",
-      });
-    }
-
-    // Only during assigned/in-progress
-    const activeAllowed = [JOB_STATUSES.ASSIGNED, JOB_STATUSES.IN_PROGRESS].includes(status);
-    if (!activeAllowed) {
-      return res.status(403).json({
-        code: "CHAT_NOT_ACTIVE",
-        message: "Chat is only available when there is an active job (ASSIGNED / IN_PROGRESS).",
-        status,
-      });
-    }
-
-    if (!job.assignedTo) {
-      return res.status(403).json({
-        code: "CHAT_NO_PROVIDER",
-        message: "Chat is available only after a provider is assigned.",
-      });
-    }
-
-    // lockedAt gating
-    const lockedAt = job.lockedAt ? new Date(job.lockedAt).getTime() : null;
-    if (!lockedAt) {
-      return res.status(403).json({
-        code: "CHAT_LOCKED_AT_MISSING",
-        message: "Chat not available yet (assignment time missing).",
-      });
-    }
-
-    const now = Date.now();
-    const unlockAt = lockedAt + CHAT_UNLOCK_DELAY_MS;
-    if (now < unlockAt) {
-      return res.status(403).json({
-        code: "CHAT_LOCKED_WAIT",
-        message: "Chat becomes available 3 minutes after provider is assigned.",
-        unlockAt: new Date(unlockAt).toISOString(),
-        remainingMs: unlockAt - now,
-      });
-    }
-
-    // participant check
-    const userRole = req.user?.role;
-    const userId = req.user?._id?.toString();
-
-    const isAdmin =
-      userRole === USER_ROLES.ADMIN || userRole === USER_ROLES.SUPER_ADMIN;
-
-    const isCustomer = job.customer?._id?.toString() === userId || job.customer?.toString?.() === userId;
-    const isProvider = job.assignedTo?._id?.toString() === userId || job.assignedTo?.toString?.() === userId;
-
-    if (!isAdmin && !isCustomer && !isProvider) {
-      return res.status(403).json({
-        code: "CHAT_NOT_ALLOWED",
-        message: "Not allowed to access this job chat.",
-      });
-    }
-
-    // attach for downstream
-    req.chatJob = job;
-    req.chatUnlockAt = new Date(unlockAt);
-
-    next();
-  } catch (err) {
-    return res.status(500).json({ message: "Chat rules failed", error: err.message });
-  }
+function minutesSince(date) {
+  if (!date) return null;
+  const ms = Date.now() - new Date(date).getTime();
+  if (!Number.isFinite(ms)) return null;
+  return ms / 60000;
 }
 
 /**
- * Admin can read chats always (history),
- * but still needs job/thread existence checks inside routes.
+ * ✅ Named export REQUIRED by chat.routes.js
  */
-export function adminChatOnly(req, res, next) {
-  const role = req.user?.role;
-  const ok = role === USER_ROLES.ADMIN || role === USER_ROLES.SUPER_ADMIN;
-  if (!ok) return res.status(403).json({ message: "Admin only" });
-  next();
+export async function chatRulesMiddleware(req, res, next) {
+  try {
+    const user = req.user;
+    const jobId =
+      req.params.jobId ||
+      req.params.id ||
+      req.body?.jobId ||
+      req.query?.jobId;
+
+    if (!user?._id) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+
+    if (!jobId || !mongoose.Types.ObjectId.isValid(jobId)) {
+      return res.status(400).json({ message: "Invalid jobId" });
+    }
+
+    const job = await Job.findById(jobId).select("customer assignedTo status lockedAt");
+    if (!job) {
+      return res.status(404).json({ message: "Job not found" });
+    }
+
+    const st = normalizeStatus(job.status);
+
+    // ✅ block chat outside active job
+    if (!isChatActive(st)) {
+      return res.status(403).json({ message: "Chat not available for this job status" });
+    }
+
+    // ✅ unlock after 3 minutes
+    const mins = minutesSince(job.lockedAt);
+    if (mins == null || mins < 3) {
+      return res.status(403).json({
+        message: "Chat unlocks 3 minutes after provider assignment",
+        minutesSinceAssigned: mins ?? 0,
+        unlockAfterMinutes: 3,
+      });
+    }
+
+    const isAdmin = [USER_ROLES.ADMIN, USER_ROLES.SUPER_ADMIN].includes(user.role);
+
+    const isCustomer = job.customer?.toString() === user._id.toString();
+    const isProvider = job.assignedTo?.toString() === user._id.toString();
+
+    if (!isAdmin && !isCustomer && !isProvider) {
+      return res.status(403).json({ message: "Not allowed" });
+    }
+
+    // ✅ attach job to request (helps routes)
+    req.chatJob = job;
+    req.chatAccess = { isAdmin, isCustomer, isProvider };
+
+    return next();
+  } catch (err) {
+    return res.status(500).json({
+      message: "Chat permission check failed",
+      error: err.message,
+    });
+  }
 }
