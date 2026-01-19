@@ -17,6 +17,29 @@ export const TICKET_TYPES = {
   OTHER: "OTHER",
 };
 
+// ✅ NEW: message thread schema
+const supportMessageSchema = new mongoose.Schema(
+  {
+    senderId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: true,
+    },
+    senderRole: {
+      type: String,
+      required: true, // CUSTOMER / MECHANIC / TOW_TRUCK / ADMIN / SUPER_ADMIN
+      trim: true,
+    },
+    message: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+    meta: { type: Object, default: {} },
+  },
+  { timestamps: true }
+);
+
 const supportTicketSchema = new mongoose.Schema(
   {
     // ✅ Who created ticket
@@ -68,10 +91,18 @@ const supportTicketSchema = new mongoose.Schema(
       trim: true,
     },
 
+    // ✅ initial message (opener)
     message: {
       type: String,
       required: true,
       trim: true,
+    },
+
+    // ✅ NEW: conversation replies
+    // - Safe for old tickets (default empty array)
+    messages: {
+      type: [supportMessageSchema],
+      default: [],
     },
 
     // ✅ Admin assignment
@@ -92,7 +123,7 @@ const supportTicketSchema = new mongoose.Schema(
      */
     auditLogs: [
       {
-        action: { type: String, required: true }, // e.g. STATUS_CHANGED, ASSIGNED, NOTE_ADDED
+        action: { type: String, required: true },
         by: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
         timestamp: { type: Date, default: Date.now },
         meta: { type: Object, default: {} },
