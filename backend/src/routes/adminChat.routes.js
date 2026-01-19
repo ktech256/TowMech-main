@@ -1,51 +1,131 @@
-const express = require("express");
+// src/routes/adminChat.routes.js
+import express from "express";
+import auth from "../middleware/auth.js";
+import authorizeRoles from "../middleware/role.js";
+import { USER_ROLES } from "../models/User.js";
+
+import ChatThread from "../models/ChatThread.js";
+import ChatMessage from "../models/ChatMessage.js";
+
 const router = express.Router();
 
-const { protect, adminOnly } = require("../middleware/auth");
+const adminOnly = [
+  auth,
+  authorizeRoles(USER_ROLES.ADMIN, USER_ROLES.SUPER_ADMIN),
+];
 
-const ChatThread = require("../models/ChatThread");
-const ChatMessage = require("../models/ChatMessage");
+// -----------------------------
+// ✅ Dashboard-compatible routes
+// -----------------------------
 
-// ✅ GET /api/admin/chats/threads
-// Returns threads for admin dashboard
-router.get("/threads", protect, adminOnly, async (req, res) => {
+/**
+ * ✅ Admin: list chat threads
+ * GET /api/admin/chats/threads?page=1&limit=50
+ */
+router.get("/threads", ...adminOnly, async (req, res) => {
   try {
-    const q = (req.query.q || "").trim();
+    const { page = 1, limit = 50 } = req.query || {};
+    const p = Math.max(1, Number(page));
+    const l = Math.min(100, Math.max(1, Number(limit)));
 
-    const filter = {};
-    // optional: add search later if you want (by jobId, etc.)
-    // for now keep stable and fast.
-
-    const threads = await ChatThread.find(filter)
-      .populate({ path: "job", select: "title status pickupAddressText dropoffAddressText" })
-      .populate({ path: "customer", select: "name role email phone" })
-      .populate({ path: "provider", select: "name role email phone" })
+    const items = await ChatThread.find({})
       .sort({ lastMessageAt: -1, updatedAt: -1 })
-      .limit(500);
+      .skip((p - 1) * l)
+      .limit(l)
+      .populate("customer", "name email phone role")
+      .populate("provider", "name email phone role")
+      .populate("job", "title status roleNeeded createdAt");
 
-    res.json({ threads });
-  } catch (e) {
-    console.error("ADMIN CHAT THREADS ERROR:", e);
-    res.status(500).json({ message: "Failed to load chat threads" });
+    // ✅ Keep BOTH keys to avoid breaking any older frontend
+    return res.status(200).json({ page: p, limit: l, items, threads: items });
+  } catch (err) {
+    return res
+      .status(500)
+      .json({ message: "Failed to load threads", error: err.message });
   }
 });
 
-// ✅ GET /api/admin/chats/threads/:threadId/messages
-// Returns { items: [...] } as expected by admin UI
-router.get("/threads/:threadId/messages", protect, adminOnly, async (req, res) => {
+/**
+ * ✅ Admin: get messages in a thread
+ * GET /api/admin/chats/threads/:threadId/messages?page=1&limit=100
+ */
+router.get("/threads/:threadId/messages", ...adminOnly, async (req, res) => {
   try {
-    const { threadId } = req.params;
+    const { page = 1, limit = 100 } = req.query || {};
+    const p = Math.max(1, Number(page));
+    const l = Math.min(200, Math.max(1, Number(limit)));
 
-    const items = await ChatMessage.find({ threadId })
-      .populate({ path: "sender", select: "name role" })
+    const threadId = req.params.threadId;
+
+    const messages = await ChatMessage.find({ thread: threadId })
       .sort({ createdAt: 1 })
-      .limit(2000);
+      .skip((p - 1) * l)
+      .limit(l)
+      .populate("sender", "name email phone role");
 
-    res.json({ items });
-  } catch (e) {
-    console.error("ADMIN CHAT MESSAGES ERROR:", e);
-    res.status(500).json({ message: "Failed to load chat messages" });
+    // ✅ Keep BOTH keys to avoid breaking any older frontend
+    return res.status(200).json({ page: p, limit: l, messages, items: messages });
+  } catch (err) {
+    return res
+      .status(500)
+      .json({ message: "Failed to load messages", error: err.message });
   }
 });
 
-module.exports = router;
+// --------------------------------------------
+// ✅ Backward-compatible aliases (your old API)
+// --------------------------------------------
+
+/**
+ * OLD: GET /api/admin/chats
+ * Now returns threads too.
+ */
+router.get("/", ...adminOnly, async (req, res) => {
+  try {
+    const { page = 1, limit = 50 } = req.query || {};
+    const p = Math.max(1, Number(page));
+    const l = Math.min(100, Math.max(1, Number(limit)));
+
+    const items = await ChatThread.find({})
+      .sort({ lastMessageAt: -1, updatedAt: -1 })
+      .skip((p - 1) * l)
+      .limit(l)
+      .populate("customer", "name email phone role")
+      .populate("provider", "name email phone role")
+      .populate("job", "title status roleNeeded createdAt");
+
+    return res.status(200).json({ page: p, limit: l, items });
+  } catch (err) {
+    return res
+      .status(500)
+      .json({ message: "Failed to load conversations", error: err.message });
+  }
+});
+
+/**
+ * OLD: GET /api/admin/chats/:conversationId/messages
+ * Treats conversationId as threadId for compatibility.
+ */
+router.get("/:conversationId/messages", ...adminOnly, async (req, res) => {
+  try {
+    const { page = 1, limit = 100 } = req.query || {};
+    const p = Math.max(1, Number(page));
+    const l = Math.min(200, Math.max(1, Number(limit)));
+
+    const threadId = req.params.conversationId;
+
+    const messages = await ChatMessage.find({ thread: threadId })
+      .sort({ createdAt: 1 })
+      .skip((p - 1) * l)
+      .limit(l)
+      .populate("sender", "name email phone role");
+
+    return res.status(200).json({ page: p, limit: l, messages });
+  } catch (err) {
+    return res
+      .status(500)
+      .json({ message: "Failed to load messages", error: err.message });
+  }
+});
+
+export default router;
