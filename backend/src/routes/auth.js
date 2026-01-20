@@ -620,7 +620,6 @@ router.post("/reset-password", async (req, res) => {
  */
 router.get("/me", auth, async (req, res) => {
   try {
-    // ✅ UPDATED: include all registration fields needed by the app profile screen
     const user = await User.findById(req.user._id).select(
       "name firstName lastName email phone birthday nationalityType saIdNumber passportNumber country role providerProfile createdAt updatedAt"
     );
