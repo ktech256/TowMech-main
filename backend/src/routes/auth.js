@@ -80,7 +80,12 @@ async function sendOtpSms(phone, otpCode, purpose = "OTP") {
 
   if (!sid || !token || !from) {
     console.log("⚠️ TWILIO NOT CONFIGURED → SMS NOT SENT");
-    console.log(`📲 ${purpose} SHOULD HAVE BEEN SENT TO:`, safePhone, "| OTP:", otpCode);
+    console.log(
+      `📲 ${purpose} SHOULD HAVE BEEN SENT TO:`,
+      safePhone,
+      "| OTP:",
+      otpCode
+    );
     return { ok: false, provider: "none" };
   }
 
@@ -147,7 +152,8 @@ function normalizeTowTruckTypes(input) {
     .map((x) => {
       const lower = x.toLowerCase();
 
-      if (lower.includes("hook") && lower.includes("chain")) return "Hook & Chain";
+      if (lower.includes("hook") && lower.includes("chain"))
+        return "Hook & Chain";
       if (lower === "wheel-lift" || lower === "wheel lift") return "Wheel-Lift";
 
       if (
@@ -155,12 +161,14 @@ function normalizeTowTruckTypes(input) {
         lower === "rollback" ||
         lower === "roll back" ||
         lower === "flatbed/roll back" ||
+        lower === "flatbed/rollback" ||
         lower === "flatbed/rollback"
       )
         return "Flatbed/Roll Back";
 
       if (lower.includes("boom")) return "Boom Trucks(With Crane)";
-      if (lower.includes("integrated") || lower.includes("wrecker")) return "Integrated / Wrecker";
+      if (lower.includes("integrated") || lower.includes("wrecker"))
+        return "Integrated / Wrecker";
       if (lower.includes("rotator") || lower.includes("heavy-duty") || lower === "recovery")
         return "Heavy-Duty Rotator(Recovery)";
 
@@ -183,9 +191,7 @@ function normalizeMechanicCategories(input) {
   if (!input) return [];
   const list = Array.isArray(input) ? input : [input];
 
-  return list
-    .map((x) => String(x).trim())
-    .filter(Boolean);
+  return list.map((x) => String(x).trim()).filter(Boolean);
 }
 
 /**
@@ -614,8 +620,9 @@ router.post("/reset-password", async (req, res) => {
  */
 router.get("/me", auth, async (req, res) => {
   try {
+    // ✅ UPDATED: include all registration fields needed by the app profile screen
     const user = await User.findById(req.user._id).select(
-      "name email phone role providerProfile createdAt updatedAt"
+      "name firstName lastName email phone birthday nationalityType saIdNumber passportNumber country role providerProfile createdAt updatedAt"
     );
 
     if (!user) return res.status(404).json({ message: "User not found" });
@@ -626,6 +633,69 @@ router.get("/me", auth, async (req, res) => {
   } catch (err) {
     return res.status(500).json({
       message: "Could not fetch profile",
+      error: err.message,
+    });
+  }
+});
+
+/**
+ * ✅ Update logged-in user profile (phone/email/password only)
+ * PATCH /api/auth/me
+ */
+router.patch("/me", auth, async (req, res) => {
+  try {
+    const userId = req.user?._id;
+
+    const { phone, email, password } = req.body || {};
+
+    const updates = {};
+    if (typeof phone === "string" && phone.trim()) updates.phone = normalizePhone(phone);
+    if (typeof email === "string" && email.trim()) updates.email = email.trim().toLowerCase();
+    if (typeof password === "string" && password.trim()) updates.password = password.trim();
+
+    if (Object.keys(updates).length === 0) {
+      return res.status(400).json({ message: "Nothing to update" });
+    }
+
+    // ✅ Uniqueness checks
+    if (updates.email) {
+      const existingEmail = await User.findOne({
+        email: updates.email,
+        _id: { $ne: userId },
+      });
+      if (existingEmail) return res.status(409).json({ message: "Email already registered" });
+    }
+
+    if (updates.phone) {
+      const existingPhone = await User.findOne({
+        phone: updates.phone,
+        _id: { $ne: userId },
+      });
+      if (existingPhone) return res.status(409).json({ message: "Phone number already registered" });
+    }
+
+    const user = await User.findById(userId);
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    // ✅ Only update allowed fields
+    if (updates.phone) user.phone = updates.phone;
+    if (updates.email) user.email = updates.email;
+    if (updates.password) user.password = updates.password; // hashed by pre-save
+
+    await user.save();
+
+    // ✅ Return fresh profile (same selection as GET /me)
+    const fresh = await User.findById(userId).select(
+      "name firstName lastName email phone birthday nationalityType saIdNumber passportNumber country role providerProfile createdAt updatedAt"
+    );
+
+    return res.status(200).json({
+      message: "Profile updated ✅",
+      user: typeof fresh.toSafeJSON === "function" ? fresh.toSafeJSON(fresh.role) : fresh,
+    });
+  } catch (err) {
+    return res.status(500).json({
+      message: "Update failed",
       error: err.message,
     });
   }
