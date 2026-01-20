@@ -172,8 +172,8 @@ router.get("/me", auth, async (req, res) => {
     }
 
     const user = await User.findById(req.user._id).select(
-      "name email phone role providerProfile createdAt updatedAt"
-    );
+  "name firstName lastName email phone birthday nationalityType saIdNumber passportNumber country role providerProfile createdAt updatedAt"
+);
 
     if (!user) return res.status(404).json({ message: "User not found" });
 
