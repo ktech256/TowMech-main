@@ -12,10 +12,18 @@ export const JOB_STATUSES = {
   CANCELLED: "CANCELLED",
 };
 
+// ✅ FIX: include REFUND_REQUESTED so customer cancel does not crash
 export const BOOKING_FEE_STATUSES = {
   PENDING: "PENDING",
   PAID: "PAID",
+
+  // customer requested refund (awaiting processing)
+  REFUND_REQUESTED: "REFUND_REQUESTED",
+
   REFUNDED: "REFUNDED",
+
+  // optional: if refund attempt fails
+  REFUND_FAILED: "REFUND_FAILED",
 };
 
 export const PAYMENT_MODES = {
