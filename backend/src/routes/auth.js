@@ -45,6 +45,33 @@ function normalizePhone(phone) {
 }
 
 /**
+ * ✅ Convert phone to E.164 format for Twilio SMS sending ONLY
+ * - Twilio requires E.164 for the "to" number.
+ * - Keeps your DB/login normalization untouched.
+ *
+ * Examples (South Africa):
+ *  07131101111     -> +277131101111
+ *  27xxxxxxxxx     -> +27xxxxxxxxx
+ *  +27xxxxxxxxx    -> +27xxxxxxxxx
+ */
+function toE164PhoneForSms(phone) {
+  const p = normalizePhone(phone);
+  if (!p) return "";
+
+  // If already international with +
+  if (p.startsWith("+")) return p;
+
+  // If stored as 27xxxxxxxxx (no +)
+  if (/^27\d{9}$/.test(p)) return `+${p}`;
+
+  // If local SA 0xxxxxxxxx
+  if (/^0\d{9}$/.test(p)) return `+27${p.slice(1)}`;
+
+  // Otherwise return as-is (will be rejected by Twilio if not E.164, but we log it)
+  return p;
+}
+
+/**
  * ✅ build multiple phone candidates to match DB formats
  */
 function buildPhoneCandidates(phone) {
@@ -76,17 +103,19 @@ async function sendOtpSms(phone, otpCode, purpose = "OTP") {
   const token = process.env.TWILIO_AUTH_TOKEN;
   const from = process.env.TWILIO_FROM_NUMBER;
 
-  const safePhone = normalizePhone(phone);
+  // ✅ FIX: convert destination to E.164 for Twilio
+  const to = toE164PhoneForSms(phone);
 
   if (!sid || !token || !from) {
     console.log("⚠️ TWILIO NOT CONFIGURED → SMS NOT SENT");
-    console.log(
-      `📲 ${purpose} SHOULD HAVE BEEN SENT TO:`,
-      safePhone,
-      "| OTP:",
-      otpCode
-    );
+    console.log(`📲 ${purpose} SHOULD HAVE BEEN SENT TO:`, to, "| OTP:", otpCode);
     return { ok: false, provider: "none" };
+  }
+
+  // Guard: Twilio expects E.164 (+...)
+  if (!to || !to.startsWith("+")) {
+    console.error("❌ SMS OTP SEND FAILED: Invalid 'To' Phone Number:", phone, "->", to);
+    return { ok: false, provider: "twilio", error: "Invalid destination phone number" };
   }
 
   const client = twilio(sid, token);
@@ -99,7 +128,7 @@ async function sendOtpSms(phone, otpCode, purpose = "OTP") {
   await client.messages.create({
     body: message,
     from,
-    to: safePhone,
+    to, // ✅ now E.164
   });
 
   return { ok: true, provider: "twilio" };
