@@ -6,6 +6,22 @@ import User, { USER_ROLES } from "../models/User.js";
 const router = express.Router();
 
 /**
+ * ✅ Normalize phone for consistent login + uniqueness
+ */
+function normalizePhone(phone) {
+  if (!phone) return "";
+  let p = String(phone).trim();
+
+  p = p.replace(/\s+/g, "");
+  p = p.replace(/[-()]/g, "");
+
+  // If someone sends "00.." convert to +..
+  if (p.startsWith("00")) p = "+" + p.slice(2);
+
+  return p;
+}
+
+/**
  * ✅ TEST route
  * GET /api/superadmin/test
  */
@@ -23,17 +39,34 @@ router.post(
   authorizeRoles(USER_ROLES.SUPER_ADMIN),
   async (req, res) => {
     try {
-      const { name, email, password, role, permissions } = req.body;
+      const { name, email, password, role, permissions, phone } = req.body;
 
-      if (!name || !email || !password) {
+      // ✅ phone is REQUIRED because login uses phone + phone has unique index
+      if (!name || !email || !password || !phone) {
         return res.status(400).json({
-          message: "name, email, password are required",
+          message: "name, email, password, phone are required",
         });
       }
 
-      // ✅ Check if user exists
-      const exists = await User.findOne({ email });
+      const normalizedPhone = normalizePhone(phone);
+
+      if (!normalizedPhone) {
+        return res.status(400).json({ message: "Invalid phone provided ❌" });
+      }
+
+      // ✅ Check if user exists by email OR phone
+      const exists = await User.findOne({
+        $or: [{ email }, { phone: normalizedPhone }],
+      });
+
       if (exists) {
+        // try to help with a clearer message
+        if (exists.email === email) {
+          return res.status(409).json({ message: "Email already exists ❌" });
+        }
+        if (exists.phone === normalizedPhone) {
+          return res.status(409).json({ message: "Phone already exists ❌" });
+        }
         return res.status(409).json({ message: "User already exists ❌" });
       }
 
@@ -66,15 +99,16 @@ router.post(
         role: chosenRole,
         permissions: permissions || defaultPermissions,
 
-        // ✅ REQUIRED FIELDS: copy from creator (SuperAdmin)
+        // ✅ REQUIRED FIELDS:
         firstName,
         lastName,
 
-        phone: creator.phone || "0000000000",
+        // ✅ FIX: unique phone per admin (required for phone-login)
+        phone: normalizedPhone,
+
+        // keep your “copy required fields” fallback logic
         birthday: creator.birthday || new Date("1990-01-01"),
-
         nationalityType: creator.nationalityType || "ForeignNational",
-
         saIdNumber: creator.saIdNumber || null,
         passportNumber: creator.passportNumber || null,
         country: creator.country || "Other",
