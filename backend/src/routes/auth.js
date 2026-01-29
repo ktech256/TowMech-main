@@ -46,9 +46,6 @@ function normalizePhone(phone) {
 
 /**
  * ✅ Convert phone to E.164 format for Twilio SMS sending ONLY
- * - Twilio requires E.164 for the "to" number.
- * - Keeps your DB/login normalization untouched.
- *
  * Examples (South Africa):
  *  07131101111     -> +277131101111
  *  27xxxxxxxxx     -> +27xxxxxxxxx
@@ -67,7 +64,6 @@ function toE164PhoneForSms(phone) {
   // If local SA 0xxxxxxxxx
   if (/^0\d{9}$/.test(p)) return `+27${p.slice(1)}`;
 
-  // Otherwise return as-is (will be rejected by Twilio if not E.164, but we log it)
   return p;
 }
 
@@ -96,9 +92,65 @@ function buildPhoneCandidates(phone) {
 }
 
 /**
+ * ✅ STATIC OTP (Play Store review / internal testing)
+ * - Only these 5 phone numbers will use the static OTP.
+ * - Login input is 10 digits starting with 0 (example: 0711111111)
+ */
+const STATIC_TEST_OTP = "123456";
+const STATIC_TEST_PHONES_LOCAL = new Set([
+  "0731110001",
+  "0731110002",
+  "0731110003",
+  "0731110004",
+  "0731110005",
+]);
+
+/**
+ * Convert any accepted SA format to local 0XXXXXXXXX for matching.
+ * Supports:
+ *  - 0XXXXXXXXX
+ *  - 27XXXXXXXXX
+ *  - +27XXXXXXXXX
+ */
+function toLocalZaPhone(phone) {
+  const p = normalizePhone(phone);
+  if (!p) return "";
+
+  // Keep only digits plus optional leading +
+  const clean = p.replace(/[^\d+]/g, "");
+
+  if (/^0\d{9}$/.test(clean)) return clean;
+
+  if (/^\+27\d{9}$/.test(clean)) return "0" + clean.slice(3);
+  if (/^27\d{9}$/.test(clean)) return "0" + clean.slice(2);
+
+  // Fallback: digits only (won't match unless it becomes 0XXXXXXXXX)
+  const digits = clean.replace(/[^\d]/g, "");
+  if (/^0\d{9}$/.test(digits)) return digits;
+
+  return "";
+}
+
+function isStaticOtpTestPhone(phone) {
+  const local = toLocalZaPhone(phone);
+  return !!local && STATIC_TEST_PHONES_LOCAL.has(local);
+}
+
+/**
  * ✅ Send OTP via SMS (Twilio)
  */
 async function sendOtpSms(phone, otpCode, purpose = "OTP") {
+  // ✅ Static OTP numbers: do NOT send SMS (reviewers can just type 123456)
+  if (isStaticOtpTestPhone(phone)) {
+    console.log(
+      `🧪 STATIC OTP MODE (${purpose}) → SMS SKIPPED for`,
+      toLocalZaPhone(phone),
+      "| OTP:",
+      otpCode
+    );
+    return { ok: true, provider: "static" };
+  }
+
   const sid = process.env.TWILIO_ACCOUNT_SID;
   const token = process.env.TWILIO_AUTH_TOKEN;
   const from = process.env.TWILIO_FROM_NUMBER;
@@ -128,7 +180,7 @@ async function sendOtpSms(phone, otpCode, purpose = "OTP") {
   await client.messages.create({
     body: message,
     from,
-    to, // ✅ now E.164
+    to,
   });
 
   return { ok: true, provider: "twilio" };
@@ -250,12 +302,16 @@ async function getAllowedProviderTypesFromPricingConfig() {
 
 /**
  * ✅ Helper: Generate OTP + save
+ * ✅ UPDATED: static OTP for selected test numbers
  */
 async function generateAndSaveOtp(user, { minutes = 10 } = {}) {
-  const otpCode = crypto.randomInt(100000, 999999).toString();
+  const useStatic = isStaticOtpTestPhone(user?.phone);
+  const otpCode = useStatic ? STATIC_TEST_OTP : crypto.randomInt(100000, 999999).toString();
+
   user.otpCode = otpCode;
   user.otpExpiresAt = new Date(Date.now() + minutes * 60 * 1000);
   await user.save();
+
   return otpCode;
 }
 
@@ -487,6 +543,8 @@ router.post("/login", async (req, res) => {
       message: "OTP sent via SMS ✅",
       otp: debugEnabled ? otpCode : undefined,
       requiresOtp: true,
+      // ✅ optional hint (safe): tells tester it is a static-OTP account
+      isStaticOtpAccount: isStaticOtpTestPhone(user.phone),
     });
   } catch (err) {
     console.error("❌ LOGIN ERROR:", err.message);
@@ -597,6 +655,7 @@ router.post("/forgot-password", async (req, res) => {
       message: "If your phone exists, an SMS code has been sent ✅",
       otp: debugEnabled ? otpCode : undefined,
       requiresOtp: true,
+      isStaticOtpAccount: isStaticOtpTestPhone(user.phone),
     });
   } catch (err) {
     console.error("❌ FORGOT PASSWORD ERROR:", err.message);
@@ -712,7 +771,6 @@ router.patch("/me", auth, async (req, res) => {
 
     await user.save();
 
-    // ✅ Return fresh profile (same selection as GET /me)
     const fresh = await User.findById(userId).select(
       "name firstName lastName email phone birthday nationalityType saIdNumber passportNumber country role providerProfile createdAt updatedAt"
     );
@@ -742,16 +800,13 @@ router.post("/logout", auth, async (req, res) => {
 
     const isProvider = isProviderRole(user.role);
 
-    // Root token (if present in your DB)
     user.fcmToken = null;
 
-    // Provider token + session invalidation
     if (isProvider) {
       if (!user.providerProfile) user.providerProfile = {};
       user.providerProfile.fcmToken = null;
       user.providerProfile.isOnline = false;
 
-      // ✅ invalidates any existing provider JWT immediately
       user.providerProfile.sessionId = null;
       user.providerProfile.sessionIssuedAt = null;
     }
