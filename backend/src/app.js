@@ -50,10 +50,44 @@ const app = express();
 
 /**
  * ✅ Middleware
+ * CORS allowlist (fixes admin login failing due to blocked origin)
  */
-app.use(cors());
+const allowedOrigins = [
+  // ✅ Render staging admin dashboard (current)
+  "https://towmech-admin-dashboard-jgqn.onrender.com",
 
-// ✅ RAW BODY CAPTURE (important for PayFast ITN verification)
+  // ✅ Future custom domains
+  "https://admin-staging.towmech.com",
+  "https://admin.towmech.com",
+
+  // ✅ Optional future staging website domains (safe to keep)
+  "https://staging.towmech.com",
+  "https://towmech-website-staging.onrender.com",
+];
+
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      // Allow requests with no origin (Render health checks, curl, server-to-server)
+      if (!origin) return callback(null, true);
+
+      // Allow listed origins only
+      if (allowedOrigins.includes(origin)) return callback(null, true);
+
+      return callback(new Error(`CORS blocked for origin: ${origin}`), false);
+    },
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+  })
+);
+
+// Ensure preflight requests succeed fast
+app.options("*", cors());
+
+/**
+ * ✅ RAW BODY CAPTURE (important for PayFast ITN verification)
+ */
 app.use(
   express.json({
     verify: (req, res, buf) => {
