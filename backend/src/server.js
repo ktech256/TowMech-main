@@ -6,16 +6,18 @@ import http from "http";
 
 import app from "./app.js";
 import connectDB from "./config/db.js";
-
-// ✅ Socket bootstrap (File 7)
 import { createSocketServer } from "./socket/index.js";
 
 // ✅ get current file path
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// ✅ FORCE LOAD backend/.env
-dotenv.config({ path: path.join(__dirname, "../.env") });
+// ✅ Load env only locally (Render already injects env vars)
+if (process.env.NODE_ENV !== "production") {
+  dotenv.config({ path: path.join(__dirname, "../.env") });
+} else {
+  dotenv.config(); // safe fallback
+}
 
 const PORT = process.env.PORT || 5000;
 
@@ -40,7 +42,7 @@ const PORT = process.env.PORT || 5000;
     app.set("io", io);
 
     httpServer.listen(PORT, () => {
-      console.log(`✅ TowMech API running on http://localhost:${PORT}`);
+      console.log(`✅ TowMech API running on port ${PORT}`);
       console.log("✅ Socket.IO enabled");
     });
   } catch (err) {
