@@ -1,76 +1,172 @@
-// backend/src/constants/countries.js
+// backend/src/routes/country.routes.js
+import express from "express";
+import auth from "../middleware/auth.js";
+import User, { USER_ROLES } from "../models/User.js";
+import Country from "../models/Country.js";
+
+const router = express.Router();
 
 /**
- * TowMech Global Countries (ISO 3166-1 alpha-2)
- * - Used for validation + defaults
- * - You can add/remove anytime without breaking DB
+ * ✅ Helper: Only Admin/SuperAdmin
  */
+async function requireAdmin(req, res, next) {
+  try {
+    const userId = req.user?._id || req.user?.id;
+    if (!userId) return res.status(401).json({ message: "Unauthorized" });
 
-export const DEFAULT_COUNTRY_CODE = process.env.DEFAULT_COUNTRY || "ZA";
+    const user = await User.findById(userId).select("role");
+    if (!user) return res.status(401).json({ message: "Unauthorized" });
 
-/**
- * Minimal safe global list (worldwide)
- * If you want, we can later replace this with a DB-driven list (Country model)
- */
-export const COUNTRY_LIST = [
-  // =========================
-  // AFRICA
-  // =========================
-  "DZ","AO","BJ","BW","BF","BI","CV","CM","CF","TD","KM","CG","CD","CI","DJ","EG","GQ","ER","SZ","ET",
-  "GA","GM","GH","GN","GW","KE","LS","LR","LY","MG","MW","ML","MR","MU","MA","MZ","NA","NE","NG","RW",
-  "ST","SN","SC","SL","SO","ZA","SS","SD","TZ","TG","TN","UG","ZM","ZW",
+    if (![USER_ROLES.ADMIN, USER_ROLES.SUPER_ADMIN].includes(user.role)) {
+      return res.status(403).json({ message: "Forbidden" });
+    }
 
-  // =========================
-  // EUROPE
-  // =========================
-  "AL","AD","AM","AT","AZ","BY","BE","BA","BG","HR","CY","CZ","DK","EE","FI","FR","GE","DE","GR","HU",
-  "IS","IE","IT","KZ","XK","LV","LI","LT","LU","MT","MD","MC","ME","NL","MK","NO","PL","PT","RO","RU",
-  "SM","RS","SK","SI","ES","SE","CH","TR","UA","GB","VA",
-
-  // =========================
-  // ASIA
-  // =========================
-  "AF","BH","BD","BT","BN","KH","CN","HK","IN","ID","IR","IQ","IL","JP","JO","KW","KG","LA","LB","MO",
-  "MY","MV","MN","MM","NP","KP","OM","PK","PH","QA","SA","SG","KR","LK","SY","TW","TJ","TH","TL","TM",
-  "AE","UZ","VN","YE",
-
-  // =========================
-  // NORTH AMERICA
-  // =========================
-  "AG","BS","BB","BZ","CA","CR","CU","DM","DO","SV","GD","GT","HT","HN","JM","MX","NI","PA","KN","LC",
-  "VC","TT","US",
-
-  // =========================
-  // SOUTH AMERICA
-  // =========================
-  "AR","BO","BR","CL","CO","EC","GY","PY","PE","SR","UY","VE",
-
-  // =========================
-  // OCEANIA
-  // =========================
-  "AU","FJ","KI","MH","FM","NR","NZ","PW","PG","WS","SB","TO","TV","VU",
-];
-
-/**
- * Fast lookup set
- */
-export const COUNTRY_SET = new Set(COUNTRY_LIST);
-
-/**
- * Helper: validate ISO2 country code
- */
-export function isValidCountryCode(code) {
-  if (!code) return false;
-  const c = String(code).trim().toUpperCase();
-  return /^[A-Z]{2}$/.test(c) && COUNTRY_SET.has(c);
+    req.adminUser = user;
+    next();
+  } catch (err) {
+    return res.status(500).json({ message: "Auth error", error: err.message });
+  }
 }
 
 /**
- * Helper: normalize ISO2 country code (returns DEFAULT if invalid)
+ * ✅ PUBLIC: GET /api/countries
+ * Default behavior: returns ACTIVE countries only
+ * Optional: ?includeInactive=true (admin only)
  */
-export function normalizeCountryCode(code) {
-  const c = String(code || "").trim().toUpperCase();
-  if (!/^[A-Z]{2}$/.test(c)) return DEFAULT_COUNTRY_CODE;
-  if (!COUNTRY_SET.has(c)) return DEFAULT_COUNTRY_CODE;
-  return c;
-}
+router.get("/", async (req, res) => {
+  try {
+    const includeInactiveParam = String(req.query?.includeInactive || "false") === "true";
+
+    // Public default: active only
+    let filter = { isActive: true };
+
+    // If includeInactive requested, require admin auth token (optional)
+    // (If token missing/invalid, still return active only)
+    if (includeInactiveParam) {
+      try {
+        // If client sends Authorization, auth middleware will normally be used.
+        // Here we do a soft-check: if req.user exists, verify role.
+        const userId = req.user?._id || req.user?.id;
+        if (userId) {
+          const user = await User.findById(userId).select("role");
+          if (user && [USER_ROLES.ADMIN, USER_ROLES.SUPER_ADMIN].includes(user.role)) {
+            filter = {}; // ✅ return all
+          }
+        }
+      } catch {
+        // ignore, fallback to active only
+      }
+    }
+
+    const countries = await Country.find(filter).sort({ createdAt: -1 });
+
+    return res.status(200).json({ countries });
+  } catch (err) {
+    return res.status(500).json({ message: "Failed to load countries", error: err.message });
+  }
+});
+
+/**
+ * ✅ ADMIN: GET /api/countries/admin/all
+ * Returns ALL countries (active + inactive)
+ */
+router.get("/admin/all", auth, requireAdmin, async (req, res) => {
+  try {
+    const countries = await Country.find({}).sort({ createdAt: -1 });
+    return res.status(200).json({ countries });
+  } catch (err) {
+    return res.status(500).json({ message: "Failed to load countries", error: err.message });
+  }
+});
+
+/**
+ * ✅ ADMIN: POST /api/countries
+ * Create country (admin only)
+ */
+router.post("/", auth, requireAdmin, async (req, res) => {
+  try {
+    const {
+      countryCode,
+      name,
+      currency,
+      defaultLanguage = "en",
+      supportedLanguages = ["en"],
+      timezone = "Africa/Johannesburg",
+      isActive = true,
+    } = req.body || {};
+
+    const code = String(countryCode || "").trim().toUpperCase();
+    if (!code || code.length !== 2) {
+      return res.status(400).json({ message: "countryCode (ISO2) is required" });
+    }
+    if (!name) return res.status(400).json({ message: "name is required" });
+    if (!currency) return res.status(400).json({ message: "currency is required" });
+
+    const exists = await Country.findOne({ countryCode: code }).lean();
+    if (exists) return res.status(409).json({ message: "Country already exists" });
+
+    const country = await Country.create({
+      countryCode: code,
+      name: String(name).trim(),
+      currency: String(currency).trim().toUpperCase(),
+      defaultLanguage: String(defaultLanguage).trim().toLowerCase(),
+      supportedLanguages: Array.isArray(supportedLanguages)
+        ? supportedLanguages.map((l) => String(l).trim().toLowerCase())
+        : [String(defaultLanguage).trim().toLowerCase()],
+      timezone: String(timezone).trim(),
+      isActive: Boolean(isActive),
+      createdBy: req.user?._id || null,
+      updatedBy: req.user?._id || null,
+    });
+
+    return res.status(201).json({ message: "Country created ✅", country });
+  } catch (err) {
+    return res.status(500).json({ message: "Create failed", error: err.message });
+  }
+});
+
+/**
+ * ✅ ADMIN: PATCH /api/countries/:id
+ * Toggle/Update country fields (admin only)
+ * Used by dashboard "Active" toggle.
+ */
+router.patch("/:id", auth, requireAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const country = await Country.findById(id);
+    if (!country) return res.status(404).json({ message: "Country not found" });
+
+    const {
+      name,
+      currency,
+      defaultLanguage,
+      supportedLanguages,
+      timezone,
+      isActive,
+    } = req.body || {};
+
+    if (typeof name === "string" && name.trim()) country.name = name.trim();
+    if (typeof currency === "string" && currency.trim()) country.currency = currency.trim().toUpperCase();
+    if (typeof defaultLanguage === "string" && defaultLanguage.trim())
+      country.defaultLanguage = defaultLanguage.trim().toLowerCase();
+
+    if (Array.isArray(supportedLanguages)) {
+      country.supportedLanguages = supportedLanguages.map((l) => String(l).trim().toLowerCase());
+    }
+
+    if (typeof timezone === "string" && timezone.trim()) country.timezone = timezone.trim();
+
+    if (typeof isActive === "boolean") country.isActive = isActive;
+
+    country.updatedBy = req.user?._id || null;
+
+    await country.save();
+
+    return res.status(200).json({ message: "Country updated ✅", country });
+  } catch (err) {
+    return res.status(500).json({ message: "Update failed", error: err.message });
+  }
+});
+
+export default router;

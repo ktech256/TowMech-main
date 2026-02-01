@@ -1,4 +1,4 @@
-// src/controllers/insuranceController.js
+// backend/src/controllers/insuranceController.js
 import InsurancePartner from "../models/InsurancePartner.js";
 import InsuranceCode from "../models/InsuranceCode.js";
 
@@ -42,7 +42,9 @@ export async function listInsurancePartners(req, res) {
 
     return res.status(200).json({ partners, countryCode });
   } catch (err) {
-    return res.status(500).json({ message: "Failed to load partners", error: err.message });
+    return res
+      .status(500)
+      .json({ message: "Failed to load partners", error: err.message });
   }
 }
 
@@ -86,7 +88,9 @@ export async function validateCode(req, res) {
 export async function adminListPartners(req, res) {
   try {
     const partners = await InsurancePartner.find()
-      .select("name partnerCode email phone logoUrl description countryCodes isActive createdAt updatedAt")
+      .select(
+        "name partnerCode email phone logoUrl description countryCodes isActive createdAt updatedAt"
+      )
       .sort({ createdAt: -1 });
 
     return res.status(200).json({ partners });
@@ -151,7 +155,15 @@ export async function adminUpdatePartner(req, res) {
     const partner = await InsurancePartner.findById(id);
     if (!partner) return res.status(404).json({ message: "Partner not found" });
 
-    const { name, email, phone, logoUrl, description, countryCodes, isActive } = req.body || {};
+    const {
+      name,
+      email,
+      phone,
+      logoUrl,
+      description,
+      countryCodes,
+      isActive,
+    } = req.body || {};
 
     if (typeof name === "string" && name.trim()) partner.name = name.trim();
     if (typeof email === "string") partner.email = email.trim().toLowerCase();

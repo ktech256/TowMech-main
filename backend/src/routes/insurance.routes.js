@@ -1,4 +1,4 @@
-// src/routes/insurance.routes.js
+// backend/src/routes/insurance.routes.js
 import express from "express";
 import auth from "../middleware/auth.js";
 import User, { USER_ROLES } from "../models/User.js";
@@ -49,7 +49,9 @@ async function requireAdmin(req, res, next) {
  */
 router.get("/partners", async (req, res) => {
   try {
-    const countryCode = String(req.headers["x-country-code"] || req.query.countryCode || "ZA")
+    const countryCode = String(
+      req.headers["x-country-code"] || req.query.countryCode || "ZA"
+    )
       .trim()
       .toUpperCase();
 
@@ -72,7 +74,9 @@ router.get("/partners", async (req, res) => {
  */
 router.post("/validate-code", async (req, res) => {
   try {
-    const countryCode = String(req.headers["x-country-code"] || req.body?.countryCode || "ZA")
+    const countryCode = String(
+      req.headers["x-country-code"] || req.body?.countryCode || "ZA"
+    )
       .trim()
       .toUpperCase();
 
@@ -106,7 +110,9 @@ router.post("/validate-code", async (req, res) => {
 router.get("/admin/partners", auth, requireAdmin, async (req, res) => {
   try {
     const partners = await InsurancePartner.find()
-      .select("name partnerCode email phone logoUrl description countryCodes isActive createdAt updatedAt")
+      .select(
+        "name partnerCode email phone logoUrl description countryCodes isActive createdAt updatedAt"
+      )
       .sort({ createdAt: -1 });
 
     return res.status(200).json({ partners });
@@ -172,15 +178,7 @@ router.patch("/admin/partners/:id", auth, requireAdmin, async (req, res) => {
     const partner = await InsurancePartner.findById(id);
     if (!partner) return res.status(404).json({ message: "Partner not found" });
 
-    const {
-      name,
-      email,
-      phone,
-      logoUrl,
-      description,
-      countryCodes,
-      isActive,
-    } = req.body || {};
+    const { name, email, phone, logoUrl, description, countryCodes, isActive } = req.body || {};
 
     if (typeof name === "string" && name.trim()) partner.name = name.trim();
     if (typeof email === "string") partner.email = email.trim().toLowerCase();

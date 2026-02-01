@@ -1,4 +1,4 @@
-// app.js
+// backend/src/app.js
 import express from "express";
 import cors from "cors";
 
@@ -53,6 +53,9 @@ import tenant from "./middleware/tenant.js";
 import legalRoutes from "./routes/legal.routes.js";
 import insuranceRoutes from "./routes/insurance.routes.js";
 
+// ✅ NEW: Countries (Admin + Public)
+import countryRoutes from "./routes/country.routes.js";
+
 const app = express();
 
 /**
@@ -91,7 +94,12 @@ app.use(
     },
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "X-COUNTRY-CODE", "Accept-Language"],
+    allowedHeaders: [
+      "Content-Type",
+      "Authorization",
+      "X-COUNTRY-CODE",
+      "Accept-Language",
+    ],
   })
 );
 
@@ -142,6 +150,14 @@ app.use("/api/jobs", jobRoutes);
 app.use("/api/providers", providerRoutes);
 app.use("/api/payments", paymentRoutes);
 app.use("/api/notifications", notificationRoutes);
+
+/**
+ * ✅ COUNTRIES ROUTES (PUBLIC + ADMIN)
+ * - Public: GET /api/countries  (active only by default)
+ * - Admin:  GET /api/countries/admin/all
+ * - Admin:  PATCH /api/countries/:id   (toggle isActive)
+ */
+app.use("/api/countries", countryRoutes);
 
 /**
  * ✅ CONFIG ROUTES
