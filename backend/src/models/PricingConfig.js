@@ -39,6 +39,23 @@ const DEFAULT_MECHANIC_CATEGORY_PRICING = {
 
 const pricingConfigSchema = new mongoose.Schema(
   {
+    /**
+     * ✅ TowMech Global routing
+     * Every pricing config belongs to a country (tenant isolation)
+     *
+     * NOTE:
+     * - Keep default "ZA" so old data continues working.
+     * - Later dashboard can create configs per country.
+     */
+    countryCode: {
+      type: String,
+      required: true,
+      default: "ZA",
+      uppercase: true,
+      trim: true,
+      index: true,
+    },
+
     currency: { type: String, default: "ZAR" },
 
     /**
@@ -207,5 +224,18 @@ const pricingConfigSchema = new mongoose.Schema(
   },
   { timestamps: true, strict: true }
 );
+
+/**
+ * ✅ Normalize countryCode
+ */
+pricingConfigSchema.pre("validate", function (next) {
+  if (this.countryCode) this.countryCode = String(this.countryCode).trim().toUpperCase();
+  next();
+});
+
+/**
+ * ✅ Only one PricingConfig per country
+ */
+pricingConfigSchema.index({ countryCode: 1 }, { unique: true });
 
 export default mongoose.model("PricingConfig", pricingConfigSchema);

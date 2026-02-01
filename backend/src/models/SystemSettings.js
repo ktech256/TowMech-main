@@ -2,6 +2,22 @@ import mongoose from "mongoose";
 
 const SystemSettingsSchema = new mongoose.Schema(
   {
+    /**
+     * ✅ TowMech Global routing
+     * Settings must be country-specific (multi-tenant).
+     *
+     * - Default "ZA" keeps old data working.
+     * - Admin dashboard will manage per-country settings.
+     */
+    countryCode: {
+      type: String,
+      required: true,
+      default: "ZA",
+      uppercase: true,
+      trim: true,
+      index: true,
+    },
+
     // ✅ GENERAL
     platformName: { type: String, default: "TowMech" },
     supportEmail: { type: String, default: "" },
@@ -68,5 +84,18 @@ const SystemSettingsSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
+
+/**
+ * ✅ Normalize countryCode
+ */
+SystemSettingsSchema.pre("validate", function (next) {
+  if (this.countryCode) this.countryCode = String(this.countryCode).trim().toUpperCase();
+  next();
+});
+
+/**
+ * ✅ One settings doc per country
+ */
+SystemSettingsSchema.index({ countryCode: 1 }, { unique: true });
 
 export default mongoose.model("SystemSettings", SystemSettingsSchema);

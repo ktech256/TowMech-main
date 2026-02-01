@@ -20,6 +20,29 @@ const auth = async (req, res, next) => {
     }
 
     /**
+     * ✅ MULTI-COUNTRY SUPPORT (TowMech Global)
+     * Ensure req.countryCode exists (from tenant middleware).
+     * If user has a countryCode, enforce that the request is scoped correctly.
+     */
+    const reqCountry = (req.countryCode || req.headers["x-country-code"] || "ZA")
+      .toString()
+      .trim()
+      .toUpperCase();
+
+    const userCountry = (user.countryCode || "").toString().trim().toUpperCase();
+
+    // Only enforce if user has a country set.
+    // SuperAdmin can bypass cross-country restriction.
+    const isSuperAdmin = user.role === USER_ROLES.SUPER_ADMIN;
+
+    if (!isSuperAdmin && userCountry && reqCountry && userCountry !== reqCountry) {
+      return res.status(403).json({
+        message: "Country mismatch. Access denied.",
+        code: "COUNTRY_MISMATCH",
+      });
+    }
+
+    /**
      * ✅ SINGLE-DEVICE LOGIN ENFORCEMENT (Providers ONLY)
      * - Only Mechanic + TowTruck are restricted to 1 phone session.
      * - Token is NOT auto-expired by time.
@@ -67,10 +90,8 @@ const auth = async (req, res, next) => {
 
     /**
      * ✅ BLOCK users based on accountStatus
-     * SuperAdmin bypass allowed (optional)
      */
     const status = user.accountStatus || {};
-    const isSuperAdmin = user.role === USER_ROLES.SUPER_ADMIN;
 
     if (!isSuperAdmin) {
       // ✅ Archived = blocked always

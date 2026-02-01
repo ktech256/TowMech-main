@@ -166,6 +166,12 @@ const providerProfileSchema = new mongoose.Schema(
     // ✅ session enforcement (single device login)
     sessionId: { type: String, default: null },
     sessionIssuedAt: { type: Date, default: null },
+
+    /**
+     * ✅ TowMech Global: provider can be restricted to specific countries
+     * If empty => allowed everywhere (not recommended)
+     */
+    allowedCountries: { type: [String], default: [] },
   },
   { _id: false }
 );
@@ -197,6 +203,30 @@ const userSchema = new mongoose.Schema(
       unique: true,
       index: true,
       set: normalizePhone,
+    },
+
+    /**
+     * ✅ TowMech Global: multi-country routing
+     * This is the PRIMARY country the account belongs to.
+     * Example: "ZA", "KE", "UG", "US"
+     */
+    countryCode: {
+      type: String,
+      default: "ZA",
+      uppercase: true,
+      trim: true,
+      index: true,
+    },
+
+    /**
+     * Optional language preference (UI + legal docs)
+     * Example: "en", "sw"
+     */
+    languageCode: {
+      type: String,
+      default: "en",
+      lowercase: true,
+      trim: true,
     },
 
     birthday: { type: Date, required: true },
@@ -234,10 +264,18 @@ const userSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+userSchema.index({ countryCode: 1, role: 1 });
 userSchema.index({ "providerProfile.location": "2dsphere" });
 
 userSchema.pre("validate", function (next) {
   if (this.phone) this.phone = normalizePhone(this.phone);
+
+  // Ensure uppercase countryCode always
+  if (this.countryCode) this.countryCode = String(this.countryCode).trim().toUpperCase();
+
+  // Ensure lowercase languageCode always
+  if (this.languageCode) this.languageCode = String(this.languageCode).trim().toLowerCase();
+
   next();
 });
 

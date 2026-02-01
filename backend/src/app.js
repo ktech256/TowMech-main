@@ -46,6 +46,13 @@ import ratingRoutes from "./routes/rating.routes.js";
 import chatRoutes from "./routes/chat.routes.js";
 import adminChatRoutes from "./routes/adminChat.routes.js";
 
+// ✅ NEW: Multi-country / tenant middleware
+import tenant from "./middleware/tenant.js";
+
+// ✅ NEW: Legal + Insurance routes
+import legalRoutes from "./routes/legal.routes.js";
+import insuranceRoutes from "./routes/insurance.routes.js";
+
 const app = express();
 
 /**
@@ -53,16 +60,22 @@ const app = express();
  * CORS allowlist (fixes admin login failing due to blocked origin)
  */
 const allowedOrigins = [
-  // ✅ Render staging admin dashboard (current)
+  // =========================
+  // ✅ STAGING (Render)
+  // =========================
   "https://towmech-admin-dashboard-jgqn.onrender.com",
 
-  // ✅ Future custom domains
+  // If you also deploy website staging
+  "https://towmech-website-staging.onrender.com",
+
+  // =========================
+  // ✅ FUTURE CUSTOM DOMAINS
+  // =========================
   "https://admin-staging.towmech.com",
   "https://admin.towmech.com",
-
-  // ✅ Optional future staging website domains (safe to keep)
   "https://staging.towmech.com",
-  "https://towmech-website-staging.onrender.com",
+  "https://towmech.com",
+  "https://www.towmech.com",
 ];
 
 app.use(
@@ -78,7 +91,7 @@ app.use(
     },
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
+    allowedHeaders: ["Content-Type", "Authorization", "X-COUNTRY-CODE", "Accept-Language"],
   })
 );
 
@@ -106,10 +119,19 @@ app.use(
 );
 
 /**
+ * ✅ Multi-country tenant middleware
+ * Must run BEFORE routes
+ */
+app.use(tenant);
+
+/**
  * ✅ Health Check
  */
 app.get("/health", (req, res) => {
-  return res.status(200).json({ status: "ok ✅" });
+  return res.status(200).json({
+    status: "ok ✅",
+    countryCode: req.countryCode || "ZA",
+  });
 });
 
 /**
@@ -120,6 +142,21 @@ app.use("/api/jobs", jobRoutes);
 app.use("/api/providers", providerRoutes);
 app.use("/api/payments", paymentRoutes);
 app.use("/api/notifications", notificationRoutes);
+
+/**
+ * ✅ CONFIG ROUTES
+ */
+app.use("/api/config", configRoutes);
+
+/**
+ * ✅ LEGAL ROUTES (PUBLIC)
+ */
+app.use("/api/legal", legalRoutes);
+
+/**
+ * ✅ INSURANCE ROUTES (PUBLIC + ADMIN)
+ */
+app.use("/api/insurance", insuranceRoutes);
 
 /**
  * ✅ ✅ ✅ RATINGS ROUTES MOUNTED TWICE
@@ -141,11 +178,6 @@ app.use("/api/admin/chats", adminChatRoutes);
  * ✅ SAFETY ROUTES (PUBLIC)
  */
 app.use("/api/safety", safetyRoutes);
-
-/**
- * ✅ CONFIG ROUTES
- */
-app.use("/api/config", configRoutes);
 
 /**
  * ✅ Pricing Config Route

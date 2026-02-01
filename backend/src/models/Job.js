@@ -46,6 +46,18 @@ const jobSchema = new mongoose.Schema(
      */
     customerProblemDescription: { type: String, default: null },
 
+    /**
+     * ✅ TowMech Global routing
+     * Every job must belong to a country (tenant isolation)
+     */
+    countryCode: {
+      type: String,
+      default: "ZA",
+      uppercase: true,
+      trim: true,
+      index: true,
+    },
+
     roleNeeded: { type: String, required: true },
 
     pickupLocation: {
@@ -201,6 +213,17 @@ jobSchema.index({ dropoffLocation: "2dsphere" });
 // ✅ Helpful indexes (non-breaking, performance only)
 jobSchema.index({ lockedAt: 1 });
 jobSchema.index({ assignedTo: 1, status: 1 });
+
+// ✅ TowMech Global index (country isolation + filtering)
+jobSchema.index({ countryCode: 1, status: 1, createdAt: -1 });
+
+/**
+ * ✅ Ensure countryCode normalized
+ */
+jobSchema.pre("validate", function (next) {
+  if (this.countryCode) this.countryCode = String(this.countryCode).trim().toUpperCase();
+  next();
+});
 
 /**
  * ✅ Virtuals for Android compatibility:
