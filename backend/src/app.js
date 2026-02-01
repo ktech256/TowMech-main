@@ -39,41 +39,38 @@ import adminSupportRoutes from "./routes/adminSupport.js";
 // ✅ Notifications Routes
 import adminNotificationsRoutes from "./routes/adminNotifications.js";
 
-// ✅ ✅ ✅ RATINGS ROUTES (NEW)
+// ✅ ✅ ✅ RATINGS ROUTES
 import ratingRoutes from "./routes/rating.routes.js";
 
-// ✅ ✅ ✅ CHAT ROUTES (NEW)
+// ✅ ✅ ✅ CHAT ROUTES
 import chatRoutes from "./routes/chat.routes.js";
 import adminChatRoutes from "./routes/adminChat.routes.js";
 
 // ✅ NEW: Multi-country / tenant middleware
 import tenant from "./middleware/tenant.js";
 
-// ✅ NEW: Legal + Insurance routes
+// ✅ Existing public routes
 import legalRoutes from "./routes/legal.routes.js";
 import insuranceRoutes from "./routes/insurance.routes.js";
-
-// ✅ NEW: Countries (Admin + Public)
 import countryRoutes from "./routes/country.routes.js";
+
+// ✅ ✅ ✅ MISSING DASHBOARD ROUTES (NEW)
+import adminCountriesRoutes from "./routes/adminCountries.routes.js";
+import adminCountryServicesRoutes from "./routes/adminCountryServices.routes.js";
+import adminPaymentRoutingRoutes from "./routes/adminPaymentRouting.routes.js";
+import adminLegalRoutes from "./routes/adminLegal.routes.js";
+import adminInsuranceRoutes from "./routes/adminInsurance.routes.js";
+import adminServiceCategoriesRoutes from "./routes/adminServiceCategories.js";
 
 const app = express();
 
 /**
  * ✅ Middleware
- * CORS allowlist (fixes admin login failing due to blocked origin)
+ * CORS allowlist
  */
 const allowedOrigins = [
-  // =========================
-  // ✅ STAGING (Render)
-  // =========================
   "https://towmech-admin-dashboard-jgqn.onrender.com",
-
-  // If you also deploy website staging
   "https://towmech-website-staging.onrender.com",
-
-  // =========================
-  // ✅ FUTURE CUSTOM DOMAINS
-  // =========================
   "https://admin-staging.towmech.com",
   "https://admin.towmech.com",
   "https://staging.towmech.com",
@@ -84,30 +81,20 @@ const allowedOrigins = [
 app.use(
   cors({
     origin: (origin, callback) => {
-      // Allow requests with no origin (Render health checks, curl, server-to-server)
       if (!origin) return callback(null, true);
-
-      // Allow listed origins only
       if (allowedOrigins.includes(origin)) return callback(null, true);
-
       return callback(new Error(`CORS blocked for origin: ${origin}`), false);
     },
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: [
-      "Content-Type",
-      "Authorization",
-      "X-COUNTRY-CODE",
-      "Accept-Language",
-    ],
+    allowedHeaders: ["Content-Type", "Authorization", "X-COUNTRY-CODE", "Accept-Language"],
   })
 );
 
-// Ensure preflight requests succeed fast
 app.options("*", cors());
 
 /**
- * ✅ RAW BODY CAPTURE (important for PayFast ITN verification)
+ * ✅ RAW BODY CAPTURE
  */
 app.use(
   express.json({
@@ -127,8 +114,7 @@ app.use(
 );
 
 /**
- * ✅ Multi-country tenant middleware
- * Must run BEFORE routes
+ * ✅ Tenant middleware
  */
 app.use(tenant);
 
@@ -152,61 +138,54 @@ app.use("/api/payments", paymentRoutes);
 app.use("/api/notifications", notificationRoutes);
 
 /**
- * ✅ COUNTRIES ROUTES (PUBLIC + ADMIN)
- * - Public: GET /api/countries  (active only by default)
- * - Admin:  GET /api/countries/admin/all
- * - Admin:  PATCH /api/countries/:id   (toggle isActive)
+ * ✅ COUNTRIES (PUBLIC)
  */
 app.use("/api/countries", countryRoutes);
 
 /**
- * ✅ CONFIG ROUTES
+ * ✅ CONFIG
  */
 app.use("/api/config", configRoutes);
 
 /**
- * ✅ LEGAL ROUTES (PUBLIC)
+ * ✅ LEGAL (PUBLIC)
  */
 app.use("/api/legal", legalRoutes);
 
 /**
- * ✅ INSURANCE ROUTES (PUBLIC + ADMIN)
+ * ✅ INSURANCE (PUBLIC)
  */
 app.use("/api/insurance", insuranceRoutes);
 
 /**
- * ✅ ✅ ✅ RATINGS ROUTES MOUNTED TWICE
- * - Mobile uses: POST /api/jobs/rate
- * - Dashboard uses: GET /api/admin/ratings + /api/admin/ratings/:id
+ * ✅ RATINGS
  */
 app.use("/api/jobs", ratingRoutes);
 app.use("/api/admin", ratingRoutes);
 
 /**
- * ✅ ✅ ✅ CHAT ROUTES
- * - Mobile uses: /api/chat/...
- * - Admin uses: /api/admin/chats/...
+ * ✅ CHAT
  */
 app.use("/api/chat", chatRoutes);
 app.use("/api/admin/chats", adminChatRoutes);
 
 /**
- * ✅ SAFETY ROUTES (PUBLIC)
+ * ✅ SAFETY
  */
 app.use("/api/safety", safetyRoutes);
 
 /**
- * ✅ Pricing Config Route
+ * ✅ Pricing Config
  */
 app.use("/api/pricing-config", pricingConfigRoutes);
 
 /**
- * ✅ SUPPORT ROUTES (PUBLIC)
+ * ✅ SUPPORT
  */
 app.use("/api/support", supportRoutes);
 
 /**
- * ✅ ADMIN ROUTES
+ * ✅ ADMIN ROUTES (EXISTING)
  */
 app.use("/api/admin/providers", adminProviderRoutes);
 app.use("/api/admin/statistics", adminStatisticsRoutes);
@@ -216,24 +195,22 @@ app.use("/api/admin/payments", adminPaymentsRoutes);
 app.use("/api/admin/analytics", adminAnalyticsRoutes);
 app.use("/api/admin/support", adminSupportRoutes);
 app.use("/api/admin/notifications", adminNotificationsRoutes);
-
-// ✅ SYSTEM SETTINGS ADMIN ROUTE
 app.use("/api/admin/settings", adminSettingsRoutes);
-
-// ✅ ZONES ADMIN ROUTE
 app.use("/api/admin/zones", adminZonesRoutes);
-
-// ✅ ✅ ✅ OVERVIEW ADMIN ROUTE ✅
 app.use("/api/admin/overview", adminOverviewRoutes);
-
-// ✅ ADMIN SAFETY ROUTES
 app.use("/api/admin/safety", adminSafetyRoutes);
-
-// ✅ Admin User Management
 app.use("/api/admin", adminUsersRoutes);
-
-// ✅ SUPER ADMIN ROUTES
 app.use("/api/superadmin", superAdminRoutes);
+
+/**
+ * ✅ ✅ ✅ ADMIN ROUTES REQUIRED BY DASHBOARD (NEW)
+ */
+app.use("/api/admin/countries", adminCountriesRoutes);
+app.use("/api/admin/country-services", adminCountryServicesRoutes);
+app.use("/api/admin/payment-routing", adminPaymentRoutingRoutes);
+app.use("/api/admin/legal", adminLegalRoutes);
+app.use("/api/admin/insurance", adminInsuranceRoutes);
+app.use("/api/admin/service-categories", adminServiceCategoriesRoutes);
 
 /**
  * ✅ 404 Handler
