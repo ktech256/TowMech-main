@@ -31,6 +31,9 @@ export const TOW_TRUCK_TYPES = [
   "Flatbed",
 ];
 
+/**
+ * ✅ MECHANIC CATEGORIES (NEW)
+ */
 export const MECHANIC_CATEGORIES = [
   "General Mechanic",
   "Engine Mechanic",
@@ -64,6 +67,13 @@ function normalizePhone(phone) {
 
 const permissionsSchema = new mongoose.Schema(
   {
+    /**
+     * ✅ NEW: Country workspace switching
+     * If false => dropdown can be hidden/disabled for that admin (frontend can enforce)
+     */
+    canSwitchCountryWorkspace: { type: Boolean, default: false },
+
+    // Existing permissions
     canViewOverview: { type: Boolean, default: false },
 
     canVerifyProviders: { type: Boolean, default: false },
@@ -82,22 +92,18 @@ const permissionsSchema = new mongoose.Schema(
     canViewAnalytics: { type: Boolean, default: false },
     canManagePricing: { type: Boolean, default: false },
 
-    canViewStats: { type: Boolean, default: false },
-
-    /**
-     * ✅ NEW permissions (menu items you requested)
-     * Defaults false to avoid changing existing admin behavior.
-     */
+    // ✅ Menu-based permissions you requested
     canManageChats: { type: Boolean, default: false },
     canManageNotifications: { type: Boolean, default: false },
-    canManageRolesPermissions: { type: Boolean, default: false },
+    canManageRoles: { type: Boolean, default: false },
 
     canManageCountries: { type: Boolean, default: false },
     canManageCountryServices: { type: Boolean, default: false },
     canManagePaymentRouting: { type: Boolean, default: false },
-
     canManageLegal: { type: Boolean, default: false },
     canManageInsurance: { type: Boolean, default: false },
+
+    canViewStats: { type: Boolean, default: false },
   },
   { _id: false }
 );
@@ -147,7 +153,7 @@ const providerProfileSchema = new mongoose.Schema(
     // ✅ TowTruck only
     towTruckTypes: [{ type: String, enum: TOW_TRUCK_TYPES }],
 
-    // ✅ Mechanic only (NEW)
+    // ✅ Mechanic only
     mechanicCategories: [{ type: String, enum: MECHANIC_CATEGORIES }],
 
     carTypesSupported: [{ type: String, enum: VEHICLE_TYPES }],
@@ -180,7 +186,6 @@ const providerProfileSchema = new mongoose.Schema(
 
     /**
      * ✅ TowMech Global: provider can be restricted to specific countries
-     * If empty => allowed everywhere (not recommended)
      */
     allowedCountries: { type: [String], default: [] },
   },
@@ -216,6 +221,9 @@ const userSchema = new mongoose.Schema(
       set: normalizePhone,
     },
 
+    /**
+     * ✅ PRIMARY country the account belongs to
+     */
     countryCode: {
       type: String,
       default: "ZA",
@@ -272,11 +280,8 @@ userSchema.index({ "providerProfile.location": "2dsphere" });
 userSchema.pre("validate", function (next) {
   if (this.phone) this.phone = normalizePhone(this.phone);
 
-  if (this.countryCode)
-    this.countryCode = String(this.countryCode).trim().toUpperCase();
-
-  if (this.languageCode)
-    this.languageCode = String(this.languageCode).trim().toLowerCase();
+  if (this.countryCode) this.countryCode = String(this.countryCode).trim().toUpperCase();
+  if (this.languageCode) this.languageCode = String(this.languageCode).trim().toLowerCase();
 
   next();
 });
