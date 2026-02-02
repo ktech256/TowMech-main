@@ -22,6 +22,26 @@ function normalizePhone(phone) {
 }
 
 /**
+ * ✅ Resolve workspace country code from:
+ * - tenant middleware (req.countryCode)
+ * - header: X-COUNTRY-CODE
+ * - query: ?countryCode=KE
+ * - body: countryCode
+ */
+function resolveCountryCode(req) {
+  return (
+    req.countryCode ||
+    req.headers["x-country-code"] ||
+    req.query.countryCode ||
+    req.body?.countryCode ||
+    "ZA"
+  )
+    .toString()
+    .trim()
+    .toUpperCase();
+}
+
+/**
  * ✅ TEST route
  * GET /api/superadmin/test
  */
@@ -32,6 +52,10 @@ router.get("/test", (req, res) => {
 /**
  * ✅ SuperAdmin creates new Admin OR SuperAdmin (with permissions)
  * POST /api/superadmin/create-admin
+ *
+ * IMPORTANT:
+ * - Admins must be created WITH a countryCode that matches the workspace.
+ * - SuperAdmins can be global; we still store a countryCode but they are treated as global.
  */
 router.post(
   "/create-admin",
@@ -49,19 +73,20 @@ router.post(
       }
 
       const normalizedPhone = normalizePhone(phone);
-
       if (!normalizedPhone) {
         return res.status(400).json({ message: "Invalid phone provided ❌" });
       }
 
+      const emailLower = String(email).trim().toLowerCase();
+      const workspaceCountryCode = resolveCountryCode(req);
+
       // ✅ Check if user exists by email OR phone
       const exists = await User.findOne({
-        $or: [{ email }, { phone: normalizedPhone }],
+        $or: [{ email: emailLower }, { phone: normalizedPhone }],
       });
 
       if (exists) {
-        // try to help with a clearer message
-        if (exists.email === email) {
+        if (exists.email === emailLower) {
           return res.status(409).json({ message: "Email already exists ❌" });
         }
         if (exists.phone === normalizedPhone) {
@@ -94,17 +119,21 @@ router.post(
 
       const admin = new User({
         name,
-        email,
+        email: emailLower,
         password,
         role: chosenRole,
         permissions: permissions || defaultPermissions,
 
-        // ✅ REQUIRED FIELDS:
         firstName,
         lastName,
 
-        // ✅ FIX: unique phone per admin (required for phone-login)
         phone: normalizedPhone,
+
+        /**
+         * ✅ CRITICAL: attach admin to the workspace country
+         * This is what makes Country Workspace REAL.
+         */
+        countryCode: workspaceCountryCode,
 
         // keep your “copy required fields” fallback logic
         birthday: creator.birthday || new Date("1990-01-01"),
@@ -118,6 +147,7 @@ router.post(
 
       return res.status(201).json({
         message: `${chosenRole} created successfully ✅`,
+        workspaceCountryCode,
         admin: admin.toSafeJSON(USER_ROLES.SUPER_ADMIN),
       });
     } catch (err) {
@@ -176,8 +206,14 @@ router.patch(
 );
 
 /**
- * ✅ SuperAdmin fetches all admins
+ * ✅ SuperAdmin fetches admins for CURRENT workspace country
  * GET /api/superadmin/admins
+ *
+ * Behavior:
+ * - Always include ALL SuperAdmins (global)
+ * - Include ONLY Admins for selected workspace country
+ *
+ * This fixes: switching ZA/KE/UG showing same admin list.
  */
 router.get(
   "/admins",
@@ -185,11 +221,20 @@ router.get(
   authorizeRoles(USER_ROLES.SUPER_ADMIN),
   async (req, res) => {
     try {
+      const workspaceCountryCode = resolveCountryCode(req);
+
       const admins = await User.find({
-        role: { $in: [USER_ROLES.ADMIN, USER_ROLES.SUPER_ADMIN] },
+        $or: [
+          // ✅ SuperAdmin is global
+          { role: USER_ROLES.SUPER_ADMIN },
+
+          // ✅ Admins are PER COUNTRY (workspace)
+          { role: USER_ROLES.ADMIN, countryCode: workspaceCountryCode },
+        ],
       }).sort({ createdAt: -1 });
 
       return res.status(200).json({
+        workspaceCountryCode,
         admins: admins.map((a) => a.toSafeJSON(USER_ROLES.SUPER_ADMIN)),
       });
     } catch (err) {
