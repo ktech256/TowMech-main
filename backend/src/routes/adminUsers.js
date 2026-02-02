@@ -44,26 +44,30 @@ const blockRestrictedAdmins = (req, res) => {
  * - Admin can only view:
  *    - their own country workspace
  *    - OR any workspace IF canSwitchCountryWorkspace=true
+ *
+ * ✅ IMPORTANT: If admin cannot switch, FORCE workspaceCountryCode to userCountry.
+ * This blocks any “header tampering”.
  */
 const enforceWorkspaceAccess = (req, res, workspaceCountryCode) => {
   const role = req.user?.role;
   const userCountry = String(req.user?.countryCode || "ZA").toUpperCase();
   const canSwitch = !!req.user?.permissions?.canSwitchCountryWorkspace;
 
-  if (role === USER_ROLES.SUPER_ADMIN) return true;
+  // SuperAdmin can view any workspace
+  if (role === USER_ROLES.SUPER_ADMIN) {
+    req.countryCode = workspaceCountryCode;
+    return true;
+  }
 
   // Admin cannot switch unless explicitly allowed
   if (role === USER_ROLES.ADMIN && !canSwitch) {
-    if (workspaceCountryCode !== userCountry) {
-      res.status(403).json({
-        message: "You are not allowed to switch country workspace ❌",
-        yourCountry: userCountry,
-        requestedCountry: workspaceCountryCode,
-      });
-      return false;
-    }
+    // 🔒 FORCE workspace to user's own country no matter what was requested
+    req.countryCode = userCountry;
+    return true;
   }
 
+  // Admin with switch permission can access requested workspace
+  req.countryCode = workspaceCountryCode;
   return true;
 };
 
@@ -91,9 +95,12 @@ router.get(
     try {
       if (blockRestrictedAdmins(req, res)) return;
 
-      const workspaceCountryCode = resolveCountryCode(req);
+      const requestedCountryCode = resolveCountryCode(req);
 
-      if (!enforceWorkspaceAccess(req, res, workspaceCountryCode)) return;
+      // ✅ will also set req.countryCode (forced if admin cannot switch)
+      if (!enforceWorkspaceAccess(req, res, requestedCountryCode)) return;
+
+      const workspaceCountryCode = req.countryCode;
 
       const { role, search, page = 1, limit = 25 } = req.query;
 
@@ -163,22 +170,22 @@ router.get(
     try {
       if (blockRestrictedAdmins(req, res)) return;
 
-      const workspaceCountryCode = resolveCountryCode(req);
+      const requestedCountryCode = resolveCountryCode(req);
+      if (!enforceWorkspaceAccess(req, res, requestedCountryCode)) return;
 
-      if (!enforceWorkspaceAccess(req, res, workspaceCountryCode)) return;
+      const workspaceCountryCode = req.countryCode;
 
       const user = await User.findById(req.params.id);
       if (!user) return res.status(404).json({ message: "User not found" });
 
       // ✅ Country isolation:
-      // - SuperAdmin can view any
-      // - Admin can view only workspaceCountryCode (and never other country users)
       if (
         user.role !== USER_ROLES.SUPER_ADMIN &&
         String(user.countryCode || "").toUpperCase() !== workspaceCountryCode &&
         req.user.role !== USER_ROLES.SUPER_ADMIN
       ) {
-        return res.status(403).json({ message: "Country mismatch. Access denied." });
+        // Return 404 to avoid leaking existence across countries
+        return res.status(404).json({ message: "User not found" });
       }
 
       return res.status(200).json({
@@ -206,8 +213,10 @@ router.patch(
     try {
       if (blockRestrictedAdmins(req, res)) return;
 
-      const workspaceCountryCode = resolveCountryCode(req);
-      if (!enforceWorkspaceAccess(req, res, workspaceCountryCode)) return;
+      const requestedCountryCode = resolveCountryCode(req);
+      if (!enforceWorkspaceAccess(req, res, requestedCountryCode)) return;
+
+      const workspaceCountryCode = req.countryCode;
 
       const { reason } = req.body;
 
@@ -224,7 +233,7 @@ router.patch(
         target.role !== USER_ROLES.SUPER_ADMIN &&
         String(target.countryCode || "").toUpperCase() !== workspaceCountryCode
       ) {
-        return res.status(403).json({ message: "Country mismatch. Access denied." });
+        return res.status(404).json({ message: "User not found" });
       }
 
       if (
@@ -269,8 +278,10 @@ router.patch(
     try {
       if (blockRestrictedAdmins(req, res)) return;
 
-      const workspaceCountryCode = resolveCountryCode(req);
-      if (!enforceWorkspaceAccess(req, res, workspaceCountryCode)) return;
+      const requestedCountryCode = resolveCountryCode(req);
+      if (!enforceWorkspaceAccess(req, res, requestedCountryCode)) return;
+
+      const workspaceCountryCode = req.countryCode;
 
       const target = await User.findById(req.params.id);
       if (!target) return res.status(404).json({ message: "User not found" });
@@ -280,7 +291,7 @@ router.patch(
         target.role !== USER_ROLES.SUPER_ADMIN &&
         String(target.countryCode || "").toUpperCase() !== workspaceCountryCode
       ) {
-        return res.status(403).json({ message: "Country mismatch. Access denied." });
+        return res.status(404).json({ message: "User not found" });
       }
 
       if (!target.accountStatus) target.accountStatus = {};
@@ -316,8 +327,10 @@ router.patch(
     try {
       if (blockRestrictedAdmins(req, res)) return;
 
-      const workspaceCountryCode = resolveCountryCode(req);
-      if (!enforceWorkspaceAccess(req, res, workspaceCountryCode)) return;
+      const requestedCountryCode = resolveCountryCode(req);
+      if (!enforceWorkspaceAccess(req, res, requestedCountryCode)) return;
+
+      const workspaceCountryCode = req.countryCode;
 
       const { reason } = req.body;
 
@@ -333,7 +346,7 @@ router.patch(
         target.role !== USER_ROLES.SUPER_ADMIN &&
         String(target.countryCode || "").toUpperCase() !== workspaceCountryCode
       ) {
-        return res.status(403).json({ message: "Country mismatch. Access denied." });
+        return res.status(404).json({ message: "User not found" });
       }
 
       if (
@@ -378,8 +391,10 @@ router.patch(
     try {
       if (blockRestrictedAdmins(req, res)) return;
 
-      const workspaceCountryCode = resolveCountryCode(req);
-      if (!enforceWorkspaceAccess(req, res, workspaceCountryCode)) return;
+      const requestedCountryCode = resolveCountryCode(req);
+      if (!enforceWorkspaceAccess(req, res, requestedCountryCode)) return;
+
+      const workspaceCountryCode = req.countryCode;
 
       const target = await User.findById(req.params.id);
       if (!target) return res.status(404).json({ message: "User not found" });
@@ -389,7 +404,7 @@ router.patch(
         target.role !== USER_ROLES.SUPER_ADMIN &&
         String(target.countryCode || "").toUpperCase() !== workspaceCountryCode
       ) {
-        return res.status(403).json({ message: "Country mismatch. Access denied." });
+        return res.status(404).json({ message: "User not found" });
       }
 
       if (!target.accountStatus) target.accountStatus = {};
@@ -424,6 +439,9 @@ router.patch(
   async (req, res) => {
     try {
       if (blockRestrictedAdmins(req, res)) return;
+
+      const requestedCountryCode = resolveCountryCode(req);
+      if (!enforceWorkspaceAccess(req, res, requestedCountryCode)) return;
 
       if (req.user._id.toString() === req.params.id) {
         return res.status(403).json({ message: "You cannot archive yourself ❌" });
@@ -463,6 +481,9 @@ router.patch(
   async (req, res) => {
     try {
       if (blockRestrictedAdmins(req, res)) return;
+
+      const requestedCountryCode = resolveCountryCode(req);
+      if (!enforceWorkspaceAccess(req, res, requestedCountryCode)) return;
 
       const target = await User.findById(req.params.id);
       if (!target) return res.status(404).json({ message: "User not found" });

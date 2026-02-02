@@ -23,6 +23,34 @@ const resolveCountryCode = (req) => {
 };
 
 /**
+ * ✅ Enforce country workspace rules (same as adminUsers)
+ * - SuperAdmin can view any workspace
+ * - Admin can only view:
+ *    - their own country workspace
+ *    - OR any workspace IF canSwitchCountryWorkspace=true
+ *
+ * ✅ If admin cannot switch, FORCE workspaceCountryCode to user.countryCode.
+ */
+const enforceWorkspaceAccess = (req, res, workspaceCountryCode) => {
+  const role = req.user?.role;
+  const userCountry = String(req.user?.countryCode || "ZA").toUpperCase();
+  const canSwitch = !!req.user?.permissions?.canSwitchCountryWorkspace;
+
+  if (role === USER_ROLES.SUPER_ADMIN) {
+    req.countryCode = workspaceCountryCode;
+    return true;
+  }
+
+  if (role === USER_ROLES.ADMIN && !canSwitch) {
+    req.countryCode = userCountry; // 🔒 force lock
+    return true;
+  }
+
+  req.countryCode = workspaceCountryCode;
+  return true;
+};
+
+/**
  * ✅ Permission enforcement helper
  */
 const requirePermission = (req, res, permissionKey) => {
@@ -90,7 +118,10 @@ router.get(
       if (blockRestrictedAdmins(req, res)) return;
       if (!requirePermission(req, res, "canVerifyProviders")) return;
 
-      const workspaceCountryCode = resolveCountryCode(req);
+      const requestedCountryCode = resolveCountryCode(req);
+      if (!enforceWorkspaceAccess(req, res, requestedCountryCode)) return;
+
+      const workspaceCountryCode = req.countryCode;
 
       const providers = await User.find({
         countryCode: workspaceCountryCode,
@@ -127,7 +158,10 @@ router.get(
       if (blockRestrictedAdmins(req, res)) return;
       if (!requirePermission(req, res, "canVerifyProviders")) return;
 
-      const workspaceCountryCode = resolveCountryCode(req);
+      const requestedCountryCode = resolveCountryCode(req);
+      if (!enforceWorkspaceAccess(req, res, requestedCountryCode)) return;
+
+      const workspaceCountryCode = req.countryCode;
 
       const providers = await User.find({
         countryCode: workspaceCountryCode,
@@ -164,7 +198,10 @@ router.get(
       if (blockRestrictedAdmins(req, res)) return;
       if (!requirePermission(req, res, "canVerifyProviders")) return;
 
-      const workspaceCountryCode = resolveCountryCode(req);
+      const requestedCountryCode = resolveCountryCode(req);
+      if (!enforceWorkspaceAccess(req, res, requestedCountryCode)) return;
+
+      const workspaceCountryCode = req.countryCode;
 
       const providers = await User.find({
         countryCode: workspaceCountryCode,
@@ -201,7 +238,10 @@ router.get(
       if (blockRestrictedAdmins(req, res)) return;
       if (!requirePermission(req, res, "canVerifyProviders")) return;
 
-      const workspaceCountryCode = resolveCountryCode(req);
+      const requestedCountryCode = resolveCountryCode(req);
+      if (!enforceWorkspaceAccess(req, res, requestedCountryCode)) return;
+
+      const workspaceCountryCode = req.countryCode;
 
       const provider = await User.findById(req.params.id).select(
         "name email role countryCode providerProfile.verificationDocs providerProfile.verificationStatus accountStatus"
@@ -213,7 +253,7 @@ router.get(
         req.user.role !== USER_ROLES.SUPER_ADMIN &&
         String(provider.countryCode || "").toUpperCase() !== workspaceCountryCode
       ) {
-        return res.status(403).json({ message: "Country mismatch. Access denied." });
+        return res.status(404).json({ message: "Provider not found" });
       }
 
       return res.status(200).json({
@@ -244,7 +284,10 @@ router.patch(
       if (blockRestrictedAdmins(req, res)) return;
       if (!requirePermission(req, res, "canVerifyProviders")) return;
 
-      const workspaceCountryCode = resolveCountryCode(req);
+      const requestedCountryCode = resolveCountryCode(req);
+      if (!enforceWorkspaceAccess(req, res, requestedCountryCode)) return;
+
+      const workspaceCountryCode = req.countryCode;
 
       const provider = await User.findById(req.params.id);
       if (!provider) return res.status(404).json({ message: "Provider not found" });
@@ -257,7 +300,7 @@ router.patch(
         req.user.role !== USER_ROLES.SUPER_ADMIN &&
         String(provider.countryCode || "").toUpperCase() !== workspaceCountryCode
       ) {
-        return res.status(403).json({ message: "Country mismatch. Access denied." });
+        return res.status(404).json({ message: "Provider not found" });
       }
 
       if (blockInvalidProvider(provider, res)) return;
@@ -295,7 +338,10 @@ router.patch(
       if (blockRestrictedAdmins(req, res)) return;
       if (!requirePermission(req, res, "canVerifyProviders")) return;
 
-      const workspaceCountryCode = resolveCountryCode(req);
+      const requestedCountryCode = resolveCountryCode(req);
+      if (!enforceWorkspaceAccess(req, res, requestedCountryCode)) return;
+
+      const workspaceCountryCode = req.countryCode;
 
       const provider = await User.findById(req.params.id);
       if (!provider) return res.status(404).json({ message: "Provider not found" });
@@ -308,7 +354,7 @@ router.patch(
         req.user.role !== USER_ROLES.SUPER_ADMIN &&
         String(provider.countryCode || "").toUpperCase() !== workspaceCountryCode
       ) {
-        return res.status(403).json({ message: "Country mismatch. Access denied." });
+        return res.status(404).json({ message: "Provider not found" });
       }
 
       if (blockInvalidProvider(provider, res)) return;

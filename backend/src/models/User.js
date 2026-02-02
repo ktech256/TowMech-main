@@ -134,6 +134,9 @@ const permissionsSchema = new mongoose.Schema(
     // Existing permissions
     canViewOverview: { type: Boolean, default: false },
 
+    // ✅ NEW: Live Map permission (aligned with admin-nav + dashboard)
+    canViewLiveMap: { type: Boolean, default: false },
+
     canVerifyProviders: { type: Boolean, default: false },
     canApprovePayments: { type: Boolean, default: false },
     canRefundPayments: { type: Boolean, default: false },

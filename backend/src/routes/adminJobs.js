@@ -24,6 +24,30 @@ const resolveCountryCode = (req) => {
 };
 
 /**
+ * ✅ Enforce workspace lock:
+ * - SuperAdmin can use requested workspace
+ * - Admin without canSwitchCountryWorkspace => forced to user.countryCode
+ */
+const enforceWorkspaceAccess = (req, res, workspaceCountryCode) => {
+  const role = req.user?.role;
+  const userCountry = String(req.user?.countryCode || "ZA").toUpperCase();
+  const canSwitch = !!req.user?.permissions?.canSwitchCountryWorkspace;
+
+  if (role === USER_ROLES.SUPER_ADMIN) {
+    req.countryCode = workspaceCountryCode;
+    return true;
+  }
+
+  if (role === USER_ROLES.ADMIN && !canSwitch) {
+    req.countryCode = userCountry;
+    return true;
+  }
+
+  req.countryCode = workspaceCountryCode;
+  return true;
+};
+
+/**
  * ✅ Permission enforcement helper
  */
 const requirePermission = (req, res, permissionKey) => {
@@ -71,7 +95,10 @@ router.get(
       if (blockRestrictedAdmins(req, res)) return;
       if (!requirePermission(req, res, "canManageJobs")) return;
 
-      const workspaceCountryCode = resolveCountryCode(req);
+      const requestedCountryCode = resolveCountryCode(req);
+      if (!enforceWorkspaceAccess(req, res, requestedCountryCode)) return;
+
+      const workspaceCountryCode = req.countryCode;
 
       const jobs = await Job.find({ countryCode: workspaceCountryCode })
         .populate("customer", "name email phone role countryCode")
@@ -105,7 +132,10 @@ router.get(
       if (blockRestrictedAdmins(req, res)) return;
       if (!requirePermission(req, res, "canManageJobs")) return;
 
-      const workspaceCountryCode = resolveCountryCode(req);
+      const requestedCountryCode = resolveCountryCode(req);
+      if (!enforceWorkspaceAccess(req, res, requestedCountryCode)) return;
+
+      const workspaceCountryCode = req.countryCode;
 
       const activeStatuses = [
         JOB_STATUSES.CREATED,
@@ -149,7 +179,10 @@ router.get(
       if (blockRestrictedAdmins(req, res)) return;
       if (!requirePermission(req, res, "canManageJobs")) return;
 
-      const workspaceCountryCode = resolveCountryCode(req);
+      const requestedCountryCode = resolveCountryCode(req);
+      if (!enforceWorkspaceAccess(req, res, requestedCountryCode)) return;
+
+      const workspaceCountryCode = req.countryCode;
 
       const job = await Job.findOne({
         _id: req.params.id,
