@@ -59,9 +59,7 @@ function haversineDistanceKm(lat1, lng1, lat2, lng2) {
 function normalizeStringArray(input) {
   if (!input) return [];
   const list = Array.isArray(input) ? input : [input];
-  return list
-    .map((x) => String(x).trim())
-    .filter(Boolean);
+  return list.map((x) => String(x).trim()).filter(Boolean);
 }
 
 /**
@@ -172,8 +170,8 @@ router.get("/me", auth, async (req, res) => {
     }
 
     const user = await User.findById(req.user._id).select(
-  "name firstName lastName email phone birthday nationalityType saIdNumber passportNumber country role providerProfile createdAt updatedAt"
-);
+      "name firstName lastName email phone birthday nationalityType saIdNumber passportNumber country role providerProfile createdAt updatedAt"
+    );
 
     if (!user) return res.status(404).json({ message: "User not found" });
 
@@ -189,13 +187,6 @@ router.get("/me", auth, async (req, res) => {
 /**
  * ✅ Provider profile update
  * PATCH /api/providers/me
- *
- * ✅ UPDATED:
- * - still supports email + phone
- * - ALSO allows providers to update:
- *    - mechanicCategories (Mechanic only)
- *    - towTruckTypes (TowTruck only)
- *    - carTypesSupported (both)
  */
 router.patch("/me", auth, async (req, res) => {
   try {
@@ -370,10 +361,8 @@ router.patch("/me/status", auth, async (req, res) => {
       isOnline,
       lat,
       lng,
-
       towTruckTypes,
       carTypesSupported,
-
       mechanicCategories, // ✅ NEW
     } = req.body;
 
@@ -598,11 +587,6 @@ router.get("/jobs/broadcasted/:jobId", auth, async (req, res) => {
 /**
  * ✅ Provider accepts job (first accept wins)
  * PATCH /api/providers/jobs/:jobId/accept
- *
- * ✅ PATCHED SAFELY:
- * - Ensures job.status = ASSIGNED
- * - Ensures job.lockedAt = new Date() IF NOT SET
- * - Does NOT break existing logic (first accept wins)
  */
 router.patch("/jobs/:jobId/accept", auth, async (req, res) => {
   try {
@@ -685,14 +669,6 @@ router.patch("/jobs/:jobId/accept", auth, async (req, res) => {
       });
     }
 
-    /**
-     * ✅ IMPORTANT:
-     * We keep the atomic "first accept wins" behavior by using findOneAndUpdate with a strict filter.
-     * We also set lockedAt ONLY if it wasn't set (using aggregation pipeline update).
-     *
-     * MongoDB supports pipeline updates in findOneAndUpdate on modern versions.
-     * If your Mongo version is old and pipeline update fails, tell me and I’ll give the fallback.
-     */
     const job = await Job.findOneAndUpdate(
       {
         _id: req.params.jobId,
@@ -705,8 +681,6 @@ router.patch("/jobs/:jobId/accept", auth, async (req, res) => {
           $set: {
             assignedTo: req.user._id,
             status: JOB_STATUSES.ASSIGNED,
-
-            // ✅ Only set lockedAt if missing
             lockedAt: { $ifNull: ["$lockedAt", new Date()] },
           },
         },
@@ -926,11 +900,23 @@ router.patch("/jobs/:jobId/cancel", auth, async (req, res) => {
 
     await job.save();
 
-    const newProviders = await User.find({
+    // ✅ NEW (SAFE): rebroadcast should prefer providers in same country if job.countryCode exists
+    const jobCountry = String(job.countryCode || "").trim().toUpperCase();
+
+    const providerQuery = {
       role: job.roleNeeded,
       "providerProfile.isOnline": true,
       _id: { $nin: job.excludedProviders },
-    }).limit(10);
+    };
+
+    if (jobCountry) {
+      providerQuery.$or = [
+        { countryCode: jobCountry },
+        { "providerProfile.allowedCountries": jobCountry },
+      ];
+    }
+
+    const newProviders = await User.find(providerQuery).limit(10);
 
     job.broadcastedTo = newProviders.map((p) => p._id);
 

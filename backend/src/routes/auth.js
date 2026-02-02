@@ -738,7 +738,20 @@ router.post("/verify-otp", async (req, res) => {
     return res.status(200).json({
       message: "OTP verified ✅",
       token,
-      user: typeof user.toSafeJSON === "function" ? user.toSafeJSON(user.role) : undefined,
+
+      // ✅ IMPORTANT: dashboard needs permissions + role + countryCode
+      user:
+        typeof user.toSafeJSON === "function"
+          ? user.toSafeJSON(user.role)
+          : {
+              _id: user._id,
+              id: user._id,
+              name: user.name,
+              email: user.email,
+              role: user.role,
+              countryCode: user.countryCode,
+              permissions: user.permissions || {},
+            },
 
       // ✅ helps dashboard/android set workspace immediately
       countryCode: user.countryCode || requestCountryCode,
@@ -844,18 +857,28 @@ router.post("/reset-password", async (req, res) => {
 /**
  * ✅ Get logged-in user profile
  * GET /api/auth/me
+ *
+ * ✅ FIX: include permissions + countryCode in select so dashboard can filter nav correctly.
  */
 router.get("/me", auth, async (req, res) => {
   try {
     const user = await User.findById(req.user._id).select(
-      "name firstName lastName email phone birthday nationalityType saIdNumber passportNumber country role providerProfile countryCode createdAt updatedAt"
+      "name firstName lastName email phone birthday nationalityType saIdNumber passportNumber country role providerProfile countryCode permissions createdAt updatedAt"
     );
 
     if (!user) return res.status(404).json({ message: "User not found" });
 
-    return res.status(200).json({
-      user: typeof user.toSafeJSON === "function" ? user.toSafeJSON(user.role) : user,
-    });
+    const safe = typeof user.toSafeJSON === "function" ? user.toSafeJSON(user.role) : user;
+
+    // ✅ compatibility: some older code uses `country` instead of `countryCode`
+    if (safe && safe.countryCode == null && safe.country) {
+      safe.countryCode = safe.country;
+    }
+
+    // ✅ ensure permissions always exists (dashboard expects object)
+    if (safe && !safe.permissions) safe.permissions = {};
+
+    return res.status(200).json({ user: safe });
   } catch (err) {
     return res.status(500).json({
       message: "Could not fetch profile",
@@ -915,12 +938,16 @@ router.patch("/me", auth, async (req, res) => {
     await user.save();
 
     const fresh = await User.findById(userId).select(
-      "name firstName lastName email phone birthday nationalityType saIdNumber passportNumber country role providerProfile countryCode createdAt updatedAt"
+      "name firstName lastName email phone birthday nationalityType saIdNumber passportNumber country role providerProfile countryCode permissions createdAt updatedAt"
     );
+
+    const safe = typeof fresh.toSafeJSON === "function" ? fresh.toSafeJSON(fresh.role) : fresh;
+    if (safe && !safe.permissions) safe.permissions = {};
+    if (safe && safe.countryCode == null && safe.country) safe.countryCode = safe.country;
 
     return res.status(200).json({
       message: "Profile updated ✅",
-      user: typeof fresh.toSafeJSON === "function" ? fresh.toSafeJSON(fresh.role) : fresh,
+      user: safe,
     });
   } catch (err) {
     return res.status(500).json({
