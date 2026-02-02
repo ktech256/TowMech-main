@@ -31,10 +31,6 @@ export const TOW_TRUCK_TYPES = [
   "Flatbed",
 ];
 
-/**
- * ✅ MECHANIC CATEGORIES (NEW)
- * Used for mechanic onboarding + filtering during mechanic job requests
- */
 export const MECHANIC_CATEGORIES = [
   "General Mechanic",
   "Engine Mechanic",
@@ -87,6 +83,21 @@ const permissionsSchema = new mongoose.Schema(
     canManagePricing: { type: Boolean, default: false },
 
     canViewStats: { type: Boolean, default: false },
+
+    /**
+     * ✅ NEW permissions (menu items you requested)
+     * Defaults false to avoid changing existing admin behavior.
+     */
+    canManageChats: { type: Boolean, default: false },
+    canManageNotifications: { type: Boolean, default: false },
+    canManageRolesPermissions: { type: Boolean, default: false },
+
+    canManageCountries: { type: Boolean, default: false },
+    canManageCountryServices: { type: Boolean, default: false },
+    canManagePaymentRouting: { type: Boolean, default: false },
+
+    canManageLegal: { type: Boolean, default: false },
+    canManageInsurance: { type: Boolean, default: false },
   },
   { _id: false }
 );
@@ -205,11 +216,6 @@ const userSchema = new mongoose.Schema(
       set: normalizePhone,
     },
 
-    /**
-     * ✅ TowMech Global: multi-country routing
-     * This is the PRIMARY country the account belongs to.
-     * Example: "ZA", "KE", "UG", "US"
-     */
     countryCode: {
       type: String,
       default: "ZA",
@@ -218,10 +224,6 @@ const userSchema = new mongoose.Schema(
       index: true,
     },
 
-    /**
-     * Optional language preference (UI + legal docs)
-     * Example: "en", "sw"
-     */
     languageCode: {
       type: String,
       default: "en",
@@ -270,11 +272,11 @@ userSchema.index({ "providerProfile.location": "2dsphere" });
 userSchema.pre("validate", function (next) {
   if (this.phone) this.phone = normalizePhone(this.phone);
 
-  // Ensure uppercase countryCode always
-  if (this.countryCode) this.countryCode = String(this.countryCode).trim().toUpperCase();
+  if (this.countryCode)
+    this.countryCode = String(this.countryCode).trim().toUpperCase();
 
-  // Ensure lowercase languageCode always
-  if (this.languageCode) this.languageCode = String(this.languageCode).trim().toLowerCase();
+  if (this.languageCode)
+    this.languageCode = String(this.languageCode).trim().toLowerCase();
 
   next();
 });
@@ -298,7 +300,6 @@ userSchema.methods.toSafeJSON = function (viewerRole) {
   delete obj.otpCode;
   delete obj.otpExpiresAt;
 
-  // ✅ hide provider sessionId from all API responses
   if (obj.providerProfile) {
     delete obj.providerProfile.sessionId;
     delete obj.providerProfile.sessionIssuedAt;
