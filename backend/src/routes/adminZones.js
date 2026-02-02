@@ -1,19 +1,35 @@
+// backend/src/routes/adminZones.js
 import express from "express";
 import auth from "../middleware/auth.js";
 import authorizeRoles from "../middleware/role.js";
 import Zone from "../models/Zone.js";
-import User, { USER_ROLES } from "../models/User.js";
+import { USER_ROLES } from "../models/User.js";
 
 const router = express.Router();
+
+/**
+ * ✅ Resolve active workspace country (Tenant)
+ */
+const resolveCountryCode = (req) => {
+  return (
+    req.countryCode ||
+    req.headers["x-country-code"] ||
+    req.query?.country ||
+    req.query?.countryCode ||
+    req.body?.countryCode ||
+    "ZA"
+  )
+    .toString()
+    .trim()
+    .toUpperCase();
+};
 
 /**
  * ✅ Permission enforcement helper
  */
 const requirePermission = (req, res, permissionKey) => {
-  // ✅ SuperAdmin bypass
   if (req.user.role === USER_ROLES.SUPER_ADMIN) return true;
 
-  // ✅ Admin must have required permission
   if (req.user.role === USER_ROLES.ADMIN) {
     if (!req.user.permissions || req.user.permissions[permissionKey] !== true) {
       res.status(403).json({
@@ -29,7 +45,7 @@ const requirePermission = (req, res, permissionKey) => {
 };
 
 /**
- * ✅ GET all zones
+ * ✅ GET all zones (PER COUNTRY WORKSPACE)
  * GET /api/admin/zones
  */
 router.get(
@@ -40,9 +56,13 @@ router.get(
     try {
       if (!requirePermission(req, res, "canManageZones")) return;
 
-      const zones = await Zone.find().sort({ createdAt: -1 });
+      const workspaceCountryCode = resolveCountryCode(req);
 
-      return res.status(200).json({ zones });
+      const zones = await Zone.find({ countryCode: workspaceCountryCode }).sort({
+        createdAt: -1,
+      });
+
+      return res.status(200).json({ countryCode: workspaceCountryCode, zones });
     } catch (err) {
       return res.status(500).json({
         message: "Failed to fetch zones ❌",
@@ -53,7 +73,7 @@ router.get(
 );
 
 /**
- * ✅ CREATE zone
+ * ✅ CREATE zone (PER COUNTRY WORKSPACE)
  * POST /api/admin/zones
  */
 router.post(
@@ -64,13 +84,18 @@ router.post(
     try {
       if (!requirePermission(req, res, "canManageZones")) return;
 
+      const workspaceCountryCode = resolveCountryCode(req);
       const { name, description, isActive } = req.body;
 
       if (!name) {
         return res.status(400).json({ message: "Zone name is required ❌" });
       }
 
-      const exists = await Zone.findOne({ name: name.trim() });
+      // ✅ uniqueness per country
+      const exists = await Zone.findOne({
+        countryCode: workspaceCountryCode,
+        name: name.trim(),
+      });
 
       if (exists) {
         return res.status(400).json({ message: "Zone already exists ❌" });
@@ -81,10 +106,12 @@ router.post(
         description: description || "",
         isActive: isActive !== undefined ? isActive : true,
         createdBy: req.user._id,
+        countryCode: workspaceCountryCode,
       });
 
       return res.status(201).json({
         message: "Zone created ✅",
+        countryCode: workspaceCountryCode,
         zone,
       });
     } catch (err) {
@@ -97,7 +124,7 @@ router.post(
 );
 
 /**
- * ✅ UPDATE zone
+ * ✅ UPDATE zone (PER COUNTRY WORKSPACE)
  * PATCH /api/admin/zones/:id
  */
 router.patch(
@@ -108,13 +135,17 @@ router.patch(
     try {
       if (!requirePermission(req, res, "canManageZones")) return;
 
+      const workspaceCountryCode = resolveCountryCode(req);
       const { name, description, isActive } = req.body;
 
-      const zone = await Zone.findById(req.params.id);
+      const zone = await Zone.findOne({
+        _id: req.params.id,
+        countryCode: workspaceCountryCode,
+      });
 
       if (!zone) return res.status(404).json({ message: "Zone not found ❌" });
 
-      if (name !== undefined) zone.name = name.trim();
+      if (name !== undefined) zone.name = String(name).trim();
       if (description !== undefined) zone.description = description;
       if (isActive !== undefined) zone.isActive = isActive;
 
@@ -124,6 +155,7 @@ router.patch(
 
       return res.status(200).json({
         message: "Zone updated ✅",
+        countryCode: workspaceCountryCode,
         zone,
       });
     } catch (err) {
@@ -136,7 +168,7 @@ router.patch(
 );
 
 /**
- * ✅ DELETE zone
+ * ✅ DELETE zone (PER COUNTRY WORKSPACE)
  * DELETE /api/admin/zones/:id
  */
 router.delete(
@@ -147,7 +179,12 @@ router.delete(
     try {
       if (!requirePermission(req, res, "canManageZones")) return;
 
-      const zone = await Zone.findById(req.params.id);
+      const workspaceCountryCode = resolveCountryCode(req);
+
+      const zone = await Zone.findOne({
+        _id: req.params.id,
+        countryCode: workspaceCountryCode,
+      });
 
       if (!zone) return res.status(404).json({ message: "Zone not found ❌" });
 
@@ -155,6 +192,7 @@ router.delete(
 
       return res.status(200).json({
         message: "Zone deleted ✅",
+        countryCode: workspaceCountryCode,
       });
     } catch (err) {
       return res.status(500).json({

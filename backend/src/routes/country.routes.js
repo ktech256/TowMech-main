@@ -7,6 +7,24 @@ import Country from "../models/Country.js";
 const router = express.Router();
 
 /**
+ * ✅ Resolve active workspace country (Tenant)
+ * Used only to return the selected workspaceCountryCode (NOT for filtering countries list).
+ */
+const resolveCountryCode = (req) => {
+  return (
+    req.countryCode ||
+    req.headers["x-country-code"] ||
+    req.query?.country ||
+    req.query?.countryCode ||
+    req.body?.countryCode ||
+    "ZA"
+  )
+    .toString()
+    .trim()
+    .toUpperCase();
+};
+
+/**
  * ✅ Helper: Only Admin/SuperAdmin
  */
 async function requireAdmin(req, res, next) {
@@ -30,22 +48,22 @@ async function requireAdmin(req, res, next) {
 
 /**
  * ✅ PUBLIC: GET /api/countries
- * Default behavior: returns ACTIVE countries only
+ * Default: ACTIVE only
  * Optional: ?includeInactive=true (admin only)
+ *
+ * ✅ Workspace note:
+ * Countries are GLOBAL. We return workspaceCountryCode so dashboard can show selection.
  */
 router.get("/", async (req, res) => {
   try {
+    const workspaceCountryCode = resolveCountryCode(req);
     const includeInactiveParam = String(req.query?.includeInactive || "false") === "true";
 
-    // Public default: active only
     let filter = { isActive: true };
 
-    // If includeInactive requested, require admin auth token (optional)
-    // (If token missing/invalid, still return active only)
     if (includeInactiveParam) {
+      // Soft-check if req.user exists (if upstream auth middleware was used)
       try {
-        // If client sends Authorization, auth middleware will normally be used.
-        // Here we do a soft-check: if req.user exists, verify role.
         const userId = req.user?._id || req.user?.id;
         if (userId) {
           const user = await User.findById(userId).select("role");
@@ -54,13 +72,13 @@ router.get("/", async (req, res) => {
           }
         }
       } catch {
-        // ignore, fallback to active only
+        // ignore
       }
     }
 
     const countries = await Country.find(filter).sort({ createdAt: -1 });
 
-    return res.status(200).json({ countries });
+    return res.status(200).json({ workspaceCountryCode, countries });
   } catch (err) {
     return res.status(500).json({ message: "Failed to load countries", error: err.message });
   }
@@ -68,12 +86,14 @@ router.get("/", async (req, res) => {
 
 /**
  * ✅ ADMIN: GET /api/countries/admin/all
- * Returns ALL countries (active + inactive)
+ * Returns ALL countries (active + inactive) - GLOBAL
  */
 router.get("/admin/all", auth, requireAdmin, async (req, res) => {
   try {
+    const workspaceCountryCode = resolveCountryCode(req);
+
     const countries = await Country.find({}).sort({ createdAt: -1 });
-    return res.status(200).json({ countries });
+    return res.status(200).json({ workspaceCountryCode, countries });
   } catch (err) {
     return res.status(500).json({ message: "Failed to load countries", error: err.message });
   }
@@ -81,12 +101,14 @@ router.get("/admin/all", auth, requireAdmin, async (req, res) => {
 
 /**
  * ✅ ADMIN: POST /api/countries
- * Create country (admin only)
+ * Create country (GLOBAL)
+ * Supports BOTH { countryCode } and { code } without breaking older clients.
  */
 router.post("/", auth, requireAdmin, async (req, res) => {
   try {
     const {
       countryCode,
+      code, // ✅ backward compatible
       name,
       currency,
       defaultLanguage = "en",
@@ -95,18 +117,24 @@ router.post("/", auth, requireAdmin, async (req, res) => {
       isActive = true,
     } = req.body || {};
 
-    const code = String(countryCode || "").trim().toUpperCase();
-    if (!code || code.length !== 2) {
+    const iso2 = String(countryCode || code || "").trim().toUpperCase();
+    if (!iso2 || iso2.length !== 2) {
       return res.status(400).json({ message: "countryCode (ISO2) is required" });
     }
     if (!name) return res.status(400).json({ message: "name is required" });
     if (!currency) return res.status(400).json({ message: "currency is required" });
 
-    const exists = await Country.findOne({ countryCode: code }).lean();
+    // ✅ support both schemas (code vs countryCode) safely
+    const exists =
+      (await Country.findOne({ code: iso2 }).lean()) ||
+      (await Country.findOne({ countryCode: iso2 }).lean());
+
     if (exists) return res.status(409).json({ message: "Country already exists" });
 
+    // ✅ create using your current adminCountries schema fields (code)
     const country = await Country.create({
-      countryCode: code,
+      code: iso2,
+      countryCode: iso2, // ✅ also set if model supports it (harmless if ignored)
       name: String(name).trim(),
       currency: String(currency).trim().toUpperCase(),
       defaultLanguage: String(defaultLanguage).trim().toLowerCase(),
@@ -127,8 +155,7 @@ router.post("/", auth, requireAdmin, async (req, res) => {
 
 /**
  * ✅ ADMIN: PATCH /api/countries/:id
- * Toggle/Update country fields (admin only)
- * Used by dashboard "Active" toggle.
+ * Update country fields (GLOBAL)
  */
 router.patch("/:id", auth, requireAdmin, async (req, res) => {
   try {
@@ -137,26 +164,24 @@ router.patch("/:id", auth, requireAdmin, async (req, res) => {
     const country = await Country.findById(id);
     if (!country) return res.status(404).json({ message: "Country not found" });
 
-    const {
-      name,
-      currency,
-      defaultLanguage,
-      supportedLanguages,
-      timezone,
-      isActive,
-    } = req.body || {};
+    const { name, currency, defaultLanguage, supportedLanguages, timezone, isActive } =
+      req.body || {};
 
     if (typeof name === "string" && name.trim()) country.name = name.trim();
-    if (typeof currency === "string" && currency.trim()) country.currency = currency.trim().toUpperCase();
-    if (typeof defaultLanguage === "string" && defaultLanguage.trim())
+    if (typeof currency === "string" && currency.trim())
+      country.currency = currency.trim().toUpperCase();
+
+    if (typeof defaultLanguage === "string" && defaultLanguage.trim()) {
       country.defaultLanguage = defaultLanguage.trim().toLowerCase();
+    }
 
     if (Array.isArray(supportedLanguages)) {
-      country.supportedLanguages = supportedLanguages.map((l) => String(l).trim().toLowerCase());
+      country.supportedLanguages = supportedLanguages.map((l) =>
+        String(l).trim().toLowerCase()
+      );
     }
 
     if (typeof timezone === "string" && timezone.trim()) country.timezone = timezone.trim();
-
     if (typeof isActive === "boolean") country.isActive = isActive;
 
     country.updatedBy = req.user?._id || null;

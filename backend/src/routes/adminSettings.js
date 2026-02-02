@@ -1,10 +1,28 @@
+// backend/src/routes/adminSettings.js
 import express from "express";
 import auth from "../middleware/auth.js";
 import authorizeRoles from "../middleware/role.js";
-import User, { USER_ROLES } from "../models/User.js";
+import { USER_ROLES } from "../models/User.js";
 import SystemSettings from "../models/SystemSettings.js";
 
 const router = express.Router();
+
+/**
+ * ✅ Resolve active workspace country (Tenant)
+ */
+const resolveCountryCode = (req) => {
+  return (
+    req.countryCode ||
+    req.headers["x-country-code"] ||
+    req.query?.country ||
+    req.query?.countryCode ||
+    req.body?.countryCode ||
+    "ZA"
+  )
+    .toString()
+    .trim()
+    .toUpperCase();
+};
 
 /**
  * ✅ Permission enforcement helper
@@ -27,7 +45,7 @@ const requirePermission = (req, res, permissionKey) => {
 };
 
 /**
- * ✅ GET system settings
+ * ✅ GET system settings (PER COUNTRY WORKSPACE)
  * GET /api/admin/settings
  */
 router.get(
@@ -38,15 +56,19 @@ router.get(
     try {
       if (!requirePermission(req, res, "canManageSettings")) return;
 
-      let settings = await SystemSettings.findOne();
+      const workspaceCountryCode = resolveCountryCode(req);
+
+      // ✅ Per-country settings doc (keeps existing behavior if you already had only one doc)
+      let settings = await SystemSettings.findOne({ countryCode: workspaceCountryCode });
 
       if (!settings) {
         settings = await SystemSettings.create({
+          countryCode: workspaceCountryCode,
           updatedBy: req.user._id,
         });
       }
 
-      return res.status(200).json({ settings });
+      return res.status(200).json({ countryCode: workspaceCountryCode, settings });
     } catch (err) {
       return res.status(500).json({
         message: "Failed to fetch system settings ❌",
@@ -57,7 +79,7 @@ router.get(
 );
 
 /**
- * ✅ UPDATE system settings
+ * ✅ UPDATE system settings (PER COUNTRY WORKSPACE)
  * PATCH /api/admin/settings
  */
 router.patch(
@@ -68,19 +90,22 @@ router.patch(
     try {
       if (!requirePermission(req, res, "canManageSettings")) return;
 
-      let settings = await SystemSettings.findOne();
-      if (!settings) settings = new SystemSettings();
+      const workspaceCountryCode = resolveCountryCode(req);
 
-      const payload = req.body;
+      let settings = await SystemSettings.findOne({ countryCode: workspaceCountryCode });
+      if (!settings) settings = new SystemSettings({ countryCode: workspaceCountryCode });
 
-      // ✅ merge safe
+      const payload = req.body && typeof req.body === "object" ? req.body : {};
+
       Object.assign(settings, payload);
+      settings.countryCode = workspaceCountryCode;
       settings.updatedBy = req.user._id;
 
       await settings.save();
 
       return res.status(200).json({
         message: "System settings updated ✅",
+        countryCode: workspaceCountryCode,
         settings,
       });
     } catch (err) {

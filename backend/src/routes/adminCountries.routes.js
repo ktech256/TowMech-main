@@ -8,7 +8,27 @@ import Country from "../models/Country.js";
 const router = express.Router();
 
 /**
+ * ✅ Resolve active workspace country (Tenant)
+ * NOTE: Countries list itself is GLOBAL (not filtered),
+ * but we echo back selected workspaceCountryCode for dashboard state.
+ */
+const resolveCountryCode = (req) => {
+  return (
+    req.countryCode ||
+    req.headers["x-country-code"] ||
+    req.query?.country ||
+    req.query?.countryCode ||
+    req.body?.countryCode ||
+    "ZA"
+  )
+    .toString()
+    .trim()
+    .toUpperCase();
+};
+
+/**
  * GET /api/admin/countries
+ * ✅ GLOBAL LIST (do NOT filter by workspace), but return workspaceCountryCode for UI.
  */
 router.get(
   "/",
@@ -16,18 +36,26 @@ router.get(
   authorizeRoles(USER_ROLES.ADMIN, USER_ROLES.SUPER_ADMIN),
   async (req, res) => {
     try {
+      const workspaceCountryCode = resolveCountryCode(req);
+
       const countries = await Country.find({}).sort({ createdAt: -1 });
 
-      // dashboard expects { countries: [{ _id, code, name, currency, defaultLanguage, supportedLanguages, timezone, isActive }] }
-      return res.status(200).json({ countries });
+      return res.status(200).json({
+        workspaceCountryCode,
+        countries,
+      });
     } catch (err) {
-      return res.status(500).json({ message: "Failed to load countries", error: err.message });
+      return res.status(500).json({
+        message: "Failed to load countries",
+        error: err.message,
+      });
     }
   }
 );
 
 /**
  * POST /api/admin/countries
+ * ✅ Create is GLOBAL (not per workspace)
  */
 router.post(
   "/",
@@ -46,7 +74,9 @@ router.post(
       } = req.body || {};
 
       const iso2 = String(code || "").trim().toUpperCase();
-      if (!iso2 || iso2.length !== 2) return res.status(400).json({ message: "code (ISO2) is required" });
+      if (!iso2 || iso2.length !== 2) {
+        return res.status(400).json({ message: "code (ISO2) is required" });
+      }
       if (!name) return res.status(400).json({ message: "name is required" });
       if (!currency) return res.status(400).json({ message: "currency is required" });
 
@@ -76,6 +106,7 @@ router.post(
 
 /**
  * PATCH /api/admin/countries/:id
+ * ✅ Update is GLOBAL (not per workspace)
  */
 router.patch(
   "/:id",
@@ -86,15 +117,21 @@ router.patch(
       const country = await Country.findById(req.params.id);
       if (!country) return res.status(404).json({ message: "Country not found" });
 
-      const { name, currency, defaultLanguage, supportedLanguages, timezone, isActive } = req.body || {};
+      const { name, currency, defaultLanguage, supportedLanguages, timezone, isActive } =
+        req.body || {};
 
       if (typeof name === "string" && name.trim()) country.name = name.trim();
-      if (typeof currency === "string" && currency.trim()) country.currency = currency.trim().toUpperCase();
-      if (typeof defaultLanguage === "string" && defaultLanguage.trim())
+      if (typeof currency === "string" && currency.trim())
+        country.currency = currency.trim().toUpperCase();
+
+      if (typeof defaultLanguage === "string" && defaultLanguage.trim()) {
         country.defaultLanguage = defaultLanguage.trim().toLowerCase();
+      }
 
       if (Array.isArray(supportedLanguages)) {
-        country.supportedLanguages = supportedLanguages.map((l) => String(l).trim().toLowerCase());
+        country.supportedLanguages = supportedLanguages.map((l) =>
+          String(l).trim().toLowerCase()
+        );
       }
 
       if (typeof timezone === "string" && timezone.trim()) country.timezone = timezone.trim();

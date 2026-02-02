@@ -1,19 +1,34 @@
+// backend/src/routes/adminJobs.js
 import express from "express";
 import auth from "../middleware/auth.js";
 import authorizeRoles from "../middleware/role.js";
 import Job, { JOB_STATUSES } from "../models/Job.js";
-import User, { USER_ROLES } from "../models/User.js";
+import { USER_ROLES } from "../models/User.js";
 
 const router = express.Router();
+
+/**
+ * ✅ Resolve active workspace country (Tenant)
+ */
+const resolveCountryCode = (req) => {
+  return (
+    req.countryCode ||
+    req.headers["x-country-code"] ||
+    req.query?.country ||
+    req.query?.countryCode ||
+    "ZA"
+  )
+    .toString()
+    .trim()
+    .toUpperCase();
+};
 
 /**
  * ✅ Permission enforcement helper
  */
 const requirePermission = (req, res, permissionKey) => {
-  // ✅ SuperAdmin bypass
   if (req.user.role === USER_ROLES.SUPER_ADMIN) return true;
 
-  // ✅ Admin must have required permission
   if (req.user.role === USER_ROLES.ADMIN) {
     if (!req.user.permissions || req.user.permissions[permissionKey] !== true) {
       res.status(403).json({
@@ -36,17 +51,15 @@ const blockRestrictedAdmins = (req, res) => {
     res.status(403).json({ message: "Your admin account is suspended ❌" });
     return true;
   }
-
   if (req.user.accountStatus?.isBanned) {
     res.status(403).json({ message: "Your admin account is banned ❌" });
     return true;
   }
-
   return false;
 };
 
 /**
- * ✅ GET ALL JOBS
+ * ✅ GET ALL JOBS (PER COUNTRY)
  * GET /api/admin/jobs
  */
 router.get(
@@ -58,12 +71,15 @@ router.get(
       if (blockRestrictedAdmins(req, res)) return;
       if (!requirePermission(req, res, "canManageJobs")) return;
 
-      const jobs = await Job.find()
-        .populate("customer", "name email phone role")
-        .populate("assignedTo", "name email phone role")
+      const workspaceCountryCode = resolveCountryCode(req);
+
+      const jobs = await Job.find({ countryCode: workspaceCountryCode })
+        .populate("customer", "name email phone role countryCode")
+        .populate("assignedTo", "name email phone role countryCode")
         .sort({ createdAt: -1 });
 
       return res.status(200).json({
+        countryCode: workspaceCountryCode,
         jobs,
         count: jobs.length,
       });
@@ -77,8 +93,7 @@ router.get(
 );
 
 /**
- * ✅ GET ACTIVE JOBS ONLY
- * Active means: CREATED, BROADCASTED, ASSIGNED, IN_PROGRESS
+ * ✅ GET ACTIVE JOBS ONLY (PER COUNTRY)
  * GET /api/admin/jobs/active
  */
 router.get(
@@ -90,6 +105,8 @@ router.get(
       if (blockRestrictedAdmins(req, res)) return;
       if (!requirePermission(req, res, "canManageJobs")) return;
 
+      const workspaceCountryCode = resolveCountryCode(req);
+
       const activeStatuses = [
         JOB_STATUSES.CREATED,
         JOB_STATUSES.BROADCASTED,
@@ -97,12 +114,16 @@ router.get(
         JOB_STATUSES.IN_PROGRESS,
       ];
 
-      const jobs = await Job.find({ status: { $in: activeStatuses } })
-        .populate("customer", "name email phone role")
-        .populate("assignedTo", "name email phone role")
+      const jobs = await Job.find({
+        countryCode: workspaceCountryCode,
+        status: { $in: activeStatuses },
+      })
+        .populate("customer", "name email phone role countryCode")
+        .populate("assignedTo", "name email phone role countryCode")
         .sort({ createdAt: -1 });
 
       return res.status(200).json({
+        countryCode: workspaceCountryCode,
         jobs,
         count: jobs.length,
       });
@@ -116,7 +137,7 @@ router.get(
 );
 
 /**
- * ✅ GET SINGLE JOB BY ID
+ * ✅ GET SINGLE JOB BY ID (PER COUNTRY)
  * GET /api/admin/jobs/:id
  */
 router.get(
@@ -128,13 +149,18 @@ router.get(
       if (blockRestrictedAdmins(req, res)) return;
       if (!requirePermission(req, res, "canManageJobs")) return;
 
-      const job = await Job.findById(req.params.id)
-        .populate("customer", "name email phone role")
-        .populate("assignedTo", "name email phone role");
+      const workspaceCountryCode = resolveCountryCode(req);
+
+      const job = await Job.findOne({
+        _id: req.params.id,
+        countryCode: workspaceCountryCode,
+      })
+        .populate("customer", "name email phone role countryCode")
+        .populate("assignedTo", "name email phone role countryCode");
 
       if (!job) return res.status(404).json({ message: "Job not found ❌" });
 
-      return res.status(200).json({ job });
+      return res.status(200).json({ countryCode: workspaceCountryCode, job });
     } catch (err) {
       return res.status(500).json({
         message: "Could not fetch job",

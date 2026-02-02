@@ -1,3 +1,4 @@
+// backend/src/routes/superAdmin.js
 import express from "express";
 import auth from "../middleware/auth.js";
 import authorizeRoles from "../middleware/role.js";
@@ -11,28 +12,21 @@ const router = express.Router();
 function normalizePhone(phone) {
   if (!phone) return "";
   let p = String(phone).trim();
-
   p = p.replace(/\s+/g, "");
   p = p.replace(/[-()]/g, "");
-
-  // If someone sends "00.." convert to +..
   if (p.startsWith("00")) p = "+" + p.slice(2);
-
   return p;
 }
 
 /**
- * ✅ Resolve workspace country code from:
- * - tenant middleware (req.countryCode)
- * - header: X-COUNTRY-CODE
- * - query: ?countryCode=KE
- * - body: countryCode
+ * ✅ Resolve workspace country code
  */
 function resolveCountryCode(req) {
   return (
     req.countryCode ||
     req.headers["x-country-code"] ||
-    req.query.countryCode ||
+    req.query?.country ||
+    req.query?.countryCode ||
     req.body?.countryCode ||
     "ZA"
   )
@@ -53,9 +47,8 @@ router.get("/test", (req, res) => {
  * ✅ SuperAdmin creates new Admin OR SuperAdmin (with permissions)
  * POST /api/superadmin/create-admin
  *
- * IMPORTANT:
- * - Admins must be created WITH a countryCode that matches the workspace.
- * - SuperAdmins can be global; we still store a countryCode but they are treated as global.
+ * - Admins are created PER workspace countryCode
+ * - SuperAdmins are global (still store countryCode, but treated as global)
  */
 router.post(
   "/create-admin",
@@ -65,7 +58,6 @@ router.post(
     try {
       const { name, email, password, role, permissions, phone } = req.body;
 
-      // ✅ phone is REQUIRED because login uses phone + phone has unique index
       if (!name || !email || !password || !phone) {
         return res.status(400).json({
           message: "name, email, password, phone are required",
@@ -80,7 +72,6 @@ router.post(
       const emailLower = String(email).trim().toLowerCase();
       const workspaceCountryCode = resolveCountryCode(req);
 
-      // ✅ Check if user exists by email OR phone
       const exists = await User.findOne({
         $or: [{ email: emailLower }, { phone: normalizedPhone }],
       });
@@ -95,11 +86,9 @@ router.post(
         return res.status(409).json({ message: "User already exists ❌" });
       }
 
-      // ✅ Allow Admin or SuperAdmin creation
       const chosenRole =
         role === "SuperAdmin" ? USER_ROLES.SUPER_ADMIN : USER_ROLES.ADMIN;
 
-      // ✅ Default permissions if none supplied
       const defaultPermissions = {
         canManageUsers: true,
         canManagePricing: true,
@@ -107,9 +96,7 @@ router.post(
         canVerifyProviders: true,
       };
 
-      // ✅ Use same required fields pattern as current logged-in SuperAdmin
       const creator = await User.findById(req.user._id);
-
       if (!creator) {
         return res.status(403).json({ message: "Invalid creator account ❌" });
       }
@@ -123,19 +110,13 @@ router.post(
         password,
         role: chosenRole,
         permissions: permissions || defaultPermissions,
-
         firstName,
         lastName,
-
         phone: normalizedPhone,
 
-        /**
-         * ✅ CRITICAL: attach admin to the workspace country
-         * This is what makes Country Workspace REAL.
-         */
+        // ✅ CRITICAL: bind Admins to workspace country
         countryCode: workspaceCountryCode,
 
-        // keep your “copy required fields” fallback logic
         birthday: creator.birthday || new Date("1990-01-01"),
         nationalityType: creator.nationalityType || "ForeignNational",
         saIdNumber: creator.saIdNumber || null,
@@ -152,7 +133,6 @@ router.post(
       });
     } catch (err) {
       console.log("❌ CREATE ADMIN ERROR:", err);
-
       return res.status(500).json({
         message: err.message || "Could not create admin",
         error: err?.errors || err,
@@ -172,7 +152,6 @@ router.patch(
   async (req, res) => {
     try {
       const admin = await User.findById(req.params.id);
-
       if (!admin) return res.status(404).json({ message: "Admin not found" });
 
       if (![USER_ROLES.ADMIN, USER_ROLES.SUPER_ADMIN].includes(admin.role)) {
@@ -182,7 +161,6 @@ router.patch(
       }
 
       const incomingPermissions = req.body.permissions || {};
-
       admin.permissions = {
         ...admin.permissions,
         ...incomingPermissions,
@@ -196,7 +174,6 @@ router.patch(
       });
     } catch (err) {
       console.log("❌ UPDATE PERMISSIONS ERROR:", err);
-
       return res.status(500).json({
         message: err.message || "Could not update permissions",
         error: err?.errors || err,
@@ -209,11 +186,8 @@ router.patch(
  * ✅ SuperAdmin fetches admins for CURRENT workspace country
  * GET /api/superadmin/admins
  *
- * Behavior:
  * - Always include ALL SuperAdmins (global)
  * - Include ONLY Admins for selected workspace country
- *
- * This fixes: switching ZA/KE/UG showing same admin list.
  */
 router.get(
   "/admins",
@@ -225,10 +199,7 @@ router.get(
 
       const admins = await User.find({
         $or: [
-          // ✅ SuperAdmin is global
           { role: USER_ROLES.SUPER_ADMIN },
-
-          // ✅ Admins are PER COUNTRY (workspace)
           { role: USER_ROLES.ADMIN, countryCode: workspaceCountryCode },
         ],
       }).sort({ createdAt: -1 });
@@ -239,7 +210,6 @@ router.get(
       });
     } catch (err) {
       console.log("❌ FETCH ADMINS ERROR:", err);
-
       return res.status(500).json({
         message: err.message || "Could not fetch admins",
         error: err?.errors || err,
@@ -259,10 +229,8 @@ router.patch(
   async (req, res) => {
     try {
       const admin = await User.findById(req.params.id);
-
       if (!admin) return res.status(404).json({ message: "Admin not found" });
 
-      // ✅ Prevent archiving self
       if (admin._id.toString() === req.user._id.toString()) {
         return res
           .status(400)
@@ -270,7 +238,6 @@ router.patch(
       }
 
       if (!admin.accountStatus) admin.accountStatus = {};
-
       admin.accountStatus.isArchived = true;
       admin.accountStatus.archivedAt = new Date();
       admin.accountStatus.archivedBy = req.user._id;
@@ -283,7 +250,6 @@ router.patch(
       });
     } catch (err) {
       console.log("❌ ARCHIVE ERROR:", err);
-
       return res.status(500).json({
         message: err.message || "Could not archive admin",
         error: err?.errors || err,

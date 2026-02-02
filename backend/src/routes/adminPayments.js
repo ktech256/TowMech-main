@@ -1,3 +1,4 @@
+// backend/src/routes/adminPayments.js
 import express from "express";
 import Payment, { PAYMENT_STATUSES } from "../models/Payment.js";
 import auth from "../middleware/auth.js";
@@ -7,13 +8,36 @@ import { USER_ROLES } from "../models/User.js";
 const router = express.Router();
 
 /**
+ * ✅ Resolve active workspace country (Tenant)
+ */
+const resolveCountryCode = (req) => {
+  return (
+    req.countryCode ||
+    req.headers["x-country-code"] ||
+    req.query?.country ||
+    req.query?.countryCode ||
+    "ZA"
+  )
+    .toString()
+    .trim()
+    .toUpperCase();
+};
+
+/**
  * ✅ Permission enforcement helper
+ *
+ * NOTE:
+ * Your User model has:
+ * - canApprovePayments
+ * - canRefundPayments
+ *
+ * So we map:
+ * - View/list payments => canApprovePayments (or SuperAdmin)
+ * - Refund payment => canRefundPayments (or SuperAdmin)
  */
 const requirePermission = (req, res, permissionKey) => {
-  // ✅ SuperAdmin bypass
   if (req.user.role === USER_ROLES.SUPER_ADMIN) return true;
 
-  // ✅ Admin must have required permission
   if (req.user.role === USER_ROLES.ADMIN) {
     if (!req.user.permissions || req.user.permissions[permissionKey] !== true) {
       res.status(403).json({
@@ -36,17 +60,15 @@ const blockRestrictedAdmins = (req, res) => {
     res.status(403).json({ message: "Your admin account is suspended ❌" });
     return true;
   }
-
   if (req.user.accountStatus?.isBanned) {
     res.status(403).json({ message: "Your admin account is banned ❌" });
     return true;
   }
-
   return false;
 };
 
 /**
- * ✅ Get ALL payments (Admin Dashboard)
+ * ✅ Get ALL payments (PER COUNTRY)
  * GET /api/admin/payments
  */
 router.get(
@@ -56,16 +78,19 @@ router.get(
   async (req, res) => {
     try {
       if (blockRestrictedAdmins(req, res)) return;
-      if (!requirePermission(req, res, "canViewPayments")) return;
+      if (!requirePermission(req, res, "canApprovePayments")) return;
 
-      const payments = await Payment.find()
-        .populate("customer", "name email role")
+      const workspaceCountryCode = resolveCountryCode(req);
+
+      const payments = await Payment.find({ countryCode: workspaceCountryCode })
+        .populate("customer", "name email role countryCode")
         .populate("job")
         .populate("manualMarkedBy", "name email role")
         .populate("refundedBy", "name email role")
         .sort({ createdAt: -1 });
 
       return res.status(200).json({
+        countryCode: workspaceCountryCode,
         payments,
         count: payments.length,
       });
@@ -79,7 +104,7 @@ router.get(
 );
 
 /**
- * ✅ Get payment by ID
+ * ✅ Get payment by ID (PER COUNTRY)
  * GET /api/admin/payments/:id
  */
 router.get(
@@ -89,18 +114,22 @@ router.get(
   async (req, res) => {
     try {
       if (blockRestrictedAdmins(req, res)) return;
-      if (!requirePermission(req, res, "canViewPayments")) return;
+      if (!requirePermission(req, res, "canApprovePayments")) return;
 
-      const payment = await Payment.findById(req.params.id)
-        .populate("customer", "name email role")
+      const workspaceCountryCode = resolveCountryCode(req);
+
+      const payment = await Payment.findOne({
+        _id: req.params.id,
+        countryCode: workspaceCountryCode,
+      })
+        .populate("customer", "name email role countryCode")
         .populate("job")
         .populate("manualMarkedBy", "name email role")
         .populate("refundedBy", "name email role");
 
-      if (!payment)
-        return res.status(404).json({ message: "Payment not found" });
+      if (!payment) return res.status(404).json({ message: "Payment not found" });
 
-      return res.status(200).json({ payment });
+      return res.status(200).json({ countryCode: workspaceCountryCode, payment });
     } catch (err) {
       return res.status(500).json({
         message: "Could not fetch payment",
@@ -111,13 +140,8 @@ router.get(
 );
 
 /**
- * ✅ Admin manually marks payment as REFUNDED (Audit)
+ * ✅ Admin manually marks payment as REFUNDED (PER COUNTRY)
  * PATCH /api/admin/payments/:id/refund
- *
- * Used when:
- * - Payment done but system failed to record correctly
- * - Manual reconciliation needed
- * - Admin refund required
  */
 router.patch(
   "/:id/refund",
@@ -126,30 +150,33 @@ router.patch(
   async (req, res) => {
     try {
       if (blockRestrictedAdmins(req, res)) return;
-      if (!requirePermission(req, res, "canManagePayments")) return;
+      if (!requirePermission(req, res, "canRefundPayments")) return;
 
-      const payment = await Payment.findById(req.params.id);
+      const workspaceCountryCode = resolveCountryCode(req);
 
-      if (!payment)
-        return res.status(404).json({ message: "Payment not found" });
+      const payment = await Payment.findOne({
+        _id: req.params.id,
+        countryCode: workspaceCountryCode,
+      });
+
+      if (!payment) return res.status(404).json({ message: "Payment not found" });
 
       payment.status = PAYMENT_STATUSES.REFUNDED;
       payment.refundedAt = new Date();
       payment.refundReference = `MANUAL_REFUND-${Date.now()}`;
-
-      // ✅ Audit tracking
       payment.refundedBy = req.user._id;
 
       await payment.save();
 
       const populatedPayment = await Payment.findById(payment._id)
-        .populate("customer", "name email role")
+        .populate("customer", "name email role countryCode")
         .populate("job")
         .populate("manualMarkedBy", "name email role")
         .populate("refundedBy", "name email role");
 
       return res.status(200).json({
         message: "Payment marked as refunded ✅",
+        countryCode: workspaceCountryCode,
         payment: populatedPayment,
       });
     } catch (err) {

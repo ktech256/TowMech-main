@@ -1,3 +1,4 @@
+// backend/src/routes/adminOverview.js
 import express from "express";
 import auth from "../middleware/auth.js";
 import authorizeRoles from "../middleware/role.js";
@@ -6,10 +7,8 @@ import Job, { JOB_STATUSES } from "../models/Job.js";
 import Payment, { PAYMENT_STATUSES } from "../models/Payment.js";
 import SupportTicket from "../models/SupportTicket.js";
 
-// ✅ Optional: chats count (safe if file exists)
 let ChatThread = null;
 try {
-  // If you created /backend/src/models/ChatThread.js
   ChatThread = (await import("../models/ChatThread.js")).default;
 } catch (_) {
   ChatThread = null;
@@ -18,13 +17,27 @@ try {
 const router = express.Router();
 
 /**
+ * ✅ Resolve active workspace country (Tenant)
+ */
+const resolveCountryCode = (req) => {
+  return (
+    req.countryCode ||
+    req.headers["x-country-code"] ||
+    req.query?.country ||
+    req.query?.countryCode ||
+    "ZA"
+  )
+    .toString()
+    .trim()
+    .toUpperCase();
+};
+
+/**
  * ✅ Permission enforcement helper
  */
 const requirePermission = (req, res, permissionKey) => {
-  // ✅ SuperAdmin bypass
   if (req.user.role === USER_ROLES.SUPER_ADMIN) return true;
 
-  // ✅ Admin must have required permission
   if (req.user.role === USER_ROLES.ADMIN) {
     if (!req.user.permissions || req.user.permissions[permissionKey] !== true) {
       res.status(403).json({
@@ -40,7 +53,7 @@ const requirePermission = (req, res, permissionKey) => {
 };
 
 /**
- * ✅ GET OVERVIEW SUMMARY
+ * ✅ GET OVERVIEW SUMMARY (PER COUNTRY WORKSPACE)
  * GET /api/admin/overview/summary
  */
 router.get(
@@ -51,16 +64,23 @@ router.get(
     try {
       if (!requirePermission(req, res, "canViewOverview")) return;
 
-      // ✅ TOTAL USERS (CUSTOMERS ONLY)
-      const totalUsers = await User.countDocuments({ role: USER_ROLES.CUSTOMER });
+      const workspaceCountryCode = resolveCountryCode(req);
 
-      // ✅ TOTAL PROVIDERS
+      // ✅ TOTAL USERS (CUSTOMERS ONLY) - per country
+      const totalUsers = await User.countDocuments({
+        role: USER_ROLES.CUSTOMER,
+        countryCode: workspaceCountryCode,
+      });
+
+      // ✅ TOTAL PROVIDERS - per country
       const totalProviders = await User.countDocuments({
+        countryCode: workspaceCountryCode,
         role: { $in: [USER_ROLES.TOW_TRUCK, USER_ROLES.MECHANIC] },
       });
 
-      // ✅ ACTIVE JOBS
+      // ✅ ACTIVE JOBS - per country
       const activeJobs = await Job.countDocuments({
+        countryCode: workspaceCountryCode,
         status: {
           $in: [
             JOB_STATUSES.PENDING,
@@ -72,54 +92,58 @@ router.get(
         },
       });
 
-      // ✅ PENDING PAYMENTS
+      // ✅ PENDING PAYMENTS - per country
       const pendingPayments = await Payment.countDocuments({
+        countryCode: workspaceCountryCode,
         status: PAYMENT_STATUSES.PENDING,
       });
 
-      // ✅ OPEN SUPPORT TICKETS
+      // ✅ OPEN SUPPORT TICKETS - per country
       const openSupportTickets = await SupportTicket.countDocuments({
+        countryCode: workspaceCountryCode,
         status: "OPEN",
       });
 
-      // ✅ LIVE PROVIDERS COUNT (those who have updated location recently)
+      // ✅ LIVE PROVIDERS - per country
       const liveProviders = await User.countDocuments({
+        countryCode: workspaceCountryCode,
         role: { $in: [USER_ROLES.TOW_TRUCK, USER_ROLES.MECHANIC] },
         "providerProfile.lastLocationUpdate": {
           $gte: new Date(Date.now() - 10 * 60 * 1000),
-        }, // last 10 mins
+        },
       });
 
-      // ✅ TOTAL REVENUE
+      // ✅ TOTAL REVENUE - per country
       const revenueAgg = await Payment.aggregate([
-        { $match: { status: PAYMENT_STATUSES.PAID } },
+        { $match: { countryCode: workspaceCountryCode, status: PAYMENT_STATUSES.PAID } },
         { $group: { _id: null, total: { $sum: "$amount" } } },
       ]);
-
       const totalRevenue = revenueAgg?.[0]?.total || 0;
 
-      // ✅ MOST USED SERVICES (from Job.serviceCategory)
+      // ✅ MOST USED SERVICES - per country
       const topServices = await Job.aggregate([
-        { $match: { serviceCategory: { $ne: null } } },
         {
-          $group: {
-            _id: "$serviceCategory",
-            count: { $sum: 1 },
+          $match: {
+            countryCode: workspaceCountryCode,
+            serviceCategory: { $ne: null },
           },
         },
+        { $group: { _id: "$serviceCategory", count: { $sum: 1 } } },
         { $sort: { count: -1 } },
         { $limit: 5 },
       ]);
 
-      // ✅ ACTIVE CHATS (safe optional)
+      // ✅ ACTIVE CHATS - per country (if model exists)
       let activeChats = 0;
       if (ChatThread) {
         activeChats = await ChatThread.countDocuments({
+          countryCode: workspaceCountryCode,
           status: { $in: ["OPEN", "ACTIVE"] },
         }).catch(() => 0);
       }
 
       return res.status(200).json({
+        countryCode: workspaceCountryCode,
         users: totalUsers,
         providers: totalProviders,
         activeJobs,
@@ -127,10 +151,7 @@ router.get(
         openSupportTickets,
         liveProviders,
         revenueTotal: totalRevenue,
-        topServices: topServices.map((s) => ({
-          name: s._id,
-          count: s.count,
-        })),
+        topServices: topServices.map((s) => ({ name: s._id, count: s.count })),
         activeChats,
       });
     } catch (err) {

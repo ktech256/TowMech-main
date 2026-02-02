@@ -1,3 +1,5 @@
+// backend/src/middleware/auth.js
+
 import jwt from "jsonwebtoken";
 import User, { USER_ROLES } from "../models/User.js";
 

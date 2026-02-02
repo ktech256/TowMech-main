@@ -1,3 +1,4 @@
+// backend/src/routes/adminProviders.js
 import express from "express";
 import auth from "../middleware/auth.js";
 import authorizeRoles from "../middleware/role.js";
@@ -6,13 +7,27 @@ import User, { USER_ROLES } from "../models/User.js";
 const router = express.Router();
 
 /**
+ * ✅ Resolve active workspace country (Tenant)
+ */
+const resolveCountryCode = (req) => {
+  return (
+    req.countryCode ||
+    req.headers["x-country-code"] ||
+    req.query?.country ||
+    req.query?.countryCode ||
+    "ZA"
+  )
+    .toString()
+    .trim()
+    .toUpperCase();
+};
+
+/**
  * ✅ Permission enforcement helper
  */
 const requirePermission = (req, res, permissionKey) => {
-  // ✅ SuperAdmin bypass
   if (req.user.role === USER_ROLES.SUPER_ADMIN) return true;
 
-  // ✅ Admin must have required permission
   if (req.user.role === USER_ROLES.ADMIN) {
     if (!req.user.permissions || req.user.permissions[permissionKey] !== true) {
       res.status(403).json({
@@ -35,12 +50,10 @@ const blockRestrictedAdmins = (req, res) => {
     res.status(403).json({ message: "Your admin account is suspended ❌" });
     return true;
   }
-
   if (req.user.accountStatus?.isBanned) {
     res.status(403).json({ message: "Your admin account is banned ❌" });
     return true;
   }
-
   return false;
 };
 
@@ -49,27 +62,23 @@ const blockRestrictedAdmins = (req, res) => {
  */
 const blockInvalidProvider = (provider, res) => {
   const status = provider.accountStatus || {};
-
   if (status.isArchived) {
     res.status(400).json({ message: "Provider is archived ❌ Cannot verify" });
     return true;
   }
-
   if (status.isSuspended) {
     res.status(400).json({ message: "Provider is suspended ❌ Cannot verify" });
     return true;
   }
-
   if (status.isBanned) {
     res.status(400).json({ message: "Provider is banned ❌ Cannot verify" });
     return true;
   }
-
   return false;
 };
 
 /**
- * ✅ Admin fetches providers needing verification
+ * ✅ Admin fetches providers needing verification (PER COUNTRY)
  * GET /api/admin/providers/providers/pending
  */
 router.get(
@@ -81,15 +90,19 @@ router.get(
       if (blockRestrictedAdmins(req, res)) return;
       if (!requirePermission(req, res, "canVerifyProviders")) return;
 
+      const workspaceCountryCode = resolveCountryCode(req);
+
       const providers = await User.find({
+        countryCode: workspaceCountryCode,
         role: { $in: [USER_ROLES.TOW_TRUCK, USER_ROLES.MECHANIC] },
         "providerProfile.verificationStatus": { $ne: "APPROVED" },
         "accountStatus.isArchived": { $ne: true },
       })
-        .select("name email role providerProfile createdAt accountStatus")
+        .select("name email role countryCode providerProfile createdAt accountStatus")
         .sort({ createdAt: -1 });
 
       return res.status(200).json({
+        countryCode: workspaceCountryCode,
         providers: providers.map((p) => p.toSafeJSON(req.user.role)),
       });
     } catch (err) {
@@ -102,7 +115,7 @@ router.get(
 );
 
 /**
- * ✅ Admin fetches APPROVED providers
+ * ✅ Admin fetches APPROVED providers (PER COUNTRY)
  * GET /api/admin/providers/providers/approved
  */
 router.get(
@@ -114,15 +127,19 @@ router.get(
       if (blockRestrictedAdmins(req, res)) return;
       if (!requirePermission(req, res, "canVerifyProviders")) return;
 
+      const workspaceCountryCode = resolveCountryCode(req);
+
       const providers = await User.find({
+        countryCode: workspaceCountryCode,
         role: { $in: [USER_ROLES.TOW_TRUCK, USER_ROLES.MECHANIC] },
         "providerProfile.verificationStatus": "APPROVED",
         "accountStatus.isArchived": { $ne: true },
       })
-        .select("name email role providerProfile createdAt accountStatus")
+        .select("name email role countryCode providerProfile createdAt accountStatus")
         .sort({ createdAt: -1 });
 
       return res.status(200).json({
+        countryCode: workspaceCountryCode,
         providers: providers.map((p) => p.toSafeJSON(req.user.role)),
       });
     } catch (err) {
@@ -135,7 +152,7 @@ router.get(
 );
 
 /**
- * ✅ Admin fetches REJECTED providers
+ * ✅ Admin fetches REJECTED providers (PER COUNTRY)
  * GET /api/admin/providers/providers/rejected
  */
 router.get(
@@ -147,15 +164,19 @@ router.get(
       if (blockRestrictedAdmins(req, res)) return;
       if (!requirePermission(req, res, "canVerifyProviders")) return;
 
+      const workspaceCountryCode = resolveCountryCode(req);
+
       const providers = await User.find({
+        countryCode: workspaceCountryCode,
         role: { $in: [USER_ROLES.TOW_TRUCK, USER_ROLES.MECHANIC] },
         "providerProfile.verificationStatus": "REJECTED",
         "accountStatus.isArchived": { $ne: true },
       })
-        .select("name email role providerProfile createdAt accountStatus")
+        .select("name email role countryCode providerProfile createdAt accountStatus")
         .sort({ createdAt: -1 });
 
       return res.status(200).json({
+        countryCode: workspaceCountryCode,
         providers: providers.map((p) => p.toSafeJSON(req.user.role)),
       });
     } catch (err) {
@@ -168,7 +189,7 @@ router.get(
 );
 
 /**
- * ✅ Admin views a provider's verification documents
+ * ✅ Admin views a provider's verification documents (PER COUNTRY)
  * GET /api/admin/providers/providers/:id/verification
  */
 router.get(
@@ -180,14 +201,23 @@ router.get(
       if (blockRestrictedAdmins(req, res)) return;
       if (!requirePermission(req, res, "canVerifyProviders")) return;
 
+      const workspaceCountryCode = resolveCountryCode(req);
+
       const provider = await User.findById(req.params.id).select(
-        "name email role providerProfile.verificationDocs providerProfile.verificationStatus accountStatus"
+        "name email role countryCode providerProfile.verificationDocs providerProfile.verificationStatus accountStatus"
       );
 
-      if (!provider)
-        return res.status(404).json({ message: "Provider not found" });
+      if (!provider) return res.status(404).json({ message: "Provider not found" });
+
+      if (
+        req.user.role !== USER_ROLES.SUPER_ADMIN &&
+        String(provider.countryCode || "").toUpperCase() !== workspaceCountryCode
+      ) {
+        return res.status(403).json({ message: "Country mismatch. Access denied." });
+      }
 
       return res.status(200).json({
+        countryCode: workspaceCountryCode,
         provider: provider.toSafeJSON(req.user.role),
         verificationStatus: provider.providerProfile?.verificationStatus,
         verificationDocs: provider.providerProfile?.verificationDocs || {},
@@ -214,20 +244,25 @@ router.patch(
       if (blockRestrictedAdmins(req, res)) return;
       if (!requirePermission(req, res, "canVerifyProviders")) return;
 
-      const provider = await User.findById(req.params.id);
-      if (!provider)
-        return res.status(404).json({ message: "Provider not found" });
+      const workspaceCountryCode = resolveCountryCode(req);
 
-      // ✅ Ensure provider
+      const provider = await User.findById(req.params.id);
+      if (!provider) return res.status(404).json({ message: "Provider not found" });
+
       if (![USER_ROLES.TOW_TRUCK, USER_ROLES.MECHANIC].includes(provider.role)) {
         return res.status(400).json({ message: "Target user is not a provider ❌" });
       }
 
-      // ✅ Block invalid provider
+      if (
+        req.user.role !== USER_ROLES.SUPER_ADMIN &&
+        String(provider.countryCode || "").toUpperCase() !== workspaceCountryCode
+      ) {
+        return res.status(403).json({ message: "Country mismatch. Access denied." });
+      }
+
       if (blockInvalidProvider(provider, res)) return;
 
       if (!provider.providerProfile) provider.providerProfile = {};
-
       provider.providerProfile.verificationStatus = "APPROVED";
       provider.providerProfile.verifiedAt = new Date();
       provider.providerProfile.verifiedBy = req.user._id;
@@ -260,20 +295,25 @@ router.patch(
       if (blockRestrictedAdmins(req, res)) return;
       if (!requirePermission(req, res, "canVerifyProviders")) return;
 
-      const provider = await User.findById(req.params.id);
-      if (!provider)
-        return res.status(404).json({ message: "Provider not found" });
+      const workspaceCountryCode = resolveCountryCode(req);
 
-      // ✅ Ensure provider
+      const provider = await User.findById(req.params.id);
+      if (!provider) return res.status(404).json({ message: "Provider not found" });
+
       if (![USER_ROLES.TOW_TRUCK, USER_ROLES.MECHANIC].includes(provider.role)) {
         return res.status(400).json({ message: "Target user is not a provider ❌" });
       }
 
-      // ✅ Block invalid provider
+      if (
+        req.user.role !== USER_ROLES.SUPER_ADMIN &&
+        String(provider.countryCode || "").toUpperCase() !== workspaceCountryCode
+      ) {
+        return res.status(403).json({ message: "Country mismatch. Access denied." });
+      }
+
       if (blockInvalidProvider(provider, res)) return;
 
       if (!provider.providerProfile) provider.providerProfile = {};
-
       provider.providerProfile.verificationStatus = "REJECTED";
       provider.providerProfile.verifiedAt = new Date();
       provider.providerProfile.verifiedBy = req.user._id;

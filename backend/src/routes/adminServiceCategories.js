@@ -1,3 +1,4 @@
+// backend/src/routes/adminServiceCategories.js
 import express from "express";
 
 import auth from "../middleware/auth.js";
@@ -7,6 +8,23 @@ import ServiceCategory from "../models/ServiceCategory.js";
 import { USER_ROLES } from "../models/User.js";
 
 const router = express.Router();
+
+/**
+ * ✅ Resolve active workspace country (Tenant)
+ */
+const resolveCountryCode = (req) => {
+  return (
+    req.countryCode ||
+    req.headers["x-country-code"] ||
+    req.query?.country ||
+    req.query?.countryCode ||
+    req.body?.countryCode ||
+    "ZA"
+  )
+    .toString()
+    .trim()
+    .toUpperCase();
+};
 
 /**
  * ✅ Permission enforcement helper
@@ -46,7 +64,7 @@ const blockRestrictedAdmins = (req, res) => {
 };
 
 /**
- * ✅ GET ALL SERVICE CATEGORIES
+ * ✅ GET ALL SERVICE CATEGORIES (PER COUNTRY WORKSPACE)
  * GET /api/admin/service-categories
  */
 router.get(
@@ -58,9 +76,13 @@ router.get(
       if (blockRestrictedAdmins(req, res)) return;
       if (!requirePermission(req, res, "canManageServiceCategories")) return;
 
-      const list = await ServiceCategory.find().sort({ createdAt: -1 });
+      const workspaceCountryCode = resolveCountryCode(req);
 
-      return res.status(200).json({ categories: list });
+      const list = await ServiceCategory.find({
+        countryCode: workspaceCountryCode,
+      }).sort({ createdAt: -1 });
+
+      return res.status(200).json({ countryCode: workspaceCountryCode, categories: list });
     } catch (err) {
       return res.status(500).json({
         message: "Failed to load service categories",
@@ -71,7 +93,7 @@ router.get(
 );
 
 /**
- * ✅ CREATE NEW SERVICE CATEGORY
+ * ✅ CREATE NEW SERVICE CATEGORY (PER COUNTRY WORKSPACE)
  * POST /api/admin/service-categories
  */
 router.post(
@@ -83,12 +105,24 @@ router.post(
       if (blockRestrictedAdmins(req, res)) return;
       if (!requirePermission(req, res, "canManageServiceCategories")) return;
 
+      const workspaceCountryCode = resolveCountryCode(req);
       const { name, description, providerType, basePrice, active } = req.body;
 
       if (!name || !providerType) {
         return res.status(400).json({
           message: "name and providerType are required ❌",
         });
+      }
+
+      // ✅ Optional: prevent duplicates per country + providerType + name
+      const exists = await ServiceCategory.findOne({
+        countryCode: workspaceCountryCode,
+        providerType,
+        name,
+      });
+
+      if (exists) {
+        return res.status(409).json({ message: "Service category already exists ❌" });
       }
 
       const category = await ServiceCategory.create({
@@ -98,10 +132,12 @@ router.post(
         basePrice: basePrice || 0,
         active: active !== undefined ? active : true,
         createdBy: req.user._id,
+        countryCode: workspaceCountryCode,
       });
 
       return res.status(201).json({
         message: "Service category created ✅",
+        countryCode: workspaceCountryCode,
         category,
       });
     } catch (err) {
@@ -114,7 +150,7 @@ router.post(
 );
 
 /**
- * ✅ UPDATE CATEGORY
+ * ✅ UPDATE CATEGORY (PER COUNTRY WORKSPACE)
  * PATCH /api/admin/service-categories/:id
  */
 router.patch(
@@ -126,12 +162,12 @@ router.patch(
       if (blockRestrictedAdmins(req, res)) return;
       if (!requirePermission(req, res, "canManageServiceCategories")) return;
 
-      const updated = await ServiceCategory.findByIdAndUpdate(
-        req.params.id,
-        {
-          ...req.body,
-          updatedBy: req.user._id,
-        },
+      const workspaceCountryCode = resolveCountryCode(req);
+
+      // ✅ ensure you only update within workspace country
+      const updated = await ServiceCategory.findOneAndUpdate(
+        { _id: req.params.id, countryCode: workspaceCountryCode },
+        { ...req.body, updatedBy: req.user._id },
         { new: true }
       );
 
@@ -141,6 +177,7 @@ router.patch(
 
       return res.status(200).json({
         message: "Service category updated ✅",
+        countryCode: workspaceCountryCode,
         category: updated,
       });
     } catch (err) {
@@ -153,7 +190,7 @@ router.patch(
 );
 
 /**
- * ✅ DELETE CATEGORY
+ * ✅ DELETE CATEGORY (PER COUNTRY WORKSPACE)
  * DELETE /api/admin/service-categories/:id
  */
 router.delete(
@@ -165,7 +202,12 @@ router.delete(
       if (blockRestrictedAdmins(req, res)) return;
       if (!requirePermission(req, res, "canManageServiceCategories")) return;
 
-      const deleted = await ServiceCategory.findByIdAndDelete(req.params.id);
+      const workspaceCountryCode = resolveCountryCode(req);
+
+      const deleted = await ServiceCategory.findOneAndDelete({
+        _id: req.params.id,
+        countryCode: workspaceCountryCode,
+      });
 
       if (!deleted) {
         return res.status(404).json({ message: "Category not found ❌" });
@@ -173,6 +215,7 @@ router.delete(
 
       return res.status(200).json({
         message: "Service category deleted ✅",
+        countryCode: workspaceCountryCode,
       });
     } catch (err) {
       return res.status(500).json({

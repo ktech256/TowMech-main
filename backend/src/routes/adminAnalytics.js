@@ -1,3 +1,4 @@
+// backend/src/routes/adminAnalytics.js
 import express from "express";
 import auth from "../middleware/auth.js";
 import authorizeRoles from "../middleware/role.js";
@@ -7,6 +8,23 @@ import Payment, { PAYMENT_STATUSES } from "../models/Payment.js";
 import User, { USER_ROLES } from "../models/User.js";
 
 const router = express.Router();
+
+/**
+ * ✅ Resolve active workspace country (Tenant)
+ */
+const resolveCountryCode = (req) => {
+  return (
+    req.countryCode ||
+    req.headers["x-country-code"] ||
+    req.query?.country ||
+    req.query?.countryCode ||
+    req.body?.countryCode ||
+    "ZA"
+  )
+    .toString()
+    .trim()
+    .toUpperCase();
+};
 
 /**
  * ✅ Permission helper
@@ -65,7 +83,7 @@ const getRange = () => {
 };
 
 /**
- * ✅ ADMIN ANALYTICS SUMMARY
+ * ✅ ADMIN ANALYTICS SUMMARY (PER COUNTRY WORKSPACE)
  * GET /api/admin/analytics/summary
  */
 router.get(
@@ -77,19 +95,21 @@ router.get(
       if (blockRestrictedAdmins(req, res)) return;
       if (!requirePermission(req, res, "canViewAnalytics")) return;
 
+      const workspaceCountryCode = resolveCountryCode(req);
       const { now, startOfToday, startOfWeek, startOfMonth } = getRange();
 
       /**
-       * ✅ BUSINESS METRICS
+       * ✅ BUSINESS METRICS (scoped by countryCode)
        */
       const totalRevenueAgg = await Payment.aggregate([
-        { $match: { status: PAYMENT_STATUSES.PAID } },
+        { $match: { countryCode: workspaceCountryCode, status: PAYMENT_STATUSES.PAID } },
         { $group: { _id: null, total: { $sum: "$amount" } } },
       ]);
 
       const todayRevenueAgg = await Payment.aggregate([
         {
           $match: {
+            countryCode: workspaceCountryCode,
             status: PAYMENT_STATUSES.PAID,
             createdAt: { $gte: startOfToday },
           },
@@ -100,6 +120,7 @@ router.get(
       const weekRevenueAgg = await Payment.aggregate([
         {
           $match: {
+            countryCode: workspaceCountryCode,
             status: PAYMENT_STATUSES.PAID,
             createdAt: { $gte: startOfWeek },
           },
@@ -110,6 +131,7 @@ router.get(
       const monthRevenueAgg = await Payment.aggregate([
         {
           $match: {
+            countryCode: workspaceCountryCode,
             status: PAYMENT_STATUSES.PAID,
             createdAt: { $gte: startOfMonth },
           },
@@ -123,66 +145,80 @@ router.get(
       const revenueMonth = monthRevenueAgg?.[0]?.total || 0;
 
       const paymentsPaid = await Payment.countDocuments({
+        countryCode: workspaceCountryCode,
         status: PAYMENT_STATUSES.PAID,
       });
 
       const paymentsPending = await Payment.countDocuments({
+        countryCode: workspaceCountryCode,
         status: PAYMENT_STATUSES.PENDING,
       });
 
       const paymentsRefunded = await Payment.countDocuments({
+        countryCode: workspaceCountryCode,
         status: PAYMENT_STATUSES.REFUNDED,
       });
 
-      const totalJobs = await Job.countDocuments({});
+      const totalJobs = await Job.countDocuments({ countryCode: workspaceCountryCode });
       const jobsToday = await Job.countDocuments({
+        countryCode: workspaceCountryCode,
         createdAt: { $gte: startOfToday },
       });
       const jobsWeek = await Job.countDocuments({
+        countryCode: workspaceCountryCode,
         createdAt: { $gte: startOfWeek },
       });
       const jobsMonth = await Job.countDocuments({
+        countryCode: workspaceCountryCode,
         createdAt: { $gte: startOfMonth },
       });
 
       const jobsCompleted = await Job.countDocuments({
+        countryCode: workspaceCountryCode,
         status: JOB_STATUSES.COMPLETED,
       });
 
       const jobsCancelled = await Job.countDocuments({
+        countryCode: workspaceCountryCode,
         status: JOB_STATUSES.CANCELLED,
       });
 
       /**
-       * ✅ OPERATIONAL METRICS
+       * ✅ OPERATIONAL METRICS (scoped by countryCode)
        */
       const totalCustomers = await User.countDocuments({
+        countryCode: workspaceCountryCode,
         role: USER_ROLES.CUSTOMER,
       });
 
       const totalProviders = await User.countDocuments({
+        countryCode: workspaceCountryCode,
         role: { $in: [USER_ROLES.TOW_TRUCK, USER_ROLES.MECHANIC] },
       });
 
       const onlineProviders = await User.countDocuments({
+        countryCode: workspaceCountryCode,
         role: { $in: [USER_ROLES.TOW_TRUCK, USER_ROLES.MECHANIC] },
         "providerProfile.isOnline": true,
       });
 
       const suspendedProviders = await User.countDocuments({
+        countryCode: workspaceCountryCode,
         role: { $in: [USER_ROLES.TOW_TRUCK, USER_ROLES.MECHANIC] },
         "accountStatus.isSuspended": true,
       });
 
       const pendingVerificationProviders = await User.countDocuments({
+        countryCode: workspaceCountryCode,
         role: { $in: [USER_ROLES.TOW_TRUCK, USER_ROLES.MECHANIC] },
         "providerProfile.verificationStatus": { $ne: "APPROVED" },
       });
 
       /**
-       * ✅ Job status breakdown
+       * ✅ Job status breakdown (scoped)
        */
       const jobsByStatusAgg = await Job.aggregate([
+        { $match: { countryCode: workspaceCountryCode } },
         { $group: { _id: "$status", total: { $sum: 1 } } },
       ]);
 
@@ -192,9 +228,12 @@ router.get(
       }, {});
 
       /**
-       * ✅ Average completion time (based on createdAt → updatedAt)
+       * ✅ Average completion time (scoped)
        */
-      const completedJobs = await Job.find({ status: JOB_STATUSES.COMPLETED })
+      const completedJobs = await Job.find({
+        countryCode: workspaceCountryCode,
+        status: JOB_STATUSES.COMPLETED,
+      })
         .select("createdAt updatedAt")
         .limit(200);
 
@@ -211,6 +250,7 @@ router.get(
       }
 
       return res.status(200).json({
+        countryCode: workspaceCountryCode,
         currency: "ZAR",
         generatedAt: now,
 
