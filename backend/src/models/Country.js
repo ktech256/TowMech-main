@@ -3,12 +3,15 @@ import mongoose from "mongoose";
 
 const CountrySchema = new mongoose.Schema(
   {
-    // Dashboard expects "code" (ISO2)
     code: { type: String, required: true, uppercase: true, trim: true, unique: true },
 
     name: { type: String, required: true, trim: true },
 
     currency: { type: String, required: true, uppercase: true, trim: true },
+
+    // ✅ NEW: country dialing code like "+27", "+256"
+    // optional to not break existing DB records
+    dialingCode: { type: String, default: null, trim: true },
 
     defaultLanguage: { type: String, default: "en", lowercase: true, trim: true },
 

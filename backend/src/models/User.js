@@ -53,16 +53,74 @@ export const VEHICLE_TYPES = [
   "Motorcycle",
 ];
 
-function normalizePhone(phone) {
+/**
+ * ✅ Base normalization (safe, no country assumptions)
+ */
+function normalizePhoneRaw(phone) {
   if (!phone) return "";
   let p = String(phone).trim();
 
   p = p.replace(/\s+/g, "");
   p = p.replace(/[-()]/g, "");
 
+  // If someone sends "00.." convert to +..
   if (p.startsWith("00")) p = "+" + p.slice(2);
 
   return p;
+}
+
+/**
+ * ✅ TowMech Global: Dialing code map fallback (safe defaults)
+ * NOTE: We still prefer country configs in auth.js where we can read Country model.
+ * Here in the model we keep a conservative fallback so DB stays consistent.
+ */
+const DIALING_CODE_FALLBACK = {
+  ZA: "+27",
+  KE: "+254",
+  UG: "+256",
+};
+
+/**
+ * ✅ Convert phone to a consistent E.164-ish storage string for uniqueness & parallelization.
+ * - If already "+", keep it.
+ * - If digits-only or local leading 0, prefix dialing code based on countryCode.
+ * - If uncertain, return raw normalized (never crash).
+ */
+function normalizePhoneForStorage(phone, countryCode = "ZA") {
+  const raw = normalizePhoneRaw(phone);
+  if (!raw) return "";
+
+  // Keep E.164 if already in +
+  if (raw.startsWith("+")) return raw;
+
+  const cc = String(countryCode || "ZA").trim().toUpperCase();
+  const dial = DIALING_CODE_FALLBACK[cc] || null;
+
+  // Digits-only
+  const digitsOnly = raw.replace(/[^\d]/g, "");
+  if (!digitsOnly) return raw;
+
+  // If local "0xxxxxxxx" style (common in many countries), replace leading 0 with dialing code
+  if (dial && /^0\d{6,14}$/.test(digitsOnly)) {
+    return `${dial}${digitsOnly.slice(1)}`;
+  }
+
+  // If already starts with dialing digits (e.g. "2547..." without +)
+  if (dial) {
+    const dialDigits = dial.replace("+", "");
+    if (digitsOnly.startsWith(dialDigits)) {
+      return `+${digitsOnly}`;
+    }
+  }
+
+  // If short-ish digits and we have dial code, assume national number and prefix
+  // (kept conservative: <= 12)
+  if (dial && /^\d{7,12}$/.test(digitsOnly)) {
+    return `${dial}${digitsOnly}`;
+  }
+
+  // Fallback: store cleaned digits as-is
+  return raw;
 }
 
 const permissionsSchema = new mongoose.Schema(
@@ -218,7 +276,8 @@ const userSchema = new mongoose.Schema(
       required: true,
       unique: true,
       index: true,
-      set: normalizePhone,
+      // keep setter but make it raw-safe (country-aware conversion happens in pre-validate)
+      set: normalizePhoneRaw,
     },
 
     /**
@@ -278,10 +337,17 @@ userSchema.index({ countryCode: 1, role: 1 });
 userSchema.index({ "providerProfile.location": "2dsphere" });
 
 userSchema.pre("validate", function (next) {
-  if (this.phone) this.phone = normalizePhone(this.phone);
+  // normalize codes first
+  if (this.countryCode)
+    this.countryCode = String(this.countryCode).trim().toUpperCase();
+  if (this.languageCode)
+    this.languageCode = String(this.languageCode).trim().toLowerCase();
 
-  if (this.countryCode) this.countryCode = String(this.countryCode).trim().toUpperCase();
-  if (this.languageCode) this.languageCode = String(this.languageCode).trim().toLowerCase();
+  // ✅ country-aware phone storage normalization (parallel by dial code)
+  if (this.phone) {
+    const cc = this.countryCode || "ZA";
+    this.phone = normalizePhoneForStorage(this.phone, cc);
+  }
 
   next();
 });

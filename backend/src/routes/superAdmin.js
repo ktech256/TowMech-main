@@ -6,9 +6,6 @@ import User, { USER_ROLES } from "../models/User.js";
 
 const router = express.Router();
 
-/**
- * ✅ Normalize phone for consistent login + uniqueness
- */
 function normalizePhone(phone) {
   if (!phone) return "";
   let p = String(phone).trim();
@@ -18,9 +15,6 @@ function normalizePhone(phone) {
   return p;
 }
 
-/**
- * ✅ Resolve workspace country code
- */
 function resolveCountryCode(req) {
   return (
     req.countryCode ||
@@ -35,21 +29,10 @@ function resolveCountryCode(req) {
     .toUpperCase();
 }
 
-/**
- * ✅ TEST route
- * GET /api/superadmin/test
- */
 router.get("/test", (req, res) => {
   return res.status(200).json({ message: "SuperAdmin route working ✅" });
 });
 
-/**
- * ✅ SuperAdmin creates new Admin OR SuperAdmin (with permissions)
- * POST /api/superadmin/create-admin
- *
- * - Admins are created PER workspace countryCode
- * - SuperAdmins are global (still store countryCode, but treated as global)
- */
 router.post(
   "/create-admin",
   auth,
@@ -114,7 +97,7 @@ router.post(
         lastName,
         phone: normalizedPhone,
 
-        // ✅ CRITICAL: bind Admins to workspace country
+        // ✅ bind Admins to workspace country
         countryCode: workspaceCountryCode,
 
         birthday: creator.birthday || new Date("1990-01-01"),
@@ -141,10 +124,6 @@ router.post(
   }
 );
 
-/**
- * ✅ SuperAdmin updates Admin permissions
- * PATCH /api/superadmin/admin/:id/permissions
- */
 router.patch(
   "/admin/:id/permissions",
   auth,
@@ -182,13 +161,6 @@ router.patch(
   }
 );
 
-/**
- * ✅ SuperAdmin fetches admins for CURRENT workspace country
- * GET /api/superadmin/admins
- *
- * - Always include ALL SuperAdmins (global)
- * - Include ONLY Admins for selected workspace country
- */
 router.get(
   "/admins",
   auth,
@@ -218,10 +190,6 @@ router.get(
   }
 );
 
-/**
- * ✅ SuperAdmin archives an admin
- * PATCH /api/superadmin/admin/:id/archive
- */
 router.patch(
   "/admin/:id/archive",
   auth,

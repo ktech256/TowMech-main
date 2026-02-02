@@ -11,6 +11,9 @@ import User, {
 // ✅ NEW: PricingConfig source of truth for dashboard-controlled categories/types
 import PricingConfig from "../models/PricingConfig.js";
 
+// ✅ NEW: Country (to resolve dialing code)
+import Country from "../models/Country.js";
+
 // ✅ SMS provider (Twilio) — SAFE import for ESM/Render
 import twilioPkg from "twilio";
 const twilio = twilioPkg?.default || twilioPkg;
@@ -29,7 +32,7 @@ const generateToken = (userId, role, sessionId = null) =>
   });
 
 /**
- * ✅ Normalize phone for consistent login + uniqueness
+ * ✅ Normalize phone for consistent login + uniqueness (RAW)
  */
 function normalizePhone(phone) {
   if (!phone) return "";
@@ -45,45 +48,145 @@ function normalizePhone(phone) {
 }
 
 /**
- * ✅ Convert phone to E.164 format for Twilio SMS sending ONLY
- * Examples (South Africa):
- *  07131101111     -> +277131101111
- *  27xxxxxxxxx     -> +27xxxxxxxxx
- *  +27xxxxxxxxx    -> +27xxxxxxxxx
+ * ✅ Resolve request countryCode (tenant middleware normally sets req.countryCode)
  */
-function toE164PhoneForSms(phone) {
+function resolveReqCountryCode(req) {
+  return (
+    req.countryCode ||
+    req.headers["x-country-code"] ||
+    req.query?.country ||
+    req.query?.countryCode ||
+    req.body?.countryCode ||
+    process.env.DEFAULT_COUNTRY ||
+    "ZA"
+  )
+    .toString()
+    .trim()
+    .toUpperCase();
+}
+
+/**
+ * ✅ Dialing code fallback (safe)
+ */
+const DIALING_CODE_FALLBACK = {
+  ZA: "+27",
+  KE: "+254",
+  UG: "+256",
+};
+
+/**
+ * ✅ Load dialing code for a country (DB first, fallback map)
+ */
+async function getDialingCodeForCountry(countryCode) {
+  const cc = String(countryCode || "ZA").trim().toUpperCase();
+
+  try {
+    const c = await Country.findOne({ code: cc }).select("dialingCode phoneRules code");
+    const fromDb =
+      c?.dialingCode ||
+      c?.phoneRules?.dialingCode ||
+      c?.phoneRules?.countryDialingCode ||
+      null;
+
+    if (fromDb && typeof fromDb === "string" && fromDb.trim()) {
+      const d = fromDb.trim();
+      return d.startsWith("+") ? d : `+${d}`;
+    }
+  } catch (e) {
+    // ignore and fallback
+  }
+
+  return DIALING_CODE_FALLBACK[cc] || null;
+}
+
+/**
+ * ✅ Convert phone to E.164-ish for sending ONLY (Twilio requires +)
+ * - If already + => keep
+ * - If digits-only => try to prefix + (Twilio expects +)
+ * - If local leading 0 => needs dialing code, so we attempt with cc if provided
+ */
+function toE164PhoneForSms(phone, dialingCode = null) {
   const p = normalizePhone(phone);
   if (!p) return "";
 
-  // If already international with +
   if (p.startsWith("+")) return p;
 
-  // If stored as 27xxxxxxxxx (no +)
-  if (/^27\d{9}$/.test(p)) return `+${p}`;
+  const digitsOnly = p.replace(/[^\d]/g, "");
+  if (!digitsOnly) return p;
 
-  // If local SA 0xxxxxxxxx
-  if (/^0\d{9}$/.test(p)) return `+27${p.slice(1)}`;
+  // If already starts with dialing digits and dial known
+  if (dialingCode) {
+    const dialDigits = String(dialingCode).replace("+", "");
+    if (digitsOnly.startsWith(dialDigits)) return `+${digitsOnly}`;
+  }
+
+  // Local 0xxxx...
+  if (dialingCode && /^0\d{6,14}$/.test(digitsOnly)) {
+    return `${dialingCode}${digitsOnly.slice(1)}`;
+  }
+
+  // If short digits and dial exists, prefix
+  if (dialingCode && /^\d{7,12}$/.test(digitsOnly)) {
+    return `${dialingCode}${digitsOnly}`;
+  }
+
+  // Fallback: just add +
+  if (/^\d{7,15}$/.test(digitsOnly)) return `+${digitsOnly}`;
 
   return p;
 }
 
 /**
  * ✅ build multiple phone candidates to match DB formats
+ * Now supports multi-country:
+ * - candidates include:
+ *   "+<dial><national>", "<dial><national>", raw, and ZA legacy.
  */
-function buildPhoneCandidates(phone) {
+function buildPhoneCandidates(phone, dialingCode = null) {
   const p = normalizePhone(phone);
   const candidates = new Set();
   if (!p) return [];
 
   candidates.add(p);
 
+  // remove + variant
   if (p.startsWith("+")) candidates.add(p.slice(1));
 
+  const digitsOnly = p.replace(/[^\d]/g, "");
+  if (digitsOnly) {
+    candidates.add(digitsOnly);
+    candidates.add("+" + digitsOnly);
+  }
+
+  // If dialing code known, generate normalized storage candidates
+  if (dialingCode) {
+    const dialDigits = String(dialingCode).replace("+", "");
+
+    // already has dial digits without +
+    if (/^\d{7,15}$/.test(digitsOnly) && digitsOnly.startsWith(dialDigits)) {
+      candidates.add("+" + digitsOnly);
+    }
+
+    // local 0xxxxx => dial + rest
+    if (/^0\d{6,14}$/.test(digitsOnly)) {
+      candidates.add(`${dialingCode}${digitsOnly.slice(1)}`); // +2547...
+      candidates.add(`${dialDigits}${digitsOnly.slice(1)}`); // 2547...
+    }
+
+    // short national digits => prefix dialing code
+    if (/^\d{7,12}$/.test(digitsOnly) && !digitsOnly.startsWith(dialDigits)) {
+      candidates.add(`${dialingCode}${digitsOnly}`);
+      candidates.add(`${dialDigits}${digitsOnly}`);
+    }
+  }
+
+  /**
+   * ✅ Keep your original ZA legacy compatibility (unchanged)
+   */
   if (/^0\d{9}$/.test(p)) {
     candidates.add("+27" + p.slice(1));
     candidates.add("27" + p.slice(1));
   }
-
   if (/^27\d{9}$/.test(p)) {
     candidates.add("+" + p);
   }
@@ -139,7 +242,7 @@ function isStaticOtpTestPhone(phone) {
 /**
  * ✅ Send OTP via SMS (Twilio)
  */
-async function sendOtpSms(phone, otpCode, purpose = "OTP") {
+async function sendOtpSms(phone, otpCode, purpose = "OTP", dialingCode = null) {
   // ✅ Static OTP numbers: do NOT send SMS (reviewers can just type 123456)
   if (isStaticOtpTestPhone(phone)) {
     console.log(
@@ -155,8 +258,7 @@ async function sendOtpSms(phone, otpCode, purpose = "OTP") {
   const token = process.env.TWILIO_AUTH_TOKEN;
   const from = process.env.TWILIO_FROM_NUMBER;
 
-  // ✅ FIX: convert destination to E.164 for Twilio
-  const to = toE164PhoneForSms(phone);
+  const to = toE164PhoneForSms(phone, dialingCode);
 
   if (!sid || !token || !from) {
     console.log("⚠️ TWILIO NOT CONFIGURED → SMS NOT SENT");
@@ -354,6 +456,9 @@ router.post("/register", async (req, res) => {
       return res.status(400).json({ message: "Invalid role provided" });
     }
 
+    const requestCountryCode = resolveReqCountryCode(req);
+    const dialingCode = await getDialingCodeForCountry(requestCountryCode);
+
     const normalizedPhone = normalizePhone(phone);
 
     // ✅ Skip strict validation for SuperAdmin/Admin
@@ -370,6 +475,9 @@ router.post("/register", async (req, res) => {
         password,
         birthday: birthday || null,
         role,
+
+        // ✅ ensure admin is scoped to request country unless set elsewhere
+        countryCode: requestCountryCode,
       });
 
       return res.status(201).json({
@@ -456,10 +564,13 @@ router.post("/register", async (req, res) => {
       }
     }
 
+    // ✅ Uniqueness checks should consider normalized candidates (multi-country)
+    const phoneCandidates = buildPhoneCandidates(normalizedPhone, dialingCode);
+
     const existingEmail = await User.findOne({ email });
     if (existingEmail) return res.status(409).json({ message: "Email already registered" });
 
-    const existingPhone = await User.findOne({ phone: normalizedPhone });
+    const existingPhone = await User.findOne({ phone: { $in: phoneCandidates } });
     if (existingPhone) return res.status(409).json({ message: "Phone number already registered" });
 
     const name = `${firstName.trim()} ${lastName.trim()}`;
@@ -472,6 +583,9 @@ router.post("/register", async (req, res) => {
       email,
       password,
       birthday,
+
+      // ✅ country scoping for parallel countries
+      countryCode: requestCountryCode,
 
       nationalityType,
       saIdNumber: nationalityType === "SouthAfrican" ? saIdNumber : null,
@@ -519,7 +633,10 @@ router.post("/login", async (req, res) => {
       return res.status(400).json({ message: "phone and password are required" });
     }
 
-    const phoneCandidates = buildPhoneCandidates(normalizedPhone);
+    const requestCountryCode = resolveReqCountryCode(req);
+    const dialingCode = await getDialingCodeForCountry(requestCountryCode);
+
+    const phoneCandidates = buildPhoneCandidates(normalizedPhone, dialingCode);
 
     const user = await User.findOne({ phone: { $in: phoneCandidates } });
     if (!user) return res.status(401).json({ message: "Invalid credentials" });
@@ -531,8 +648,11 @@ router.post("/login", async (req, res) => {
 
     console.log("✅ OTP GENERATED FOR:", user.phone, "| OTP:", otpCode);
 
+    // use user's stored countryCode when sending sms formatting (safer)
+    const userDialingCode = await getDialingCodeForCountry(user.countryCode || requestCountryCode);
+
     try {
-      await sendOtpSms(user.phone, otpCode, "OTP");
+      await sendOtpSms(user.phone, otpCode, "OTP", userDialingCode);
     } catch (smsErr) {
       console.error("❌ SMS OTP SEND FAILED:", smsErr.message);
     }
@@ -545,6 +665,9 @@ router.post("/login", async (req, res) => {
       requiresOtp: true,
       // ✅ optional hint (safe): tells tester it is a static-OTP account
       isStaticOtpAccount: isStaticOtpTestPhone(user.phone),
+
+      // ✅ helps dashboard/android set workspace immediately
+      countryCode: user.countryCode || requestCountryCode,
     });
   } catch (err) {
     console.error("❌ LOGIN ERROR:", err.message);
@@ -567,7 +690,10 @@ router.post("/verify-otp", async (req, res) => {
       return res.status(400).json({ message: "phone and otp are required" });
     }
 
-    const phoneCandidates = buildPhoneCandidates(normalizedPhone);
+    const requestCountryCode = resolveReqCountryCode(req);
+    const dialingCode = await getDialingCodeForCountry(requestCountryCode);
+
+    const phoneCandidates = buildPhoneCandidates(normalizedPhone, dialingCode);
 
     const user = await User.findOne({ phone: { $in: phoneCandidates } });
     if (!user) return res.status(404).json({ message: "User not found" });
@@ -613,6 +739,9 @@ router.post("/verify-otp", async (req, res) => {
       message: "OTP verified ✅",
       token,
       user: typeof user.toSafeJSON === "function" ? user.toSafeJSON(user.role) : undefined,
+
+      // ✅ helps dashboard/android set workspace immediately
+      countryCode: user.countryCode || requestCountryCode,
     });
   } catch (err) {
     console.error("❌ VERIFY OTP ERROR:", err.message);
@@ -633,7 +762,10 @@ router.post("/forgot-password", async (req, res) => {
       return res.status(400).json({ message: "phone is required" });
     }
 
-    const phoneCandidates = buildPhoneCandidates(normalizedPhone);
+    const requestCountryCode = resolveReqCountryCode(req);
+    const dialingCode = await getDialingCodeForCountry(requestCountryCode);
+
+    const phoneCandidates = buildPhoneCandidates(normalizedPhone, dialingCode);
 
     const user = await User.findOne({ phone: { $in: phoneCandidates } });
 
@@ -643,8 +775,10 @@ router.post("/forgot-password", async (req, res) => {
 
     const otpCode = await generateAndSaveOtp(user, { minutes: 10 });
 
+    const userDialingCode = await getDialingCodeForCountry(user.countryCode || requestCountryCode);
+
     try {
-      await sendOtpSms(user.phone, otpCode, "RESET");
+      await sendOtpSms(user.phone, otpCode, "RESET", userDialingCode);
     } catch (smsErr) {
       console.error("❌ RESET SMS SEND FAILED:", smsErr.message);
     }
@@ -656,6 +790,8 @@ router.post("/forgot-password", async (req, res) => {
       otp: debugEnabled ? otpCode : undefined,
       requiresOtp: true,
       isStaticOtpAccount: isStaticOtpTestPhone(user.phone),
+
+      countryCode: user.countryCode || requestCountryCode,
     });
   } catch (err) {
     console.error("❌ FORGOT PASSWORD ERROR:", err.message);
@@ -676,7 +812,10 @@ router.post("/reset-password", async (req, res) => {
       return res.status(400).json({ message: "phone, otp, newPassword are required" });
     }
 
-    const phoneCandidates = buildPhoneCandidates(normalizedPhone);
+    const requestCountryCode = resolveReqCountryCode(req);
+    const dialingCode = await getDialingCodeForCountry(requestCountryCode);
+
+    const phoneCandidates = buildPhoneCandidates(normalizedPhone, dialingCode);
 
     const user = await User.findOne({ phone: { $in: phoneCandidates } });
     if (!user) return res.status(404).json({ message: "User not found" });
@@ -709,7 +848,7 @@ router.post("/reset-password", async (req, res) => {
 router.get("/me", auth, async (req, res) => {
   try {
     const user = await User.findById(req.user._id).select(
-      "name firstName lastName email phone birthday nationalityType saIdNumber passportNumber country role providerProfile createdAt updatedAt"
+      "name firstName lastName email phone birthday nationalityType saIdNumber passportNumber country role providerProfile countryCode createdAt updatedAt"
     );
 
     if (!user) return res.status(404).json({ message: "User not found" });
@@ -744,7 +883,7 @@ router.patch("/me", auth, async (req, res) => {
       return res.status(400).json({ message: "Nothing to update" });
     }
 
-    // ✅ Uniqueness checks
+    // ✅ Uniqueness checks (multi-country candidate aware)
     if (updates.email) {
       const existingEmail = await User.findOne({
         email: updates.email,
@@ -754,8 +893,12 @@ router.patch("/me", auth, async (req, res) => {
     }
 
     if (updates.phone) {
+      const currentUser = await User.findById(userId).select("countryCode");
+      const dialingCode = await getDialingCodeForCountry(currentUser?.countryCode || "ZA");
+      const candidates = buildPhoneCandidates(updates.phone, dialingCode);
+
       const existingPhone = await User.findOne({
-        phone: updates.phone,
+        phone: { $in: candidates },
         _id: { $ne: userId },
       });
       if (existingPhone) return res.status(409).json({ message: "Phone number already registered" });
@@ -765,14 +908,14 @@ router.patch("/me", auth, async (req, res) => {
     if (!user) return res.status(404).json({ message: "User not found" });
 
     // ✅ Only update allowed fields
-    if (updates.phone) user.phone = updates.phone;
+    if (updates.phone) user.phone = updates.phone; // User model will normalize for storage
     if (updates.email) user.email = updates.email;
     if (updates.password) user.password = updates.password; // hashed by pre-save
 
     await user.save();
 
     const fresh = await User.findById(userId).select(
-      "name firstName lastName email phone birthday nationalityType saIdNumber passportNumber country role providerProfile createdAt updatedAt"
+      "name firstName lastName email phone birthday nationalityType saIdNumber passportNumber country role providerProfile countryCode createdAt updatedAt"
     );
 
     return res.status(200).json({

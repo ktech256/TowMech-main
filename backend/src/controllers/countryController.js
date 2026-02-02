@@ -28,7 +28,7 @@ export async function listPublicCountries(req, res) {
     const countries = await Country.find({ isActive: true, isPublic: true })
       .sort({ name: 1 })
       .select(
-        "code name flagEmoji currencyCode currencySymbol timezone languages defaultLanguage phoneRules isActive isPublic region"
+        "code name flagEmoji currencyCode currencySymbol timezone languages defaultLanguage phoneRules dialingCode isActive isPublic region"
       );
 
     return res.status(200).json({ countries });
@@ -49,7 +49,7 @@ export async function listAllCountries(req, res) {
     const countries = await Country.find({})
       .sort({ name: 1 })
       .select(
-        "code name flagEmoji currencyCode currencySymbol timezone languages defaultLanguage phoneRules isActive isPublic region tax createdAt updatedAt"
+        "code name flagEmoji currencyCode currencySymbol timezone languages defaultLanguage phoneRules dialingCode isActive isPublic region tax createdAt updatedAt"
       );
 
     return res.status(200).json({ countries });
@@ -83,6 +83,12 @@ export async function seedCountries(req, res) {
 
       const existing = await Country.findOne({ code });
 
+      // ✅ detect dialing code from constants (supports multiple shapes)
+      const seedDialingCode =
+        c.dialingCode ||
+        (c.phoneRules && (c.phoneRules.dialingCode || c.phoneRules.countryDialingCode)) ||
+        null;
+
       if (!existing) {
         await Country.create({
           code,
@@ -95,6 +101,7 @@ export async function seedCountries(req, res) {
           defaultLanguage: c.defaultLanguage || "en",
           region: c.region || "GLOBAL",
           phoneRules: c.phoneRules || {},
+          dialingCode: seedDialingCode,
           isActive: c.isActive !== false,
           isPublic: c.isPublic !== false,
           tax: c.tax || { vatPercent: 0, vatName: "VAT", pricesIncludeVat: false },
@@ -146,6 +153,12 @@ export async function seedCountries(req, res) {
         dirty = true;
       }
 
+      // ✅ new: fill dialingCode if missing
+      if (!existing.dialingCode && seedDialingCode) {
+        existing.dialingCode = seedDialingCode;
+        dirty = true;
+      }
+
       if (dirty) {
         await existing.save();
         updated++;
@@ -191,6 +204,10 @@ export async function upsertCountry(req, res) {
       defaultLanguage: pickString(body.defaultLanguage, "en"),
       region: pickString(body.region, "GLOBAL"),
       phoneRules: typeof body.phoneRules === "object" && body.phoneRules ? body.phoneRules : undefined,
+
+      // ✅ new (optional): dialingCode
+      dialingCode: pickString(body.dialingCode),
+
       isActive: typeof body.isActive === "boolean" ? body.isActive : undefined,
       isPublic: typeof body.isPublic === "boolean" ? body.isPublic : undefined,
       tax: typeof body.tax === "object" && body.tax ? body.tax : undefined,
@@ -199,7 +216,11 @@ export async function upsertCountry(req, res) {
     // remove undefined keys
     Object.keys(update).forEach((k) => update[k] === undefined && delete update[k]);
 
-    const country = await Country.findOneAndUpdate({ code }, { $set: update }, { new: true, upsert: true });
+    const country = await Country.findOneAndUpdate(
+      { code },
+      { $set: update },
+      { new: true, upsert: true }
+    );
 
     // Ensure configs exist for this country (service/ui)
     await CountryServiceConfig.findOneAndUpdate(

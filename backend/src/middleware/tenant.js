@@ -9,10 +9,13 @@
  * 1) Header: X-COUNTRY-CODE
  * 2) Query: ?country=ZA
  * 3) Body: { countryCode: "ZA" }
- * 4) Default: "ZA"
+ * 4) Default: DEFAULT_COUNTRY (env) or "ZA"
  */
 
-const DEFAULT_COUNTRY = process.env.DEFAULT_COUNTRY || "ZA";
+const DEFAULT_COUNTRY = (process.env.DEFAULT_COUNTRY || "ZA")
+  .toString()
+  .trim()
+  .toUpperCase();
 
 const normalizeCountryCode = (value) => {
   if (!value) return null;
@@ -35,17 +38,17 @@ export const tenantMiddleware = (req, res, next) => {
       normalizeCountryCode(headerCountry) ||
       normalizeCountryCode(queryCountry) ||
       normalizeCountryCode(bodyCountry) ||
-      normalizeCountryCode(DEFAULT_COUNTRY);
+      DEFAULT_COUNTRY;
 
     req.countryCode = countryCode;
 
-    // (Optional) expose for debugging
+    // expose for debugging
     res.setHeader("X-COUNTRY-CODE", countryCode);
 
     return next();
   } catch (err) {
     console.error("❌ tenantMiddleware error:", err);
-    req.countryCode = normalizeCountryCode(DEFAULT_COUNTRY) || "ZA";
+    req.countryCode = DEFAULT_COUNTRY;
     return next();
   }
 };

@@ -16,40 +16,68 @@ const auth = async (req, res, next) => {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
     const user = await User.findById(decoded.id).select("-password");
-
     if (!user) {
       return res.status(401).json({ message: "User not found" });
     }
 
     /**
      * ✅ MULTI-COUNTRY SUPPORT (TowMech Global)
-     * Ensure req.countryCode exists (from tenant middleware).
-     * If user has a countryCode, enforce that the request is scoped correctly.
+     *
+     * FIX:
+     * - If request has no country header OR it still equals DEFAULT_COUNTRY (ZA),
+     *   auto-scope req.countryCode to user.countryCode.
+     * - If client explicitly tries to use a DIFFERENT country than user.countryCode,
+     *   deny (unless SuperAdmin).
      */
-    const reqCountry = (req.countryCode || req.headers["x-country-code"] || "ZA")
+    const DEFAULT_COUNTRY = (process.env.DEFAULT_COUNTRY || "ZA")
       .toString()
       .trim()
       .toUpperCase();
 
-    const userCountry = (user.countryCode || "").toString().trim().toUpperCase();
+    const reqCountryRaw = (req.countryCode ||
+      req.headers["x-country-code"] ||
+      DEFAULT_COUNTRY)
+      .toString()
+      .trim()
+      .toUpperCase();
 
-    // Only enforce if user has a country set.
-    // SuperAdmin can bypass cross-country restriction.
+    const userCountry = (user.countryCode || DEFAULT_COUNTRY)
+      .toString()
+      .trim()
+      .toUpperCase();
+
     const isSuperAdmin = user.role === USER_ROLES.SUPER_ADMIN;
 
-    if (!isSuperAdmin && userCountry && reqCountry && userCountry !== reqCountry) {
-      return res.status(403).json({
-        message: "Country mismatch. Access denied.",
-        code: "COUNTRY_MISMATCH",
-      });
+    if (!isSuperAdmin) {
+      const reqLooksDefault =
+        !reqCountryRaw || reqCountryRaw === DEFAULT_COUNTRY;
+
+      // ✅ auto scope to user country
+      if (reqLooksDefault && userCountry) {
+        req.countryCode = userCountry;
+      } else {
+        req.countryCode = reqCountryRaw;
+      }
+
+      // ✅ block explicit mismatch attempts
+      if (userCountry && req.countryCode && userCountry !== req.countryCode) {
+        return res.status(403).json({
+          message: "Country mismatch. Access denied.",
+          code: "COUNTRY_MISMATCH",
+          expected: userCountry,
+          received: req.countryCode,
+        });
+      }
+    } else {
+      // SuperAdmin can operate across countries
+      req.countryCode = reqCountryRaw || DEFAULT_COUNTRY;
     }
+
+    // expose for debugging
+    res.setHeader("X-COUNTRY-CODE", req.countryCode);
 
     /**
      * ✅ SINGLE-DEVICE LOGIN ENFORCEMENT (Providers ONLY)
-     * - Only Mechanic + TowTruck are restricted to 1 phone session.
-     * - Token is NOT auto-expired by time.
-     * - Token becomes invalid ONLY when the provider logs in on another phone
-     *   (because providerProfile.sessionId changes in DB).
      */
     const isProvider =
       user.role === USER_ROLES.MECHANIC || user.role === USER_ROLES.TOW_TRUCK;
@@ -58,8 +86,6 @@ const auth = async (req, res, next) => {
       const tokenSid = decoded?.sid || null;
       const dbSid = user?.providerProfile?.sessionId || null;
 
-      // If token has no sid, it means it was issued before we added session enforcement.
-      // Force re-login once (only for providers) so the system becomes consistent.
       if (!tokenSid) {
         return res.status(401).json({
           message: "Session upgrade required. Please login again.",
@@ -67,7 +93,6 @@ const auth = async (req, res, next) => {
         });
       }
 
-      // If DB has no sid (older user record), also require login once.
       if (!dbSid) {
         return res.status(401).json({
           message: "Session not initialized. Please login again.",
@@ -75,7 +100,6 @@ const auth = async (req, res, next) => {
         });
       }
 
-      // Main enforcement: if mismatch -> logged in elsewhere
       if (tokenSid !== dbSid) {
         return res.status(401).json({
           message: "Logged in on another phone. Please login again.",
@@ -86,9 +110,10 @@ const auth = async (req, res, next) => {
 
     /**
      * ✅ Role-based reason visibility
-     * Only Admin + SuperAdmin can see ban/suspend reasons
      */
-    const canSeeReasons = [USER_ROLES.ADMIN, USER_ROLES.SUPER_ADMIN].includes(user.role);
+    const canSeeReasons = [USER_ROLES.ADMIN, USER_ROLES.SUPER_ADMIN].includes(
+      user.role
+    );
 
     /**
      * ✅ BLOCK users based on accountStatus
@@ -96,14 +121,12 @@ const auth = async (req, res, next) => {
     const status = user.accountStatus || {};
 
     if (!isSuperAdmin) {
-      // ✅ Archived = blocked always
       if (status.isArchived) {
         return res.status(403).json({
           message: "Account archived. Access denied.",
         });
       }
 
-      // ✅ Banned
       if (status.isBanned) {
         return res.status(403).json({
           message: "Account banned. Access denied.",
@@ -111,7 +134,6 @@ const auth = async (req, res, next) => {
         });
       }
 
-      // ✅ Suspended
       if (status.isSuspended) {
         return res.status(403).json({
           message: "Account suspended. Access denied.",
@@ -120,10 +142,7 @@ const auth = async (req, res, next) => {
       }
     }
 
-    /**
-     * ✅ Attach user to req
-     * NOTE: req.user still includes providerProfile, but not password.
-     */
+    // attach user to req
     req.user = user;
 
     return next();
