@@ -12,20 +12,39 @@ function normalizeIso2(v) {
   return /^[A-Z]{2}$/.test(code) ? code : "";
 }
 
-function normalizeDialCode(v) {
+function normalizeDialingCode(v) {
   let s = String(v || "").trim();
   if (!s) return "";
   if (!s.startsWith("+")) {
-    // allow "256" -> "+256"
     if (/^\d+$/.test(s)) s = `+${s}`;
   }
-  // keep only + and digits
   s = s.replace(/[^\d+]/g, "");
   return /^\+\d{1,4}$/.test(s) ? s : "";
 }
 
 /**
+ * ✅ Permission enforcement helper (keeps existing authorizeRoles middleware intact)
+ * - SuperAdmin always allowed
+ * - Admin must have permissions[permissionKey] === true
+ */
+const requirePermission = (req, res, permissionKey) => {
+  if (req.user?.role === USER_ROLES.SUPER_ADMIN) return true;
+
+  if (req.user?.role === USER_ROLES.ADMIN) {
+    if (!req.user.permissions || req.user.permissions[permissionKey] !== true) {
+      res.status(403).json({ message: `Permission denied ❌ Missing ${permissionKey}` });
+      return false;
+    }
+    return true;
+  }
+
+  res.status(403).json({ message: "Permission denied ❌" });
+  return false;
+};
+
+/**
  * GET /api/admin/countries
+ * ✅ Requires canManageCountries for Admin
  */
 router.get(
   "/",
@@ -33,20 +52,23 @@ router.get(
   authorizeRoles(USER_ROLES.ADMIN, USER_ROLES.SUPER_ADMIN),
   async (req, res) => {
     try {
+      if (!requirePermission(req, res, "canManageCountries")) return;
+
       const countries = await Country.find({}).sort({ createdAt: -1 });
 
-      // ✅ now includes dialCode
       return res.status(200).json({ countries });
     } catch (err) {
-      return res
-        .status(500)
-        .json({ message: "Failed to load countries", error: err.message });
+      return res.status(500).json({
+        message: "Failed to load countries",
+        error: err.message,
+      });
     }
   }
 );
 
 /**
  * POST /api/admin/countries
+ * ✅ Requires canManageCountries for Admin
  */
 router.post(
   "/",
@@ -54,11 +76,14 @@ router.post(
   authorizeRoles(USER_ROLES.ADMIN, USER_ROLES.SUPER_ADMIN),
   async (req, res) => {
     try {
+      if (!requirePermission(req, res, "canManageCountries")) return;
+
       const {
         code,
         name,
         currency,
-        dialCode, // ✅ NEW
+        dialCode, // ✅ support legacy field name from frontend
+        dialingCode, // ✅ support correct field name too
         defaultLanguage = "en",
         supportedLanguages = ["en"],
         timezone = "Africa/Johannesburg",
@@ -70,30 +95,30 @@ router.post(
       if (!name) return res.status(400).json({ message: "name is required" });
       if (!currency) return res.status(400).json({ message: "currency is required" });
 
-      const dial = normalizeDialCode(dialCode);
+      const dial = normalizeDialingCode(dialingCode ?? dialCode);
       if (!dial) {
         return res.status(400).json({
-          message: "dialCode is required (e.g. +256, +27) ❌",
+          message: "dialingCode is required (e.g. +256, +27) ❌",
         });
       }
 
       const exists = await Country.findOne({ code: iso2 }).lean();
       if (exists) return res.status(409).json({ message: "Country already exists" });
 
-      // ✅ unique dialCode (recommended)
-      const dialExists = await Country.findOne({ dialCode: dial }).lean();
+      // ✅ unique dialingCode (recommended)
+      const dialExists = await Country.findOne({ dialingCode: dial }).lean();
       if (dialExists) {
-        return res.status(409).json({ message: "dialCode already exists" });
+        return res.status(409).json({ message: "dialingCode already exists" });
       }
 
       const country = await Country.create({
         code: iso2,
-        dialCode: dial, // ✅ NEW
+        dialingCode: dial,
         name: String(name).trim(),
         currency: String(currency).trim().toUpperCase(),
         defaultLanguage: String(defaultLanguage).trim().toLowerCase(),
         supportedLanguages: Array.isArray(supportedLanguages)
-          ? supportedLanguages.map((l) => String(l).trim().toLowerCase())
+          ? supportedLanguages.map((l) => String(l).trim().toLowerCase()).filter(Boolean)
           : [String(defaultLanguage).trim().toLowerCase()],
         timezone: String(timezone).trim(),
         isActive: Boolean(isActive),
@@ -110,6 +135,7 @@ router.post(
 
 /**
  * PATCH /api/admin/countries/:id
+ * ✅ Requires canManageCountries for Admin
  */
 router.patch(
   "/:id",
@@ -117,13 +143,16 @@ router.patch(
   authorizeRoles(USER_ROLES.ADMIN, USER_ROLES.SUPER_ADMIN),
   async (req, res) => {
     try {
+      if (!requirePermission(req, res, "canManageCountries")) return;
+
       const country = await Country.findById(req.params.id);
       if (!country) return res.status(404).json({ message: "Country not found" });
 
       const {
         name,
         currency,
-        dialCode, // ✅ NEW
+        dialCode, // ✅ accept legacy
+        dialingCode, // ✅ accept correct
         defaultLanguage,
         supportedLanguages,
         timezone,
@@ -134,32 +163,28 @@ router.patch(
       if (typeof currency === "string" && currency.trim())
         country.currency = currency.trim().toUpperCase();
 
-      if (dialCode !== undefined) {
-        const dial = normalizeDialCode(dialCode);
-        if (!dial) {
-          return res.status(400).json({ message: "Invalid dialCode ❌" });
-        }
+      // ✅ dialing code update (stored as dialingCode)
+      if (dialingCode !== undefined || dialCode !== undefined) {
+        const dial = normalizeDialingCode(dialingCode ?? dialCode);
+        if (!dial) return res.status(400).json({ message: "Invalid dialingCode ❌" });
 
-        // ✅ keep unique dialCode
         const dialExists = await Country.findOne({
-          dialCode: dial,
+          dialingCode: dial,
           _id: { $ne: country._id },
         }).lean();
 
-        if (dialExists) {
-          return res.status(409).json({ message: "dialCode already exists" });
-        }
+        if (dialExists) return res.status(409).json({ message: "dialingCode already exists" });
 
-        country.dialCode = dial;
+        country.dialingCode = dial;
       }
 
       if (typeof defaultLanguage === "string" && defaultLanguage.trim())
         country.defaultLanguage = defaultLanguage.trim().toLowerCase();
 
       if (Array.isArray(supportedLanguages)) {
-        country.supportedLanguages = supportedLanguages.map((l) =>
-          String(l).trim().toLowerCase()
-        );
+        country.supportedLanguages = supportedLanguages
+          .map((l) => String(l).trim().toLowerCase())
+          .filter(Boolean);
       }
 
       if (typeof timezone === "string" && timezone.trim()) country.timezone = timezone.trim();
