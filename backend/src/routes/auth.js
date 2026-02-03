@@ -8,10 +8,10 @@ import User, {
   MECHANIC_CATEGORIES,
 } from "../models/User.js";
 
-// ✅ NEW: PricingConfig source of truth for dashboard-controlled categories/types
+// ✅ PricingConfig source of truth for dashboard-controlled categories/types
 import PricingConfig from "../models/PricingConfig.js";
 
-// ✅ NEW: Country (to resolve dialing code)
+// ✅ Country (to resolve dialing code)
 import Country from "../models/Country.js";
 
 // ✅ SMS provider (Twilio) — SAFE import for ESM/Render
@@ -81,12 +81,11 @@ async function getDialingCodeForCountry(countryCode) {
   const cc = String(countryCode || "ZA").trim().toUpperCase();
 
   try {
-    const c = await Country.findOne({ code: cc }).select(
-      "dialingCode phoneRules code"
-    );
+    const c = await Country.findOne({ code: cc }).select("dialingCode phoneRules code");
     const fromDb =
       c?.dialingCode ||
       c?.phoneRules?.dialingCode ||
+      c?.phoneRules?.countryDialingCode ||
       c?.phoneRules?.countryDialingCode ||
       null;
 
@@ -94,7 +93,7 @@ async function getDialingCodeForCountry(countryCode) {
       const d = fromDb.trim();
       return d.startsWith("+") ? d : `+${d}`;
     }
-  } catch (e) {
+  } catch (_e) {
     // ignore and fallback
   }
 
@@ -165,10 +164,7 @@ function buildPhoneCandidates(phone, dialingCode = null) {
     const dialDigits = String(dialingCode).replace("+", "");
 
     // already has dial digits without +
-    if (
-      /^\d{7,15}$/.test(digitsOnly) &&
-      digitsOnly.startsWith(dialDigits)
-    ) {
+    if (/^\d{7,15}$/.test(digitsOnly) && digitsOnly.startsWith(dialDigits)) {
       candidates.add("+" + digitsOnly);
     }
 
@@ -179,10 +175,7 @@ function buildPhoneCandidates(phone, dialingCode = null) {
     }
 
     // short national digits => prefix dialing code
-    if (
-      /^\d{7,12}$/.test(digitsOnly) &&
-      !digitsOnly.startsWith(dialDigits)
-    ) {
+    if (/^\d{7,12}$/.test(digitsOnly) && !digitsOnly.startsWith(dialDigits)) {
       candidates.add(`${dialingCode}${digitsOnly}`);
       candidates.add(`${dialDigits}${digitsOnly}`);
     }
@@ -249,8 +242,14 @@ function isStaticOtpTestPhone(phone) {
 
 /**
  * ✅ Send OTP via SMS (Twilio)
+ * ✅ OTP DEBUG: logs OTP to Render logs when ENABLE_OTP_DEBUG=true
  */
 async function sendOtpSms(phone, otpCode, purpose = "OTP", dialingCode = null) {
+  const debugEnabled = String(process.env.ENABLE_OTP_DEBUG).toLowerCase() === "true";
+  if (debugEnabled) {
+    console.log(`🟧 OTP_DEBUG (${purpose}) → phone=${normalizePhone(phone)} | otp=${otpCode}`);
+  }
+
   // ✅ Static OTP numbers: do NOT send SMS (reviewers can just type 123456)
   if (isStaticOtpTestPhone(phone)) {
     console.log(
@@ -270,28 +269,14 @@ async function sendOtpSms(phone, otpCode, purpose = "OTP", dialingCode = null) {
 
   if (!sid || !token || !from) {
     console.log("⚠️ TWILIO NOT CONFIGURED → SMS NOT SENT");
-    console.log(
-      `📲 ${purpose} SHOULD HAVE BEEN SENT TO:`,
-      to,
-      "| OTP:",
-      otpCode
-    );
+    console.log(`📲 ${purpose} SHOULD HAVE BEEN SENT TO:`, to, "| OTP:", otpCode);
     return { ok: false, provider: "none" };
   }
 
   // Guard: Twilio expects E.164 (+...)
   if (!to || !to.startsWith("+")) {
-    console.error(
-      "❌ SMS OTP SEND FAILED: Invalid 'To' Phone Number:",
-      phone,
-      "->",
-      to
-    );
-    return {
-      ok: false,
-      provider: "twilio",
-      error: "Invalid destination phone number",
-    };
+    console.error("❌ SMS OTP SEND FAILED: Invalid 'To' Phone Number:", phone, "->", to);
+    return { ok: false, provider: "twilio", error: "Invalid destination phone number" };
   }
 
   const client = twilio(sid, token);
@@ -359,8 +344,7 @@ function normalizeTowTruckTypes(input) {
     .map((x) => {
       const lower = x.toLowerCase();
 
-      if (lower.includes("hook") && lower.includes("chain"))
-        return "Hook & Chain";
+      if (lower.includes("hook") && lower.includes("chain")) return "Hook & Chain";
       if (lower === "wheel-lift" || lower === "wheel lift") return "Wheel-Lift";
 
       if (
@@ -374,13 +358,8 @@ function normalizeTowTruckTypes(input) {
         return "Flatbed/Roll Back";
 
       if (lower.includes("boom")) return "Boom Trucks(With Crane)";
-      if (lower.includes("integrated") || lower.includes("wrecker"))
-        return "Integrated / Wrecker";
-      if (
-        lower.includes("rotator") ||
-        lower.includes("heavy-duty") ||
-        lower === "recovery"
-      )
+      if (lower.includes("integrated") || lower.includes("wrecker")) return "Integrated / Wrecker";
+      if (lower.includes("rotator") || lower.includes("heavy-duty") || lower === "recovery")
         return "Heavy-Duty Rotator(Recovery)";
 
       // Legacy compatibility
@@ -406,7 +385,7 @@ function normalizeMechanicCategories(input) {
 }
 
 /**
- * ✅ NEW: Allowed types/categories should come from PricingConfig (dashboard)
+ * ✅ Allowed types/categories should come from PricingConfig (dashboard)
  * Falls back to constants for safety.
  */
 async function getAllowedProviderTypesFromPricingConfig() {
@@ -432,13 +411,11 @@ async function getAllowedProviderTypesFromPricingConfig() {
 
 /**
  * ✅ Helper: Generate OTP + save
- * ✅ UPDATED: static OTP for selected test numbers
+ * ✅ static OTP for selected test numbers
  */
 async function generateAndSaveOtp(user, { minutes = 10 } = {}) {
   const useStatic = isStaticOtpTestPhone(user?.phone);
-  const otpCode = useStatic
-    ? STATIC_TEST_OTP
-    : crypto.randomInt(100000, 999999).toString();
+  const otpCode = useStatic ? STATIC_TEST_OTP : crypto.randomInt(100000, 999999).toString();
 
   user.otpCode = otpCode;
   user.otpExpiresAt = new Date(Date.now() + minutes * 60 * 1000);
@@ -448,7 +425,7 @@ async function generateAndSaveOtp(user, { minutes = 10 } = {}) {
 }
 
 /**
- * ✅ Helper: Only providers get single-device session enforcement
+ * ✅ Only providers get single-device session enforcement
  */
 function isProviderRole(role) {
   return role === USER_ROLES.TOW_TRUCK || role === USER_ROLES.MECHANIC;
@@ -458,10 +435,8 @@ function isProviderRole(role) {
  * ✅ =========================================
  * ✅ COUNTRY-ONLY OTP STORE (NO USER REQUIRED)
  * ✅ =========================================
- * This is used ONLY for the "Country Start Screen" flow.
- * It does NOT create a user and does NOT log anyone in.
- *
- * NOTE: This is in-memory (works well for staging / single instance).
+ * Used only for Country Start Screen flow.
+ * In-memory (fine for staging / single instance).
  */
 const COUNTRY_OTP_TTL_MINUTES = 10;
 const countryOtpStore = new Map(); // key => { otp, expiresAt, countryCode, phoneNormalized }
@@ -480,7 +455,6 @@ function cleanupExpiredCountryOtps() {
 }
 
 function generateCountryOtpCode(phone) {
-  // same static rule as login flow
   if (isStaticOtpTestPhone(phone)) return STATIC_TEST_OTP;
   return crypto.randomInt(100000, 999999).toString();
 }
@@ -519,7 +493,7 @@ router.post("/register", async (req, res) => {
       role = USER_ROLES.CUSTOMER,
 
       towTruckTypes,
-      mechanicCategories, // ✅ NEW
+      mechanicCategories,
     } = req.body;
 
     if (!Object.values(USER_ROLES).includes(role)) {
@@ -545,8 +519,6 @@ router.post("/register", async (req, res) => {
         password,
         birthday: birthday || null,
         role,
-
-        // ✅ ensure admin is scoped to request country unless set elsewhere
         countryCode: requestCountryCode,
       });
 
@@ -590,7 +562,7 @@ router.post("/register", async (req, res) => {
       }
     }
 
-    // ✅ Load allowed types/categories from PricingConfig (dashboard controlled)
+    // ✅ dashboard-controlled allowed types/categories
     const { allowedTowTruckTypes, allowedMechanicCategories } =
       await getAllowedProviderTypesFromPricingConfig();
 
@@ -654,7 +626,6 @@ router.post("/register", async (req, res) => {
       password,
       birthday,
 
-      // ✅ country scoping for parallel countries
       countryCode: requestCountryCode,
 
       nationalityType,
@@ -671,7 +642,6 @@ router.post("/register", async (req, res) => {
               mechanicCategories: role === USER_ROLES.MECHANIC ? normalizedMechCats : [],
               isOnline: false,
               verificationStatus: "PENDING",
-
               sessionId: null,
               sessionIssuedAt: null,
             }
@@ -716,7 +686,11 @@ router.post("/login", async (req, res) => {
 
     const otpCode = await generateAndSaveOtp(user, { minutes: 10 });
 
-    console.log("✅ OTP GENERATED FOR:", user.phone, "| OTP:", otpCode);
+    // ✅ show OTP in Render logs when debug enabled
+    const debugEnabled = String(process.env.ENABLE_OTP_DEBUG).toLowerCase() === "true";
+    if (debugEnabled) {
+      console.log(`🟧 OTP_DEBUG (LOGIN) → userPhone=${user.phone} | otp=${otpCode}`);
+    }
 
     // use user's stored countryCode when sending sms formatting (safer)
     const userDialingCode = await getDialingCodeForCountry(user.countryCode || requestCountryCode);
@@ -727,16 +701,11 @@ router.post("/login", async (req, res) => {
       console.error("❌ SMS OTP SEND FAILED:", smsErr.message);
     }
 
-    const debugEnabled = String(process.env.ENABLE_OTP_DEBUG).toLowerCase() === "true";
-
     return res.status(200).json({
       message: "OTP sent via SMS ✅",
       otp: debugEnabled ? otpCode : undefined,
       requiresOtp: true,
-      // ✅ optional hint (safe): tells tester it is a static-OTP account
       isStaticOtpAccount: isStaticOtpTestPhone(user.phone),
-
-      // ✅ helps dashboard/android set workspace immediately
       countryCode: user.countryCode || requestCountryCode,
     });
   } catch (err) {
@@ -808,8 +777,6 @@ router.post("/verify-otp", async (req, res) => {
     return res.status(200).json({
       message: "OTP verified ✅",
       token,
-
-      // ✅ IMPORTANT: dashboard needs permissions + role + countryCode
       user:
         typeof user.toSafeJSON === "function"
           ? user.toSafeJSON(user.role)
@@ -822,8 +789,6 @@ router.post("/verify-otp", async (req, res) => {
               countryCode: user.countryCode,
               permissions: user.permissions || {},
             },
-
-      // ✅ helps dashboard/android set workspace immediately
       countryCode: user.countryCode || requestCountryCode,
     });
   } catch (err) {
@@ -833,13 +798,8 @@ router.post("/verify-otp", async (req, res) => {
 });
 
 /**
- * ✅✅✅ COUNTRY OTP (NO TOKEN, NO USER) ✅
+ * ✅✅✅ COUNTRY OTP (NO TOKEN, NO USER)
  * POST /api/auth/country/send-otp
- *
- * Body:
- *  - phone (required)
- *  - countryCode (optional, but recommended)
- *  - language (optional)
  */
 router.post("/country/send-otp", async (req, res) => {
   try {
@@ -870,16 +830,21 @@ router.post("/country/send-otp", async (req, res) => {
       });
     }
 
+    // ✅ show OTP in Render logs when debug enabled
+    const debugEnabled = String(process.env.ENABLE_OTP_DEBUG).toLowerCase() === "true";
+    if (debugEnabled) {
+      console.log(
+        `🟧 OTP_DEBUG (COUNTRY_SEND) → phone=${normalizedPhone} | country=${requestCountryCode} | otp=${otpCode}`
+      );
+    }
+
     // send SMS (or skip if static)
     const smsDialingCode = dialingCode || DIALING_CODE_FALLBACK[requestCountryCode] || null;
     try {
       await sendOtpSms(normalizedPhone, otpCode, "COUNTRY", smsDialingCode);
     } catch (smsErr) {
       console.error("❌ COUNTRY SMS SEND FAILED:", smsErr.message);
-      // still return a friendly message; app will show backend error if you want by throwing
     }
-
-    const debugEnabled = String(process.env.ENABLE_OTP_DEBUG).toLowerCase() === "true";
 
     return res.status(200).json({
       message: "Country OTP sent via SMS ✅",
@@ -899,13 +864,8 @@ router.post("/country/send-otp", async (req, res) => {
 });
 
 /**
- * ✅✅✅ COUNTRY OTP VERIFY (NO TOKEN, NO USER) ✅
+ * ✅✅✅ COUNTRY OTP VERIFY (NO TOKEN, NO USER)
  * POST /api/auth/country/verify-otp
- *
- * Body:
- *  - phone (required)
- *  - otp (required)
- *  - countryCode (optional but recommended)
  */
 router.post("/country/verify-otp", async (req, res) => {
   try {
@@ -985,6 +945,11 @@ router.post("/forgot-password", async (req, res) => {
 
     const otpCode = await generateAndSaveOtp(user, { minutes: 10 });
 
+    const debugEnabled = String(process.env.ENABLE_OTP_DEBUG).toLowerCase() === "true";
+    if (debugEnabled) {
+      console.log(`🟧 OTP_DEBUG (FORGOT) → userPhone=${user.phone} | otp=${otpCode}`);
+    }
+
     const userDialingCode = await getDialingCodeForCountry(user.countryCode || requestCountryCode);
 
     try {
@@ -993,14 +958,11 @@ router.post("/forgot-password", async (req, res) => {
       console.error("❌ RESET SMS SEND FAILED:", smsErr.message);
     }
 
-    const debugEnabled = String(process.env.ENABLE_OTP_DEBUG).toLowerCase() === "true";
-
     return res.status(200).json({
       message: "If your phone exists, an SMS code has been sent ✅",
       otp: debugEnabled ? otpCode : undefined,
       requiresOtp: true,
       isStaticOtpAccount: isStaticOtpTestPhone(user.phone),
-
       countryCode: user.countryCode || requestCountryCode,
     });
   } catch (err) {
@@ -1054,8 +1016,6 @@ router.post("/reset-password", async (req, res) => {
 /**
  * ✅ Get logged-in user profile
  * GET /api/auth/me
- *
- * ✅ FIX: include permissions + countryCode in select so dashboard can filter nav correctly.
  */
 router.get("/me", auth, async (req, res) => {
   try {
@@ -1067,12 +1027,10 @@ router.get("/me", auth, async (req, res) => {
 
     const safe = typeof user.toSafeJSON === "function" ? user.toSafeJSON(user.role) : user;
 
-    // ✅ compatibility: some older code uses `country` instead of `countryCode`
     if (safe && safe.countryCode == null && safe.country) {
       safe.countryCode = safe.country;
     }
 
-    // ✅ ensure permissions always exists (dashboard expects object)
     if (safe && !safe.permissions) safe.permissions = {};
 
     return res.status(200).json({ user: safe });
@@ -1103,7 +1061,6 @@ router.patch("/me", auth, async (req, res) => {
       return res.status(400).json({ message: "Nothing to update" });
     }
 
-    // ✅ Uniqueness checks (multi-country candidate aware)
     if (updates.email) {
       const existingEmail = await User.findOne({
         email: updates.email,
@@ -1127,10 +1084,9 @@ router.patch("/me", auth, async (req, res) => {
     const user = await User.findById(userId);
     if (!user) return res.status(404).json({ message: "User not found" });
 
-    // ✅ Only update allowed fields
-    if (updates.phone) user.phone = updates.phone; // User model will normalize for storage
+    if (updates.phone) user.phone = updates.phone;
     if (updates.email) user.email = updates.email;
-    if (updates.password) user.password = updates.password; // hashed by pre-save
+    if (updates.password) user.password = updates.password;
 
     await user.save();
 
