@@ -81,7 +81,9 @@ async function getDialingCodeForCountry(countryCode) {
   const cc = String(countryCode || "ZA").trim().toUpperCase();
 
   try {
-    const c = await Country.findOne({ code: cc }).select("dialingCode phoneRules code");
+    const c = await Country.findOne({ code: cc }).select(
+      "dialingCode phoneRules code"
+    );
     const fromDb =
       c?.dialingCode ||
       c?.phoneRules?.dialingCode ||
@@ -163,7 +165,10 @@ function buildPhoneCandidates(phone, dialingCode = null) {
     const dialDigits = String(dialingCode).replace("+", "");
 
     // already has dial digits without +
-    if (/^\d{7,15}$/.test(digitsOnly) && digitsOnly.startsWith(dialDigits)) {
+    if (
+      /^\d{7,15}$/.test(digitsOnly) &&
+      digitsOnly.startsWith(dialDigits)
+    ) {
       candidates.add("+" + digitsOnly);
     }
 
@@ -174,7 +179,10 @@ function buildPhoneCandidates(phone, dialingCode = null) {
     }
 
     // short national digits => prefix dialing code
-    if (/^\d{7,12}$/.test(digitsOnly) && !digitsOnly.startsWith(dialDigits)) {
+    if (
+      /^\d{7,12}$/.test(digitsOnly) &&
+      !digitsOnly.startsWith(dialDigits)
+    ) {
       candidates.add(`${dialingCode}${digitsOnly}`);
       candidates.add(`${dialDigits}${digitsOnly}`);
     }
@@ -262,14 +270,28 @@ async function sendOtpSms(phone, otpCode, purpose = "OTP", dialingCode = null) {
 
   if (!sid || !token || !from) {
     console.log("⚠️ TWILIO NOT CONFIGURED → SMS NOT SENT");
-    console.log(`📲 ${purpose} SHOULD HAVE BEEN SENT TO:`, to, "| OTP:", otpCode);
+    console.log(
+      `📲 ${purpose} SHOULD HAVE BEEN SENT TO:`,
+      to,
+      "| OTP:",
+      otpCode
+    );
     return { ok: false, provider: "none" };
   }
 
   // Guard: Twilio expects E.164 (+...)
   if (!to || !to.startsWith("+")) {
-    console.error("❌ SMS OTP SEND FAILED: Invalid 'To' Phone Number:", phone, "->", to);
-    return { ok: false, provider: "twilio", error: "Invalid destination phone number" };
+    console.error(
+      "❌ SMS OTP SEND FAILED: Invalid 'To' Phone Number:",
+      phone,
+      "->",
+      to
+    );
+    return {
+      ok: false,
+      provider: "twilio",
+      error: "Invalid destination phone number",
+    };
   }
 
   const client = twilio(sid, token);
@@ -277,6 +299,8 @@ async function sendOtpSms(phone, otpCode, purpose = "OTP", dialingCode = null) {
   const message =
     purpose === "RESET"
       ? `TowMech password reset code: ${otpCode}. Expires in 10 minutes.`
+      : purpose === "COUNTRY"
+      ? `TowMech country confirmation code: ${otpCode}. Expires in 10 minutes.`
       : `Your TowMech OTP is: ${otpCode}. It expires in 10 minutes.`;
 
   await client.messages.create({
@@ -352,7 +376,11 @@ function normalizeTowTruckTypes(input) {
       if (lower.includes("boom")) return "Boom Trucks(With Crane)";
       if (lower.includes("integrated") || lower.includes("wrecker"))
         return "Integrated / Wrecker";
-      if (lower.includes("rotator") || lower.includes("heavy-duty") || lower === "recovery")
+      if (
+        lower.includes("rotator") ||
+        lower.includes("heavy-duty") ||
+        lower === "recovery"
+      )
         return "Heavy-Duty Rotator(Recovery)";
 
       // Legacy compatibility
@@ -408,7 +436,9 @@ async function getAllowedProviderTypesFromPricingConfig() {
  */
 async function generateAndSaveOtp(user, { minutes = 10 } = {}) {
   const useStatic = isStaticOtpTestPhone(user?.phone);
-  const otpCode = useStatic ? STATIC_TEST_OTP : crypto.randomInt(100000, 999999).toString();
+  const otpCode = useStatic
+    ? STATIC_TEST_OTP
+    : crypto.randomInt(100000, 999999).toString();
 
   user.otpCode = otpCode;
   user.otpExpiresAt = new Date(Date.now() + minutes * 60 * 1000);
@@ -422,6 +452,46 @@ async function generateAndSaveOtp(user, { minutes = 10 } = {}) {
  */
 function isProviderRole(role) {
   return role === USER_ROLES.TOW_TRUCK || role === USER_ROLES.MECHANIC;
+}
+
+/**
+ * ✅ =========================================
+ * ✅ COUNTRY-ONLY OTP STORE (NO USER REQUIRED)
+ * ✅ =========================================
+ * This is used ONLY for the "Country Start Screen" flow.
+ * It does NOT create a user and does NOT log anyone in.
+ *
+ * NOTE: This is in-memory (works well for staging / single instance).
+ */
+const COUNTRY_OTP_TTL_MINUTES = 10;
+const countryOtpStore = new Map(); // key => { otp, expiresAt, countryCode, phoneNormalized }
+
+function buildCountryOtpKey(phoneNormalized, countryCode) {
+  return `${String(countryCode || "ZA").toUpperCase()}::${String(phoneNormalized || "").trim()}`;
+}
+
+function cleanupExpiredCountryOtps() {
+  const now = Date.now();
+  for (const [k, v] of countryOtpStore.entries()) {
+    if (!v?.expiresAt || v.expiresAt.getTime() <= now) {
+      countryOtpStore.delete(k);
+    }
+  }
+}
+
+function generateCountryOtpCode(phone) {
+  // same static rule as login flow
+  if (isStaticOtpTestPhone(phone)) return STATIC_TEST_OTP;
+  return crypto.randomInt(100000, 999999).toString();
+}
+
+function findCountryOtpRecordByCandidates(phoneCandidates, countryCode) {
+  for (const cand of phoneCandidates) {
+    const key = buildCountryOtpKey(String(cand), countryCode);
+    const rec = countryOtpStore.get(key);
+    if (rec) return { key, rec };
+  }
+  return null;
 }
 
 /**
@@ -763,6 +833,133 @@ router.post("/verify-otp", async (req, res) => {
 });
 
 /**
+ * ✅✅✅ COUNTRY OTP (NO TOKEN, NO USER) ✅
+ * POST /api/auth/country/send-otp
+ *
+ * Body:
+ *  - phone (required)
+ *  - countryCode (optional, but recommended)
+ *  - language (optional)
+ */
+router.post("/country/send-otp", async (req, res) => {
+  try {
+    cleanupExpiredCountryOtps();
+
+    const { phone } = req.body || {};
+    const normalizedPhone = normalizePhone(phone);
+
+    if (!normalizedPhone) {
+      return res.status(400).json({ message: "phone is required" });
+    }
+
+    const requestCountryCode = resolveReqCountryCode(req);
+    const dialingCode = await getDialingCodeForCountry(requestCountryCode);
+
+    const otpCode = generateCountryOtpCode(normalizedPhone);
+    const expiresAt = new Date(Date.now() + COUNTRY_OTP_TTL_MINUTES * 60 * 1000);
+
+    // store against multiple candidates so verify can match whatever format comes back
+    const phoneCandidates = buildPhoneCandidates(normalizedPhone, dialingCode);
+    for (const cand of phoneCandidates) {
+      const key = buildCountryOtpKey(String(cand), requestCountryCode);
+      countryOtpStore.set(key, {
+        otp: otpCode,
+        expiresAt,
+        countryCode: requestCountryCode,
+        phoneNormalized: normalizedPhone,
+      });
+    }
+
+    // send SMS (or skip if static)
+    const smsDialingCode = dialingCode || DIALING_CODE_FALLBACK[requestCountryCode] || null;
+    try {
+      await sendOtpSms(normalizedPhone, otpCode, "COUNTRY", smsDialingCode);
+    } catch (smsErr) {
+      console.error("❌ COUNTRY SMS SEND FAILED:", smsErr.message);
+      // still return a friendly message; app will show backend error if you want by throwing
+    }
+
+    const debugEnabled = String(process.env.ENABLE_OTP_DEBUG).toLowerCase() === "true";
+
+    return res.status(200).json({
+      message: "Country OTP sent via SMS ✅",
+      otp: debugEnabled ? otpCode : undefined,
+      requiresOtp: true,
+      isStaticOtpAccount: isStaticOtpTestPhone(normalizedPhone),
+      countryCode: requestCountryCode,
+      expiresInMinutes: COUNTRY_OTP_TTL_MINUTES,
+    });
+  } catch (err) {
+    console.error("❌ COUNTRY SEND OTP ERROR:", err.message);
+    return res.status(500).json({
+      message: "Country OTP send failed",
+      error: err.message,
+    });
+  }
+});
+
+/**
+ * ✅✅✅ COUNTRY OTP VERIFY (NO TOKEN, NO USER) ✅
+ * POST /api/auth/country/verify-otp
+ *
+ * Body:
+ *  - phone (required)
+ *  - otp (required)
+ *  - countryCode (optional but recommended)
+ */
+router.post("/country/verify-otp", async (req, res) => {
+  try {
+    cleanupExpiredCountryOtps();
+
+    const { phone, otp } = req.body || {};
+    const normalizedPhone = normalizePhone(phone);
+
+    if (!normalizedPhone || !otp) {
+      return res.status(400).json({ message: "phone and otp are required" });
+    }
+
+    const requestCountryCode = resolveReqCountryCode(req);
+    const dialingCode = await getDialingCodeForCountry(requestCountryCode);
+
+    const phoneCandidates = buildPhoneCandidates(normalizedPhone, dialingCode);
+    const hit = findCountryOtpRecordByCandidates(phoneCandidates, requestCountryCode);
+
+    if (!hit || !hit.rec) {
+      return res.status(404).json({
+        message: "No OTP request found for this phone. Please request OTP again.",
+      });
+    }
+
+    const { key, rec } = hit;
+
+    if (!rec.expiresAt || rec.expiresAt < new Date()) {
+      countryOtpStore.delete(key);
+      return res.status(401).json({ message: "OTP expired" });
+    }
+
+    if (String(rec.otp) !== String(otp).trim()) {
+      return res.status(401).json({ message: "Invalid OTP" });
+    }
+
+    // ✅ success: delete all variants for this phone+country (clean)
+    for (const cand of phoneCandidates) {
+      countryOtpStore.delete(buildCountryOtpKey(String(cand), requestCountryCode));
+    }
+
+    return res.status(200).json({
+      message: "Country confirmed ✅",
+      countryCode: requestCountryCode,
+    });
+  } catch (err) {
+    console.error("❌ COUNTRY VERIFY OTP ERROR:", err.message);
+    return res.status(500).json({
+      message: "Country OTP verification failed",
+      error: err.message,
+    });
+  }
+});
+
+/**
  * ✅ Forgot Password → sends OTP via SMS
  * POST /api/auth/forgot-password
  */
@@ -1001,3 +1198,4 @@ router.post("/logout", auth, async (req, res) => {
 });
 
 export default router;
+```0
