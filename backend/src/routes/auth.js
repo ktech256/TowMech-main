@@ -1,6 +1,7 @@
 import express from "express";
 import crypto from "crypto";
 import jwt from "jsonwebtoken";
+import mongoose from "mongoose";
 import auth from "../middleware/auth.js";
 import User, {
   USER_ROLES,
@@ -85,7 +86,6 @@ async function getDialingCodeForCountry(countryCode) {
     const fromDb =
       c?.dialingCode ||
       c?.phoneRules?.dialingCode ||
-      c?.phoneRules?.countryDialingCode ||
       c?.phoneRules?.countryDialingCode ||
       null;
 
@@ -197,8 +197,6 @@ function buildPhoneCandidates(phone, dialingCode = null) {
 
 /**
  * ✅ STATIC OTP (Play Store review / internal testing)
- * - Only these 5 phone numbers will use the static OTP.
- * - Login input is 10 digits starting with 0 (example: 0711111111)
  */
 const STATIC_TEST_OTP = "123456";
 const STATIC_TEST_PHONES_LOCAL = new Set([
@@ -211,16 +209,11 @@ const STATIC_TEST_PHONES_LOCAL = new Set([
 
 /**
  * Convert any accepted SA format to local 0XXXXXXXXX for matching.
- * Supports:
- *  - 0XXXXXXXXX
- *  - 27XXXXXXXXX
- *  - +27XXXXXXXXX
  */
 function toLocalZaPhone(phone) {
   const p = normalizePhone(phone);
   if (!p) return "";
 
-  // Keep only digits plus optional leading +
   const clean = p.replace(/[^\d+]/g, "");
 
   if (/^0\d{9}$/.test(clean)) return clean;
@@ -228,7 +221,6 @@ function toLocalZaPhone(phone) {
   if (/^\+27\d{9}$/.test(clean)) return "0" + clean.slice(3);
   if (/^27\d{9}$/.test(clean)) return "0" + clean.slice(2);
 
-  // Fallback: digits only (won't match unless it becomes 0XXXXXXXXX)
   const digits = clean.replace(/[^\d]/g, "");
   if (/^0\d{9}$/.test(digits)) return digits;
 
@@ -250,7 +242,7 @@ async function sendOtpSms(phone, otpCode, purpose = "OTP", dialingCode = null) {
     console.log(`🟧 OTP_DEBUG (${purpose}) → phone=${normalizePhone(phone)} | otp=${otpCode}`);
   }
 
-  // ✅ Static OTP numbers: do NOT send SMS (reviewers can just type 123456)
+  // ✅ Static OTP numbers: do NOT send SMS
   if (isStaticOtpTestPhone(phone)) {
     console.log(
       `🧪 STATIC OTP MODE (${purpose}) → SMS SKIPPED for`,
@@ -273,7 +265,6 @@ async function sendOtpSms(phone, otpCode, purpose = "OTP", dialingCode = null) {
     return { ok: false, provider: "none" };
   }
 
-  // Guard: Twilio expects E.164 (+...)
   if (!to || !to.startsWith("+")) {
     console.error("❌ SMS OTP SEND FAILED: Invalid 'To' Phone Number:", phone, "->", to);
     return { ok: false, provider: "twilio", error: "Invalid destination phone number" };
@@ -288,11 +279,7 @@ async function sendOtpSms(phone, otpCode, purpose = "OTP", dialingCode = null) {
       ? `TowMech country confirmation code: ${otpCode}. Expires in 10 minutes.`
       : `Your TowMech OTP is: ${otpCode}. It expires in 10 minutes.`;
 
-  await client.messages.create({
-    body: message,
-    from,
-    to,
-  });
+  await client.messages.create({ body: message, from, to });
 
   return { ok: true, provider: "twilio" };
 }
@@ -380,7 +367,6 @@ function normalizeTowTruckTypes(input) {
 function normalizeMechanicCategories(input) {
   if (!input) return [];
   const list = Array.isArray(input) ? input : [input];
-
   return list.map((x) => String(x).trim()).filter(Boolean);
 }
 
@@ -402,11 +388,7 @@ async function getAllowedProviderTypesFromPricingConfig() {
       ? pricing.mechanicCategories
       : MECHANIC_CATEGORIES;
 
-  return {
-    pricing,
-    allowedTowTruckTypes,
-    allowedMechanicCategories,
-  };
+  return { pricing, allowedTowTruckTypes, allowedMechanicCategories };
 }
 
 /**
@@ -433,39 +415,39 @@ function isProviderRole(role) {
 
 /**
  * ✅ =========================================
- * ✅ COUNTRY-ONLY OTP STORE (NO USER REQUIRED)
+ * ✅ COUNTRY OTP (PERSISTED IN MONGO) ✅
  * ✅ =========================================
- * Used only for Country Start Screen flow.
- * In-memory (fine for staging / single instance).
+ * Fixes Render restarts / multi-instance issues (no more in-memory Map loss).
+ *
+ * Stored by "key" (COUNTRY::phoneCandidate)
+ * TTL auto-removes expired docs via expiresAt index.
  */
 const COUNTRY_OTP_TTL_MINUTES = 10;
-const countryOtpStore = new Map(); // key => { otp, expiresAt, countryCode, phoneNormalized }
 
-function buildCountryOtpKey(phoneNormalized, countryCode) {
-  return `${String(countryCode || "ZA").toUpperCase()}::${String(phoneNormalized || "").trim()}`;
-}
+const CountryOtpSchema = new mongoose.Schema(
+  {
+    key: { type: String, required: true, index: true, unique: true }, // e.g. "ZA::+2776..."
+    countryCode: { type: String, required: true, index: true },
+    phoneNormalized: { type: String, required: true },
+    otp: { type: String, required: true },
+    expiresAt: { type: Date, required: true, index: true },
+  },
+  { timestamps: true }
+);
 
-function cleanupExpiredCountryOtps() {
-  const now = Date.now();
-  for (const [k, v] of countryOtpStore.entries()) {
-    if (!v?.expiresAt || v.expiresAt.getTime() <= now) {
-      countryOtpStore.delete(k);
-    }
-  }
+// TTL index (Mongo will delete after expiresAt passes)
+CountryOtpSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
+
+const CountryOtp =
+  mongoose.models.CountryOtp || mongoose.model("CountryOtp", CountryOtpSchema);
+
+function buildCountryOtpKey(phoneCandidate, countryCode) {
+  return `${String(countryCode || "ZA").toUpperCase()}::${String(phoneCandidate || "").trim()}`;
 }
 
 function generateCountryOtpCode(phone) {
   if (isStaticOtpTestPhone(phone)) return STATIC_TEST_OTP;
   return crypto.randomInt(100000, 999999).toString();
-}
-
-function findCountryOtpRecordByCandidates(phoneCandidates, countryCode) {
-  for (const cand of phoneCandidates) {
-    const key = buildCountryOtpKey(String(cand), countryCode);
-    const rec = countryOtpStore.get(key);
-    if (rec) return { key, rec };
-  }
-  return null;
 }
 
 /**
@@ -484,14 +466,11 @@ router.post("/register", async (req, res) => {
       email,
       password,
       birthday,
-
       nationalityType,
       saIdNumber,
       passportNumber,
       country,
-
       role = USER_ROLES.CUSTOMER,
-
       towTruckTypes,
       mechanicCategories,
     } = req.body;
@@ -502,7 +481,6 @@ router.post("/register", async (req, res) => {
 
     const requestCountryCode = resolveReqCountryCode(req);
     const dialingCode = await getDialingCodeForCountry(requestCountryCode);
-
     const normalizedPhone = normalizePhone(phone);
 
     // ✅ Skip strict validation for SuperAdmin/Admin
@@ -541,12 +519,8 @@ router.post("/register", async (req, res) => {
     }
 
     if (nationalityType === "SouthAfrican") {
-      if (!saIdNumber) {
-        return res.status(400).json({ message: "saIdNumber is required for SouthAfrican" });
-      }
-      if (!isValidSouthAfricanID(saIdNumber)) {
-        return res.status(400).json({ message: "Invalid South African ID number" });
-      }
+      if (!saIdNumber) return res.status(400).json({ message: "saIdNumber is required for SouthAfrican" });
+      if (!isValidSouthAfricanID(saIdNumber)) return res.status(400).json({ message: "Invalid South African ID number" });
     }
 
     if (nationalityType === "ForeignNational") {
@@ -562,11 +536,9 @@ router.post("/register", async (req, res) => {
       }
     }
 
-    // ✅ dashboard-controlled allowed types/categories
     const { allowedTowTruckTypes, allowedMechanicCategories } =
       await getAllowedProviderTypesFromPricingConfig();
 
-    // ✅ Tow truck onboarding validation
     let normalizedTowTypes = [];
     if (role === USER_ROLES.TOW_TRUCK) {
       normalizedTowTypes = normalizeTowTruckTypes(towTruckTypes);
@@ -586,7 +558,6 @@ router.post("/register", async (req, res) => {
       }
     }
 
-    // ✅ Mechanic onboarding validation
     let normalizedMechCats = [];
     if (role === USER_ROLES.MECHANIC) {
       normalizedMechCats = normalizeMechanicCategories(mechanicCategories);
@@ -606,7 +577,6 @@ router.post("/register", async (req, res) => {
       }
     }
 
-    // ✅ Uniqueness checks should consider normalized candidates (multi-country)
     const phoneCandidates = buildPhoneCandidates(normalizedPhone, dialingCode);
 
     const existingEmail = await User.findOne({ email });
@@ -625,16 +595,12 @@ router.post("/register", async (req, res) => {
       email,
       password,
       birthday,
-
       countryCode: requestCountryCode,
-
       nationalityType,
       saIdNumber: nationalityType === "SouthAfrican" ? saIdNumber : null,
       passportNumber: nationalityType === "ForeignNational" ? passportNumber : null,
       country: nationalityType === "ForeignNational" ? country : null,
-
       role,
-
       providerProfile:
         role !== USER_ROLES.CUSTOMER
           ? {
@@ -686,13 +652,9 @@ router.post("/login", async (req, res) => {
 
     const otpCode = await generateAndSaveOtp(user, { minutes: 10 });
 
-    // ✅ show OTP in Render logs when debug enabled
     const debugEnabled = String(process.env.ENABLE_OTP_DEBUG).toLowerCase() === "true";
-    if (debugEnabled) {
-      console.log(`🟧 OTP_DEBUG (LOGIN) → userPhone=${user.phone} | otp=${otpCode}`);
-    }
+    if (debugEnabled) console.log(`🟧 OTP_DEBUG (LOGIN) → userPhone=${user.phone} | otp=${otpCode}`);
 
-    // use user's stored countryCode when sending sms formatting (safer)
     const userDialingCode = await getDialingCodeForCountry(user.countryCode || requestCountryCode);
 
     try {
@@ -745,11 +707,9 @@ router.post("/verify-otp", async (req, res) => {
       return res.status(401).json({ message: "OTP expired" });
     }
 
-    // ✅ clear OTP
     user.otpCode = null;
     user.otpExpiresAt = null;
 
-    // ✅ SINGLE DEVICE ENFORCEMENT: Only for providers (TowTruck/Mechanic)
     let sessionId = null;
 
     if (isProviderRole(user.role)) {
@@ -766,7 +726,6 @@ router.post("/verify-otp", async (req, res) => {
       sessionId = crypto.randomBytes(24).toString("hex");
       user.providerProfile.sessionId = sessionId;
       user.providerProfile.sessionIssuedAt = new Date();
-
       user.providerProfile.isOnline = false;
     }
 
@@ -803,8 +762,6 @@ router.post("/verify-otp", async (req, res) => {
  */
 router.post("/country/send-otp", async (req, res) => {
   try {
-    cleanupExpiredCountryOtps();
-
     const { phone } = req.body || {};
     const normalizedPhone = normalizePhone(phone);
 
@@ -818,19 +775,28 @@ router.post("/country/send-otp", async (req, res) => {
     const otpCode = generateCountryOtpCode(normalizedPhone);
     const expiresAt = new Date(Date.now() + COUNTRY_OTP_TTL_MINUTES * 60 * 1000);
 
-    // store against multiple candidates so verify can match whatever format comes back
     const phoneCandidates = buildPhoneCandidates(normalizedPhone, dialingCode);
-    for (const cand of phoneCandidates) {
-      const key = buildCountryOtpKey(String(cand), requestCountryCode);
-      countryOtpStore.set(key, {
-        otp: otpCode,
-        expiresAt,
-        countryCode: requestCountryCode,
-        phoneNormalized: normalizedPhone,
-      });
-    }
+    const keys = phoneCandidates.map((cand) => buildCountryOtpKey(String(cand), requestCountryCode));
 
-    // ✅ show OTP in Render logs when debug enabled
+    // Upsert all candidate keys so verify can match any format
+    await Promise.all(
+      keys.map((key) =>
+        CountryOtp.updateOne(
+          { key },
+          {
+            $set: {
+              key,
+              countryCode: requestCountryCode,
+              phoneNormalized: normalizedPhone,
+              otp: String(otpCode),
+              expiresAt,
+            },
+          },
+          { upsert: true }
+        )
+      )
+    );
+
     const debugEnabled = String(process.env.ENABLE_OTP_DEBUG).toLowerCase() === "true";
     if (debugEnabled) {
       console.log(
@@ -838,7 +804,6 @@ router.post("/country/send-otp", async (req, res) => {
       );
     }
 
-    // send SMS (or skip if static)
     const smsDialingCode = dialingCode || DIALING_CODE_FALLBACK[requestCountryCode] || null;
     try {
       await sendOtpSms(normalizedPhone, otpCode, "COUNTRY", smsDialingCode);
@@ -869,8 +834,6 @@ router.post("/country/send-otp", async (req, res) => {
  */
 router.post("/country/verify-otp", async (req, res) => {
   try {
-    cleanupExpiredCountryOtps();
-
     const { phone, otp } = req.body || {};
     const normalizedPhone = normalizePhone(phone);
 
@@ -882,18 +845,17 @@ router.post("/country/verify-otp", async (req, res) => {
     const dialingCode = await getDialingCodeForCountry(requestCountryCode);
 
     const phoneCandidates = buildPhoneCandidates(normalizedPhone, dialingCode);
-    const hit = findCountryOtpRecordByCandidates(phoneCandidates, requestCountryCode);
+    const keys = phoneCandidates.map((cand) => buildCountryOtpKey(String(cand), requestCountryCode));
 
-    if (!hit || !hit.rec) {
+    const rec = await CountryOtp.findOne({ key: { $in: keys } }).select("otp expiresAt key");
+    if (!rec) {
       return res.status(404).json({
         message: "No OTP request found for this phone. Please request OTP again.",
       });
     }
 
-    const { key, rec } = hit;
-
     if (!rec.expiresAt || rec.expiresAt < new Date()) {
-      countryOtpStore.delete(key);
+      await CountryOtp.deleteMany({ key: { $in: keys } });
       return res.status(401).json({ message: "OTP expired" });
     }
 
@@ -902,9 +864,7 @@ router.post("/country/verify-otp", async (req, res) => {
     }
 
     // ✅ success: delete all variants for this phone+country (clean)
-    for (const cand of phoneCandidates) {
-      countryOtpStore.delete(buildCountryOtpKey(String(cand), requestCountryCode));
-    }
+    await CountryOtp.deleteMany({ key: { $in: keys } });
 
     return res.status(200).json({
       message: "Country confirmed ✅",
@@ -946,9 +906,7 @@ router.post("/forgot-password", async (req, res) => {
     const otpCode = await generateAndSaveOtp(user, { minutes: 10 });
 
     const debugEnabled = String(process.env.ENABLE_OTP_DEBUG).toLowerCase() === "true";
-    if (debugEnabled) {
-      console.log(`🟧 OTP_DEBUG (FORGOT) → userPhone=${user.phone} | otp=${otpCode}`);
-    }
+    if (debugEnabled) console.log(`🟧 OTP_DEBUG (FORGOT) → userPhone=${user.phone} | otp=${otpCode}`);
 
     const userDialingCode = await getDialingCodeForCountry(user.countryCode || requestCountryCode);
 
@@ -1027,18 +985,12 @@ router.get("/me", auth, async (req, res) => {
 
     const safe = typeof user.toSafeJSON === "function" ? user.toSafeJSON(user.role) : user;
 
-    if (safe && safe.countryCode == null && safe.country) {
-      safe.countryCode = safe.country;
-    }
-
+    if (safe && safe.countryCode == null && safe.country) safe.countryCode = safe.country;
     if (safe && !safe.permissions) safe.permissions = {};
 
     return res.status(200).json({ user: safe });
   } catch (err) {
-    return res.status(500).json({
-      message: "Could not fetch profile",
-      error: err.message,
-    });
+    return res.status(500).json({ message: "Could not fetch profile", error: err.message });
   }
 });
 
@@ -1049,7 +1001,6 @@ router.get("/me", auth, async (req, res) => {
 router.patch("/me", auth, async (req, res) => {
   try {
     const userId = req.user?._id;
-
     const { phone, email, password } = req.body || {};
 
     const updates = {};
@@ -1057,15 +1008,10 @@ router.patch("/me", auth, async (req, res) => {
     if (typeof email === "string" && email.trim()) updates.email = email.trim().toLowerCase();
     if (typeof password === "string" && password.trim()) updates.password = password.trim();
 
-    if (Object.keys(updates).length === 0) {
-      return res.status(400).json({ message: "Nothing to update" });
-    }
+    if (Object.keys(updates).length === 0) return res.status(400).json({ message: "Nothing to update" });
 
     if (updates.email) {
-      const existingEmail = await User.findOne({
-        email: updates.email,
-        _id: { $ne: userId },
-      });
+      const existingEmail = await User.findOne({ email: updates.email, _id: { $ne: userId } });
       if (existingEmail) return res.status(409).json({ message: "Email already registered" });
     }
 
@@ -1074,10 +1020,7 @@ router.patch("/me", auth, async (req, res) => {
       const dialingCode = await getDialingCodeForCountry(currentUser?.countryCode || "ZA");
       const candidates = buildPhoneCandidates(updates.phone, dialingCode);
 
-      const existingPhone = await User.findOne({
-        phone: { $in: candidates },
-        _id: { $ne: userId },
-      });
+      const existingPhone = await User.findOne({ phone: { $in: candidates }, _id: { $ne: userId } });
       if (existingPhone) return res.status(409).json({ message: "Phone number already registered" });
     }
 
@@ -1098,15 +1041,9 @@ router.patch("/me", auth, async (req, res) => {
     if (safe && !safe.permissions) safe.permissions = {};
     if (safe && safe.countryCode == null && safe.country) safe.countryCode = safe.country;
 
-    return res.status(200).json({
-      message: "Profile updated ✅",
-      user: safe,
-    });
+    return res.status(200).json({ message: "Profile updated ✅", user: safe });
   } catch (err) {
-    return res.status(500).json({
-      message: "Update failed",
-      error: err.message,
-    });
+    return res.status(500).json({ message: "Update failed", error: err.message });
   }
 });
 
@@ -1129,7 +1066,6 @@ router.post("/logout", auth, async (req, res) => {
       if (!user.providerProfile) user.providerProfile = {};
       user.providerProfile.fcmToken = null;
       user.providerProfile.isOnline = false;
-
       user.providerProfile.sessionId = null;
       user.providerProfile.sessionIssuedAt = null;
     }
@@ -1146,10 +1082,7 @@ router.post("/logout", auth, async (req, res) => {
     });
   } catch (err) {
     console.error("❌ LOGOUT ERROR:", err);
-    return res.status(500).json({
-      message: "Logout failed",
-      error: err.message,
-    });
+    return res.status(500).json({ message: "Logout failed", error: err.message });
   }
 });
 
