@@ -94,6 +94,26 @@ const jobSchema = new mongoose.Schema(
     vehicleType: { type: String, default: null },
 
     /**
+     * ✅ Insurance (NEW)
+     * Stores code used to waive booking fee + for monthly invoicing
+     */
+    insurance: {
+      _id: false,
+
+      enabled: { type: Boolean, default: false },
+
+      code: { type: String, default: null, trim: true },
+
+      partnerId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "InsurancePartner",
+        default: null,
+      },
+
+      validatedAt: { type: Date, default: null },
+    },
+
+    /**
      * ✅ Pricing block
      */
     pricing: {

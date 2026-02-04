@@ -18,6 +18,9 @@ import { sendJobAcceptedEmail } from "../utils/sendJobAcceptedEmail.js";
 // ✅ NEW PRICING FUNCTION
 import { calculateJobPricing } from "../utils/calculateJobPricing.js";
 
+// ✅ INSURANCE SERVICES
+import { validateInsuranceCode, markInsuranceCodeUsed } from "../services/insurance/codeService.js";
+
 const router = express.Router();
 
 function resolveReqCountryCode(req) {
@@ -85,7 +88,7 @@ async function enforceServiceEnabledOrThrow({ countryCode, roleNeeded }) {
     };
   }
 
-  return { ok: true };
+  return { ok: true, services };
 }
 
 const CUSTOMER_BLOCK_STATUSES = [
@@ -181,6 +184,86 @@ function haversineDistanceMeters(lat1, lng1, lat2, lng2) {
 }
 
 /**
+ * Helper: validate insurance payload (if present) and return waiver decision
+ */
+async function resolveInsuranceWaiver({
+  req,
+  requestCountryCode,
+  services,
+}) {
+  const insurance = req.body?.insurance || null;
+
+  // If app did not send insurance object -> no waiver
+  if (!insurance || typeof insurance !== "object") {
+    return { waived: false };
+  }
+
+  const enabledInCountry = Boolean(services?.insuranceEnabled);
+
+  // If country doesn't allow insurance but app sent it -> block
+  if (!enabledInCountry) {
+    return {
+      waived: false,
+      error: {
+        status: 403,
+        body: {
+          message: "Insurance service is disabled in this country.",
+          code: "SERVICE_DISABLED",
+          countryCode: requestCountryCode,
+        },
+      },
+    };
+  }
+
+  const insuranceEnabled = Boolean(insurance.enabled);
+  const code = String(insurance.code || "").trim();
+  const partnerId = insurance.partnerId ? String(insurance.partnerId).trim() : null;
+
+  if (!insuranceEnabled) return { waived: false };
+
+  if (!code) {
+    return {
+      waived: false,
+      error: {
+        status: 400,
+        body: { message: "Insurance code required", code: "INSURANCE_CODE_REQUIRED" },
+      },
+    };
+  }
+
+  // Validate code using existing service
+  const validation = await validateInsuranceCode({
+    partnerId,
+    code,
+    phone: req.user?.phone || null,
+    email: req.user?.email || null,
+    countryCode: requestCountryCode,
+  });
+
+  if (!validation?.ok) {
+    return {
+      waived: false,
+      error: {
+        status: 400,
+        body: {
+          message: validation?.message || "Invalid insurance code",
+          code: validation?.code || "INSURANCE_INVALID",
+          ...validation,
+        },
+      },
+    };
+  }
+
+  return {
+    waived: true,
+    code,
+    partnerId: partnerId || validation?.partnerId || null,
+    partner: validation?.partner || null,
+    validation,
+  };
+}
+
+/**
  * ✅ PREVIEW JOB
  * POST /api/jobs/preview
  */
@@ -271,6 +354,21 @@ router.post("/preview", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, r
 
     const countryCurrency = await getCountryCurrency(requestCountryCode);
 
+    // ===========================
+    // ✅ Insurance waiver (PREVIEW)
+    // ===========================
+    const waiver = await resolveInsuranceWaiver({
+      req,
+      requestCountryCode,
+      services: serviceGate.services,
+    });
+
+    if (waiver?.error) {
+      return res.status(waiver.error.status).json(waiver.error.body);
+    }
+
+    const forceBookingFeeZero = waiver.waived === true;
+
     // ✅ MECHANIC PREVIEW
     if (roleNeeded === USER_ROLES.MECHANIC) {
       const pricing = await calculateJobPricing({
@@ -286,8 +384,10 @@ router.post("/preview", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, r
         countryCode: requestCountryCode,
       });
 
-      // currency safety
       if (!pricing.currency) pricing.currency = countryCurrency;
+
+      // insurance override
+      if (forceBookingFeeZero) pricing.bookingFee = 0;
 
       const providers = await findNearbyProviders({
         roleNeeded,
@@ -306,12 +406,21 @@ router.post("/preview", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, r
         providerCount: providers.length,
         message:
           providers.length > 0
-            ? "Mechanics found ✅ Please pay booking fee to proceed"
+            ? forceBookingFeeZero
+              ? "Mechanics found ✅ Insurance accepted. Booking fee waived."
+              : "Mechanics found ✅ Please pay booking fee to proceed"
             : "No mechanics online within range. Booking fee not required.",
         disclaimer: {
           mechanicFinalFeeNotPredetermined: true,
           text: MECHANIC_FINAL_FEE_DISCLAIMER,
         },
+        insurance: forceBookingFeeZero
+          ? {
+              applied: true,
+              code: waiver.code,
+              partnerId: waiver.partnerId || null,
+            }
+          : { applied: false },
         preview: {
           currency: pricing.currency,
           bookingFee: pricing.bookingFee,
@@ -339,6 +448,8 @@ router.post("/preview", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, r
 
       if (!pricing.currency) pricing.currency = countryCurrency;
 
+      if (forceBookingFeeZero) pricing.bookingFee = 0;
+
       const providers = await findNearbyProviders({
         roleNeeded,
         pickupLng,
@@ -355,8 +466,17 @@ router.post("/preview", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, r
         providerCount: providers.length,
         message:
           providers.length > 0
-            ? "Providers found ✅ Please pay booking fee to proceed"
+            ? forceBookingFeeZero
+              ? "Providers found ✅ Insurance accepted. Booking fee waived."
+              : "Providers found ✅ Please pay booking fee to proceed"
             : "No providers online within range. Booking fee not required.",
+        insurance: forceBookingFeeZero
+          ? {
+              applied: true,
+              code: waiver.code,
+              partnerId: waiver.partnerId || null,
+            }
+          : { applied: false },
         preview: pricing,
       });
     }
@@ -380,6 +500,7 @@ router.post("/preview", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, r
       });
 
       if (!pricing.currency) pricing.currency = countryCurrency;
+      if (forceBookingFeeZero) pricing.bookingFee = 0;
 
       const providersForType = await findNearbyProviders({
         roleNeeded,
@@ -422,6 +543,13 @@ router.post("/preview", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, r
         providers.length > 0
           ? "Providers found ✅ Please select tow truck type"
           : "No providers online within range.",
+      insurance: forceBookingFeeZero
+        ? {
+            applied: true,
+            code: waiver.code,
+            partnerId: waiver.partnerId || null,
+          }
+        : { applied: false },
       preview: {
         currency: countryCurrency,
         distanceKm,
@@ -520,6 +648,21 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
       }
     }
 
+    // ===========================
+    // ✅ Insurance waiver (CREATE)
+    // ===========================
+    const waiver = await resolveInsuranceWaiver({
+      req,
+      requestCountryCode,
+      services: serviceGate.services,
+    });
+
+    if (waiver?.error) {
+      return res.status(waiver.error.status).json(waiver.error.body);
+    }
+
+    const insuranceWaived = waiver.waived === true;
+
     const normalizedTowTruckTypeNeeded = towTruckTypeNeeded
       ? normalizeTowTruckType(towTruckTypeNeeded)
       : null;
@@ -565,6 +708,9 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
     // currency safety
     if (!pricing.currency) pricing.currency = await getCountryCurrency(requestCountryCode);
 
+    // ✅ Insurance override booking fee
+    if (insuranceWaived) pricing.bookingFee = 0;
+
     const hasDropoff =
       roleNeeded === USER_ROLES.TOW_TRUCK && dropoffLat !== undefined && dropoffLng !== undefined;
 
@@ -575,6 +721,10 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
       roleNeeded === USER_ROLES.MECHANIC
         ? { ...pricing, estimatedTotal: 0, estimatedDistanceKm: 0 }
         : pricing;
+
+    // Decide booking fee status
+    const bookingFeeStatus = insuranceWaived ? "PAID" : "PENDING";
+    const bookingFeePaidAt = insuranceWaived ? new Date() : null;
 
     const job = await Job.create({
       title,
@@ -597,6 +747,21 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
       status: JOB_STATUSES.CREATED,
       paymentMode,
 
+      // ✅ store insurance audit info
+      insurance: insuranceWaived
+        ? {
+            enabled: true,
+            code: waiver.code,
+            partnerId: waiver.partnerId || null,
+            validatedAt: new Date(),
+          }
+        : {
+            enabled: false,
+            code: null,
+            partnerId: null,
+            validatedAt: null,
+          },
+
       disclaimers:
         roleNeeded === USER_ROLES.MECHANIC
           ? { mechanicFinalFeeNotPredetermined: true, text: MECHANIC_FINAL_FEE_DISCLAIMER }
@@ -604,27 +769,62 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
 
       pricing: {
         ...safePricing,
-        bookingFeeStatus: "PENDING",
-        bookingFeePaidAt: null,
+        bookingFeeStatus,
+        bookingFeePaidAt,
         bookingFeeRefundedAt: null,
       },
     });
 
-    const payment = await Payment.create({
-      job: job._id,
-      customer: req.user._id,
-      amount: safePricing.bookingFee,
-      currency: safePricing.currency,
-      status: PAYMENT_STATUSES.PENDING,
-      provider: "SIMULATION",
-    });
+    // ✅ Mark insurance code used ONLY AFTER job is created successfully
+    if (insuranceWaived) {
+      try {
+        await markInsuranceCodeUsed({
+          partnerId: waiver.partnerId,
+          code: waiver.code,
+          countryCode: requestCountryCode,
+          userId: req.user?._id || null,
+          jobId: job._id, // harmless if service ignores
+        });
+      } catch (err) {
+        // If code usage fails, rollback job (safer than free job)
+        await Job.findByIdAndDelete(job._id);
+        return res.status(500).json({
+          message: "Insurance code could not be locked. Try again.",
+          code: "INSURANCE_LOCK_FAILED",
+          error: err.message,
+        });
+      }
+    }
+
+    // ✅ Payment record only if booking fee > 0
+    let payment = null;
+
+    if (Number(safePricing.bookingFee) > 0) {
+      payment = await Payment.create({
+        job: job._id,
+        customer: req.user._id,
+        amount: safePricing.bookingFee,
+        currency: safePricing.currency,
+        status: PAYMENT_STATUSES.PENDING,
+        provider: "SIMULATION",
+      });
+    }
 
     return res.status(201).json({
-      message: `Job created ✅ Providers found: ${providers.length}. Booking fee required.`,
+      message: insuranceWaived
+        ? `Job created ✅ Providers found: ${providers.length}. Insurance applied — booking fee waived.`
+        : `Job created ✅ Providers found: ${providers.length}. Booking fee required.`,
       disclaimer:
         roleNeeded === USER_ROLES.MECHANIC
           ? { mechanicFinalFeeNotPredetermined: true, text: MECHANIC_FINAL_FEE_DISCLAIMER }
           : null,
+      insurance: insuranceWaived
+        ? {
+            applied: true,
+            code: waiver.code,
+            partnerId: waiver.partnerId || null,
+          }
+        : { applied: false },
       job,
       payment,
     });

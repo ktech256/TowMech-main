@@ -33,10 +33,13 @@ function resolveReqCountryCode(req) {
 async function insuranceEnabledOr403(req, res, next) {
   try {
     const cc = resolveReqCountryCode(req);
-    const cfg = await CountryServiceConfig.findOne({ countryCode: cc }).select("services.insuranceEnabled").lean();
-    const enabled = typeof cfg?.services?.insuranceEnabled === "boolean" ? cfg.services.insuranceEnabled : false;
+    const cfg = await CountryServiceConfig.findOne({ countryCode: cc })
+      .select("services.insuranceEnabled")
+      .lean();
 
-    // If no config exists yet, insurance defaults to false (safer)
+    const enabled =
+      typeof cfg?.services?.insuranceEnabled === "boolean" ? cfg.services.insuranceEnabled : false;
+
     if (!enabled) {
       return res.status(403).json({
         message: "Insurance service is disabled in this country.",
@@ -45,6 +48,7 @@ async function insuranceEnabledOr403(req, res, next) {
       });
     }
 
+    req.countryCode = cc;
     return next();
   } catch (err) {
     return res.status(500).json({ message: "Service check failed", error: err.message });
@@ -107,7 +111,19 @@ router.get("/partners", insuranceEnabledOr403, async (req, res) => {
 router.post("/validate-code", insuranceEnabledOr403, async (req, res) => {
   try {
     const countryCode = resolveReqCountryCode(req);
-    const { partnerId, code, phone, email } = req.body || {};
+    const partnerId = req.body?.partnerId ? String(req.body.partnerId).trim() : null;
+    const code = String(req.body?.code || "").trim();
+    const phone = req.body?.phone ? String(req.body.phone).trim() : null;
+    const email = req.body?.email ? String(req.body.email).trim() : null;
+
+    if (!code) {
+      return res.status(400).json({
+        ok: false,
+        message: "Insurance code is required",
+        code: "INSURANCE_CODE_REQUIRED",
+        countryCode,
+      });
+    }
 
     const result = await validateInsuranceCode({
       partnerId,
@@ -119,7 +135,7 @@ router.post("/validate-code", insuranceEnabledOr403, async (req, res) => {
 
     if (!result.ok) return res.status(400).json(result);
 
-    return res.status(200).json(result);
+    return res.status(200).json({ ...result, countryCode });
   } catch (err) {
     return res.status(500).json({ message: "Validation failed", error: err.message });
   }
