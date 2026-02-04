@@ -1,19 +1,34 @@
-// src/models/InsurancePartner.js
+// backend/src/models/InsurancePartner.js
 import mongoose from "mongoose";
 
 /**
  * InsurancePartner
- * - Used when customer selects "Insurance" as payment option
- * - Each partner has:
- *    - name + code
- *    - allowed countries
- *    - status (active/inactive)
- *    - billing rules (monthly invoice)
- *    - contact info
+ * - Dashboard creates partners (Option A: partnerCode field)
+ * - Backend historically used `code`
+ * - We now support BOTH:
+ *    partnerCode <-> code (kept in sync)
  */
 const InsurancePartnerSchema = new mongoose.Schema(
   {
-    // Unique short code used internally (e.g. "OUTSURANCE", "AAKENYA")
+    /**
+     * ✅ NEW (Option A)
+     * The dashboard sends partnerCode (e.g. ABC, OUTSURANCE, DISCOVERY)
+     * This is the primary identifier for reporting and code generation.
+     */
+    partnerCode: {
+      type: String,
+      required: true,
+      trim: true,
+      uppercase: true,
+      unique: true,
+      index: true,
+    },
+
+    /**
+     * ✅ Legacy field (older systems)
+     * Still kept for compatibility.
+     * Will be auto-filled from partnerCode if missing.
+     */
     code: {
       type: String,
       required: true,
@@ -23,7 +38,7 @@ const InsurancePartnerSchema = new mongoose.Schema(
       index: true,
     },
 
-    // Display name shown in app dropdown
+    // Display name shown in app/dashboard
     name: {
       type: String,
       required: true,
@@ -35,6 +50,18 @@ const InsurancePartnerSchema = new mongoose.Schema(
       type: String,
       default: "",
       trim: true,
+    },
+
+    /**
+     * ✅ Legacy single-country field (optional)
+     * Kept for compatibility with older dashboard calls.
+     */
+    countryCode: {
+      type: String,
+      default: null,
+      trim: true,
+      uppercase: true,
+      index: true,
     },
 
     // Which countries this insurance is available in (multi-country routing)
@@ -93,6 +120,14 @@ const InsurancePartnerSchema = new mongoose.Schema(
     },
 
     /**
+     * ✅ Additional flat fields (dashboard legacy)
+     * These are NOT required, but we support them and sync into contact.*
+     */
+    contactEmail: { type: String, default: null, trim: true, lowercase: true },
+    contactPhone: { type: String, default: null, trim: true },
+    billingEmail: { type: String, default: null, trim: true, lowercase: true },
+
+    /**
      * Partner settings
      */
     settings: {
@@ -126,10 +161,71 @@ const InsurancePartnerSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-// Safety: keep uniqueness clean
-InsurancePartnerSchema.pre("save", function (next) {
-  if (this.code) this.code = String(this.code).trim().toUpperCase();
+/**
+ * ✅ Normalize + sync compatibility fields BEFORE validation
+ * (so required fields can be auto-filled)
+ */
+InsurancePartnerSchema.pre("validate", function (next) {
+  // partnerCode <-> code
+  if (this.partnerCode) {
+    this.partnerCode = String(this.partnerCode).trim().toUpperCase();
+  }
+  if (this.code) {
+    this.code = String(this.code).trim().toUpperCase();
+  }
+
+  if (!this.partnerCode && this.code) this.partnerCode = this.code;
+  if (!this.code && this.partnerCode) this.code = this.partnerCode;
+
+  // name trim
   if (this.name) this.name = String(this.name).trim();
+
+  // country normalization
+  if (this.countryCode) this.countryCode = String(this.countryCode).trim().toUpperCase();
+
+  if (Array.isArray(this.countryCodes)) {
+    this.countryCodes = this.countryCodes
+      .map((c) => String(c).trim().toUpperCase())
+      .filter(Boolean);
+    if (this.countryCodes.length === 0) this.countryCodes = ["ZA"];
+  } else {
+    this.countryCodes = ["ZA"];
+  }
+
+  // countryCode <-> countryCodes[0]
+  if (this.countryCode && !this.countryCodes.includes(this.countryCode)) {
+    this.countryCodes = Array.from(new Set([...this.countryCodes, this.countryCode]));
+  }
+  if (!this.countryCode && this.countryCodes.length > 0) {
+    this.countryCode = this.countryCodes[0];
+  }
+
+  // contactEmail/contactPhone sync with contact.*
+  if (typeof this.contactEmail === "string" && this.contactEmail.trim()) {
+    this.contactEmail = this.contactEmail.trim().toLowerCase();
+    if (!this.contact) this.contact = {};
+    if (!this.contact.email) this.contact.email = this.contactEmail;
+  }
+
+  if (typeof this.contactPhone === "string" && this.contactPhone.trim()) {
+    this.contactPhone = this.contactPhone.trim();
+    if (!this.contact) this.contact = {};
+    if (!this.contact.phone) this.contact.phone = this.contactPhone;
+  }
+
+  // If contact.* exists but flat fields missing, populate flat fields too
+  if (this.contact?.email && !this.contactEmail) {
+    this.contactEmail = String(this.contact.email).trim().toLowerCase();
+  }
+  if (this.contact?.phone && !this.contactPhone) {
+    this.contactPhone = String(this.contact.phone).trim();
+  }
+
+  // billingEmail normalize
+  if (typeof this.billingEmail === "string" && this.billingEmail.trim()) {
+    this.billingEmail = this.billingEmail.trim().toLowerCase();
+  }
+
   next();
 });
 
