@@ -1160,4 +1160,3 @@ router.post("/rate", auth, async (req, res) => {
 });
 
 export default router;
-```0
