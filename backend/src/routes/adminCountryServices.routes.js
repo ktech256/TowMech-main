@@ -12,6 +12,30 @@ function normalizeCountryCode(v) {
 }
 
 /**
+ * ✅ Robust boolean parsing:
+ * - supports true/false
+ * - supports "true"/"false"
+ * - supports 1/0 and "1"/"0"
+ * - returns undefined if not a recognizable boolean
+ */
+function parseBool(v) {
+  if (typeof v === "boolean") return v;
+  if (typeof v === "number") {
+    if (v === 1) return true;
+    if (v === 0) return false;
+    return undefined;
+  }
+  if (typeof v === "string") {
+    const s = v.trim().toLowerCase();
+    if (s === "true") return true;
+    if (s === "false") return false;
+    if (s === "1") return true;
+    if (s === "0") return false;
+  }
+  return undefined;
+}
+
+/**
  * Accept dashboard keys in ANY of these forms:
  * - towingEnabled / mechanicEnabled / chatEnabled / ratingsEnabled / insuranceEnabled / emergencySupportEnabled
  * - towing / mechanic / chat / ratings / insurance / emergencySupport
@@ -21,28 +45,30 @@ function normalizeServicesPatch(input) {
   const src = input && typeof input === "object" ? input : {};
   const out = {};
 
-  const pickBool = (k) => (typeof src[k] === "boolean" ? src[k] : undefined);
+  const pickBool = (k) => parseBool(src[k]);
 
-  // canonical keys
+  // canonical keys (also accept legacy short names)
   const towingEnabled = pickBool("towingEnabled") ?? pickBool("towing");
   const mechanicEnabled = pickBool("mechanicEnabled") ?? pickBool("mechanic");
   const chatEnabled = pickBool("chatEnabled") ?? pickBool("chat");
   const ratingsEnabled = pickBool("ratingsEnabled") ?? pickBool("ratings");
   const insuranceEnabled = pickBool("insuranceEnabled") ?? pickBool("insurance");
-  const emergencySupportEnabled = pickBool("emergencySupportEnabled") ?? pickBool("emergencySupport");
+  const emergencySupportEnabled =
+    pickBool("emergencySupportEnabled") ?? pickBool("emergencySupport");
 
   if (typeof towingEnabled === "boolean") out.towingEnabled = towingEnabled;
   if (typeof mechanicEnabled === "boolean") out.mechanicEnabled = mechanicEnabled;
   if (typeof chatEnabled === "boolean") out.chatEnabled = chatEnabled;
   if (typeof ratingsEnabled === "boolean") out.ratingsEnabled = ratingsEnabled;
   if (typeof insuranceEnabled === "boolean") out.insuranceEnabled = insuranceEnabled;
+
   if (typeof emergencySupportEnabled === "boolean") {
     out.emergencySupportEnabled = emergencySupportEnabled;
     // legacy alias
     out.supportEnabled = emergencySupportEnabled;
   }
 
-  // extended keys (pass-through if boolean)
+  // extended keys (pass-through if boolean-like)
   const passthroughKeys = [
     "winchRecoveryEnabled",
     "roadsideAssistanceEnabled",
@@ -59,7 +85,10 @@ function normalizeServicesPatch(input) {
   }
 
   // keep alias sync if supportEnabled explicitly passed
-  if (typeof out.supportEnabled === "boolean" && typeof out.emergencySupportEnabled !== "boolean") {
+  if (
+    typeof out.supportEnabled === "boolean" &&
+    typeof out.emergencySupportEnabled !== "boolean"
+  ) {
     out.emergencySupportEnabled = out.supportEnabled;
   }
 
@@ -68,9 +97,12 @@ function normalizeServicesPatch(input) {
 
 function withDefaults(services = {}) {
   const s = services || {};
-  const emergency = typeof s.emergencySupportEnabled === "boolean"
-    ? s.emergencySupportEnabled
-    : (typeof s.supportEnabled === "boolean" ? s.supportEnabled : true);
+  const emergency =
+    typeof s.emergencySupportEnabled === "boolean"
+      ? s.emergencySupportEnabled
+      : typeof s.supportEnabled === "boolean"
+        ? s.supportEnabled
+        : true;
 
   return {
     towingEnabled: typeof s.towingEnabled === "boolean" ? s.towingEnabled : true,
@@ -82,7 +114,8 @@ function withDefaults(services = {}) {
     chatEnabled: typeof s.chatEnabled === "boolean" ? s.chatEnabled : true,
     ratingsEnabled: typeof s.ratingsEnabled === "boolean" ? s.ratingsEnabled : true,
 
-    winchRecoveryEnabled: typeof s.winchRecoveryEnabled === "boolean" ? s.winchRecoveryEnabled : false,
+    winchRecoveryEnabled:
+      typeof s.winchRecoveryEnabled === "boolean" ? s.winchRecoveryEnabled : false,
     roadsideAssistanceEnabled:
       typeof s.roadsideAssistanceEnabled === "boolean" ? s.roadsideAssistanceEnabled : false,
     jumpStartEnabled: typeof s.jumpStartEnabled === "boolean" ? s.jumpStartEnabled : false,
@@ -121,7 +154,11 @@ router.get(
 
 /**
  * PUT /api/admin/country-services
- * body: { countryCode, services }
+ *
+ * ✅ Accepts payload in multiple safe shapes (to avoid UI mismatch bugs):
+ * - { countryCode, services }
+ * - { countryCode, config: { services } }
+ * - { config: { countryCode, services } }
  */
 router.put(
   "/",
@@ -129,18 +166,36 @@ router.put(
   authorizeRoles(USER_ROLES.ADMIN, USER_ROLES.SUPER_ADMIN),
   async (req, res) => {
     try {
-      const { countryCode, services } = req.body || {};
-      const cc = normalizeCountryCode(countryCode);
+      const body = req.body || {};
+
+      // ✅ accept multiple shapes (prevents "saved but unchanged" when frontend wraps payload)
+      const cc = normalizeCountryCode(
+        body.countryCode ?? body?.config?.countryCode ?? body?.services?.countryCode
+      );
+
+      const services =
+        body.services ??
+        body?.config?.services ??
+        body?.config?.data?.services ??
+        null;
 
       if (!services || typeof services !== "object") {
-        return res.status(400).json({ message: "services object is required" });
+        return res.status(400).json({
+          message:
+            "services object is required (expected { countryCode, services } or { config: { countryCode, services } })",
+        });
       }
 
       // ✅ merge patch into existing to avoid wiping unknown flags
       const existing = await CountryServiceConfig.findOne({ countryCode: cc }).lean();
       const prevServices = existing?.services || {};
 
+      // ✅ IMPORTANT: parseBool() ensures false values are kept (no more 'reverting')
       const patch = normalizeServicesPatch(services);
+
+      // If patch is empty, it usually means frontend sent strings/shape mismatch.
+      // We already handle strings; shape mismatch handled above.
+      // Still keep safe behavior: do not wipe existing.
       const merged = withDefaults({ ...prevServices, ...patch });
 
       const config = await CountryServiceConfig.findOneAndUpdate(
@@ -149,7 +204,10 @@ router.put(
         { new: true, upsert: true }
       ).lean();
 
-      return res.status(200).json({ message: "Saved ✅", config: { ...config, services: merged } });
+      return res.status(200).json({
+        message: "Saved ✅",
+        config: { ...config, services: merged },
+      });
     } catch (err) {
       return res.status(500).json({ message: "Save failed", error: err.message });
     }
