@@ -438,8 +438,7 @@ const CountryOtpSchema = new mongoose.Schema(
 // TTL index (Mongo will delete after expiresAt passes)
 CountryOtpSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 
-const CountryOtp =
-  mongoose.models.CountryOtp || mongoose.model("CountryOtp", CountryOtpSchema);
+const CountryOtp = mongoose.models.CountryOtp || mongoose.model("CountryOtp", CountryOtpSchema);
 
 function buildCountryOtpKey(phoneCandidate, countryCode) {
   return `${String(countryCode || "ZA").toUpperCase()}::${String(phoneCandidate || "").trim()}`;
@@ -452,32 +451,72 @@ function generateCountryOtpCode(phone) {
 
 /**
  * ✅ =========================================
- * ✅ NEW: CHECK IF PHONE EXISTS (PUBLIC)
+ * ✅ FIX: CHECK IF PHONE EXISTS (PUBLIC) ✅
  * ✅ =========================================
- * POST /api/auth/phone-exists
- * body: { phone: "+27..." }
- * returns: { exists: true/false }
+ * Your Android calls: POST /api/auth/check-phone
+ * So we MUST expose /check-phone (not /phone-exists), otherwise it throws and routes wrong.
+ *
+ * body: { phone: "+27...", countryCode: "ZA" }
+ * returns: { exists: boolean, role?: string, countryCode?: string }
  */
-router.post("/phone-exists", async (req, res) => {
+router.post("/check-phone", async (req, res) => {
   try {
-    const { phone } = req.body || {};
+    const { phone, countryCode } = req.body || {};
     const normalizedPhone = normalizePhone(phone);
 
     if (!normalizedPhone) {
       return res.status(400).json({ message: "phone is required", exists: false });
     }
 
-    const requestCountryCode = resolveReqCountryCode(req);
-    const dialingCode = await getDialingCodeForCountry(requestCountryCode);
+    const requestCountryCode = (countryCode || resolveReqCountryCode(req))
+      .toString()
+      .trim()
+      .toUpperCase();
 
+    const dialingCode = await getDialingCodeForCountry(requestCountryCode);
     const phoneCandidates = buildPhoneCandidates(normalizedPhone, dialingCode);
 
-    const user = await User.findOne({ phone: { $in: phoneCandidates } }).select("_id phone role");
+    const user = await User.findOne({ phone: { $in: phoneCandidates } }).select("_id phone role countryCode");
 
     return res.status(200).json({
       exists: !!user,
-      // optional extra info (safe, does not expose sensitive)
       role: user?.role || null,
+      countryCode: user?.countryCode || requestCountryCode,
+    });
+  } catch (err) {
+    console.error("❌ CHECK PHONE ERROR:", err.message);
+    return res.status(500).json({ message: "Check phone failed", error: err.message, exists: false });
+  }
+});
+
+/**
+ * ✅ (Optional) Backward compatibility:
+ * Keep old endpoint name if any older apps call it.
+ * POST /api/auth/phone-exists
+ */
+router.post("/phone-exists", async (req, res) => {
+  try {
+    const { phone, countryCode } = req.body || {};
+    const normalizedPhone = normalizePhone(phone);
+
+    if (!normalizedPhone) {
+      return res.status(400).json({ message: "phone is required", exists: false });
+    }
+
+    const requestCountryCode = (countryCode || resolveReqCountryCode(req))
+      .toString()
+      .trim()
+      .toUpperCase();
+
+    const dialingCode = await getDialingCodeForCountry(requestCountryCode);
+    const phoneCandidates = buildPhoneCandidates(normalizedPhone, dialingCode);
+
+    const user = await User.findOne({ phone: { $in: phoneCandidates } }).select("_id role countryCode");
+
+    return res.status(200).json({
+      exists: !!user,
+      role: user?.role || null,
+      countryCode: user?.countryCode || requestCountryCode,
     });
   } catch (err) {
     console.error("❌ PHONE EXISTS ERROR:", err.message);
@@ -554,8 +593,10 @@ router.post("/register", async (req, res) => {
     }
 
     if (nationalityType === "SouthAfrican") {
-      if (!saIdNumber) return res.status(400).json({ message: "saIdNumber is required for SouthAfrican" });
-      if (!isValidSouthAfricanID(saIdNumber)) return res.status(400).json({ message: "Invalid South African ID number" });
+      if (!saIdNumber)
+        return res.status(400).json({ message: "saIdNumber is required for SouthAfrican" });
+      if (!isValidSouthAfricanID(saIdNumber))
+        return res.status(400).json({ message: "Invalid South African ID number" });
     }
 
     if (nationalityType === "ForeignNational") {
