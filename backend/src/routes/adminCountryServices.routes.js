@@ -47,7 +47,7 @@ function normalizeServicesPatch(input) {
 
   const pickBool = (k) => parseBool(src[k]);
 
-  // canonical keys (also accept legacy short names)
+  // canonical keys
   const towingEnabled = pickBool("towingEnabled") ?? pickBool("towing");
   const mechanicEnabled = pickBool("mechanicEnabled") ?? pickBool("mechanic");
   const chatEnabled = pickBool("chatEnabled") ?? pickBool("chat");
@@ -126,6 +126,41 @@ function withDefaults(services = {}) {
 }
 
 /**
+ * ✅ Helper: dashboard might send:
+ * - services: { towingEnabled: false }
+ * OR
+ * - services: { services: { towingEnabled: false }, payments: {...} }
+ *
+ * This returns the actual FLAGS OBJECT.
+ */
+function unwrapServicesFlags(services) {
+  if (!services || typeof services !== "object") return null;
+
+  // If nested (services.services), use that inner object as the flags.
+  if (services.services && typeof services.services === "object") {
+    return services.services;
+  }
+
+  // Otherwise assume services is already the flags object.
+  return services;
+}
+
+/**
+ * ✅ Helper: payments may be sent as:
+ * - body.payments
+ * - body.config.payments
+ * - body.services.payments   (when services is a wrapper object)
+ */
+function unwrapPayments(body, servicesWrapper) {
+  const fromRoot = body?.payments;
+  const fromConfig = body?.config?.payments;
+  const fromWrapper = servicesWrapper?.payments;
+
+  const candidate = fromRoot ?? fromConfig ?? fromWrapper ?? null;
+  return candidate && typeof candidate === "object" ? candidate : null;
+}
+
+/**
  * GET /api/admin/country-services/:countryCode
  */
 router.get(
@@ -155,8 +190,9 @@ router.get(
 /**
  * PUT /api/admin/country-services
  *
- * ✅ Accepts payload in multiple safe shapes (to avoid UI mismatch bugs):
- * - { countryCode, services }
+ * ✅ Accepts payload in multiple safe shapes:
+ * - { countryCode, services }                              // services = flags
+ * - { countryCode, services: { services: flags, payments } } // services = wrapper
  * - { countryCode, config: { services } }
  * - { config: { countryCode, services } }
  */
@@ -168,45 +204,70 @@ router.put(
     try {
       const body = req.body || {};
 
-      // ✅ accept multiple shapes (prevents "saved but unchanged" when frontend wraps payload)
       const cc = normalizeCountryCode(
         body.countryCode ?? body?.config?.countryCode ?? body?.services?.countryCode
       );
 
-      const services =
+      // raw "services" value (might be flags OR wrapper)
+      const rawServices =
         body.services ??
         body?.config?.services ??
         body?.config?.data?.services ??
         null;
 
-      if (!services || typeof services !== "object") {
+      if (!rawServices || typeof rawServices !== "object") {
         return res.status(400).json({
           message:
-            "services object is required (expected { countryCode, services } or { config: { countryCode, services } })",
+            "services object is required (expected { countryCode, services } or { countryCode, services: { services: {..flags} } })",
         });
       }
+
+      // ✅ unwrap actual flags object no matter which shape the dashboard sent
+      const flagsObj = unwrapServicesFlags(rawServices);
+
+      if (!flagsObj || typeof flagsObj !== "object") {
+        return res.status(400).json({
+          message:
+            "services flags object is missing (expected services as flags OR services.services as flags)",
+        });
+      }
+
+      // ✅ also accept payments updates if dashboard sends them (safe, optional)
+      const paymentsObj = unwrapPayments(body, rawServices);
 
       // ✅ merge patch into existing to avoid wiping unknown flags
       const existing = await CountryServiceConfig.findOne({ countryCode: cc }).lean();
       const prevServices = existing?.services || {};
+      const prevPayments = existing?.payments || {};
 
-      // ✅ IMPORTANT: parseBool() ensures false values are kept (no more 'reverting')
-      const patch = normalizeServicesPatch(services);
+      // ✅ IMPORTANT: parseBool ensures false values are kept
+      const patch = normalizeServicesPatch(flagsObj);
+      const mergedServices = withDefaults({ ...prevServices, ...patch });
 
-      // If patch is empty, it usually means frontend sent strings/shape mismatch.
-      // We already handle strings; shape mismatch handled above.
-      // Still keep safe behavior: do not wipe existing.
-      const merged = withDefaults({ ...prevServices, ...patch });
+      // ✅ payments: merge shallowly (won't delete unknown keys)
+      const mergedPayments =
+        paymentsObj ? { ...prevPayments, ...paymentsObj } : prevPayments;
+
+      const update = {
+        services: mergedServices,
+      };
+
+      // only set payments if dashboard actually sent payments
+      if (paymentsObj) update.payments = mergedPayments;
 
       const config = await CountryServiceConfig.findOneAndUpdate(
         { countryCode: cc },
-        { $set: { services: merged } },
+        { $set: update },
         { new: true, upsert: true }
       ).lean();
 
       return res.status(200).json({
         message: "Saved ✅",
-        config: { ...config, services: merged },
+        config: {
+          ...config,
+          services: mergedServices,
+          ...(paymentsObj ? { payments: mergedPayments } : {}),
+        },
       });
     } catch (err) {
       return res.status(500).json({ message: "Save failed", error: err.message });
