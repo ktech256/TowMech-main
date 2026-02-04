@@ -1,4 +1,4 @@
-// backend/src/routes/country.routes.js
+// backend/src/routes/countries.js
 import express from "express";
 import auth from "../middleware/auth.js";
 import User, { USER_ROLES } from "../models/User.js";
@@ -19,6 +19,11 @@ function normalizeDialCode(v) {
   }
   s = s.replace(/[^\d+]/g, "");
   return /^\+\d{1,4}$/.test(s) ? s : "";
+}
+
+function normalizeCurrencyDisplay(v) {
+  const x = String(v ?? "").trim();
+  return x ? x : null;
 }
 
 /**
@@ -45,8 +50,7 @@ async function requireAdmin(req, res, next) {
 
 /**
  * ✅ PUBLIC: GET /api/countries
- * Default: active only
- * Optional: ?includeInactive=true (admin only soft-check)
+ * - Returns currencyDisplay fallback to currency
  */
 router.get("/", async (req, res) => {
   try {
@@ -68,8 +72,16 @@ router.get("/", async (req, res) => {
       }
     }
 
-    const countries = await Country.find(filter).sort({ createdAt: -1 });
-    return res.status(200).json({ countries });
+    const countries = await Country.find(filter).sort({ createdAt: -1 }).lean();
+
+    // ✅ Backward compatibility: include dialCode + currencyDisplay computed
+    const mapped = countries.map((c) => ({
+      ...c,
+      dialCode: c.dialingCode || null,
+      currencyDisplay: c.currencyDisplay || c.currency || null,
+    }));
+
+    return res.status(200).json({ countries: mapped });
   } catch (err) {
     return res.status(500).json({ message: "Failed to load countries", error: err.message });
   }
@@ -80,8 +92,15 @@ router.get("/", async (req, res) => {
  */
 router.get("/admin/all", auth, requireAdmin, async (req, res) => {
   try {
-    const countries = await Country.find({}).sort({ createdAt: -1 });
-    return res.status(200).json({ countries });
+    const countries = await Country.find({}).sort({ createdAt: -1 }).lean();
+
+    const mapped = countries.map((c) => ({
+      ...c,
+      dialCode: c.dialingCode || null,
+      currencyDisplay: c.currencyDisplay || c.currency || null,
+    }));
+
+    return res.status(200).json({ countries: mapped });
   } catch (err) {
     return res.status(500).json({ message: "Failed to load countries", error: err.message });
   }
@@ -94,11 +113,13 @@ router.get("/admin/all", auth, requireAdmin, async (req, res) => {
 router.post("/", auth, requireAdmin, async (req, res) => {
   try {
     const {
-      code,         // ✅ preferred
-      countryCode,  // ✅ backward compatible
+      code, // ✅ preferred
+      countryCode, // ✅ backward compatible
       name,
       currency,
-      dialCode, // ✅ NEW
+      currencyDisplay, // ✅ NEW
+      dialCode, // ✅ incoming from dashboard
+      dialingCode, // ✅ allow alternative key
       defaultLanguage = "en",
       supportedLanguages = ["en"],
       timezone = "Africa/Johannesburg",
@@ -110,20 +131,21 @@ router.post("/", auth, requireAdmin, async (req, res) => {
     if (!name) return res.status(400).json({ message: "name is required" });
     if (!currency) return res.status(400).json({ message: "currency is required" });
 
-    const dial = normalizeDialCode(dialCode);
+    const dial = normalizeDialCode(dialCode || dialingCode);
     if (!dial) return res.status(400).json({ message: "dialCode is required (e.g. +256)" });
 
     const exists = await Country.findOne({ code: iso2 }).lean();
     if (exists) return res.status(409).json({ message: "Country already exists" });
 
-    const dialExists = await Country.findOne({ dialCode: dial }).lean();
+    const dialExists = await Country.findOne({ dialingCode: dial }).lean();
     if (dialExists) return res.status(409).json({ message: "dialCode already exists" });
 
     const country = await Country.create({
       code: iso2,
-      dialCode: dial,
+      dialingCode: dial,
       name: String(name).trim(),
       currency: String(currency).trim().toUpperCase(),
+      currencyDisplay: normalizeCurrencyDisplay(currencyDisplay),
       defaultLanguage: String(defaultLanguage).trim().toLowerCase(),
       supportedLanguages: Array.isArray(supportedLanguages)
         ? supportedLanguages.map((l) => String(l).trim().toLowerCase())
@@ -134,7 +156,11 @@ router.post("/", auth, requireAdmin, async (req, res) => {
       updatedBy: req.user?._id || null,
     });
 
-    return res.status(201).json({ message: "Country created ✅", country });
+    const out = country.toObject();
+    out.dialCode = out.dialingCode || null;
+    out.currencyDisplay = out.currencyDisplay || out.currency || null;
+
+    return res.status(201).json({ message: "Country created ✅", country: out });
   } catch (err) {
     return res.status(500).json({ message: "Create failed", error: err.message });
   }
@@ -151,7 +177,9 @@ router.patch("/:id", auth, requireAdmin, async (req, res) => {
     const {
       name,
       currency,
+      currencyDisplay,
       dialCode,
+      dialingCode,
       defaultLanguage,
       supportedLanguages,
       timezone,
@@ -161,18 +189,22 @@ router.patch("/:id", auth, requireAdmin, async (req, res) => {
     if (typeof name === "string" && name.trim()) country.name = name.trim();
     if (typeof currency === "string" && currency.trim()) country.currency = currency.trim().toUpperCase();
 
-    if (dialCode !== undefined) {
-      const dial = normalizeDialCode(dialCode);
+    if (currencyDisplay !== undefined) {
+      country.currencyDisplay = normalizeCurrencyDisplay(currencyDisplay);
+    }
+
+    if (dialCode !== undefined || dialingCode !== undefined) {
+      const dial = normalizeDialCode(dialCode || dialingCode);
       if (!dial) return res.status(400).json({ message: "Invalid dialCode ❌" });
 
       const dialExists = await Country.findOne({
-        dialCode: dial,
+        dialingCode: dial,
         _id: { $ne: country._id },
       }).lean();
 
       if (dialExists) return res.status(409).json({ message: "dialCode already exists" });
 
-      country.dialCode = dial;
+      country.dialingCode = dial;
     }
 
     if (typeof defaultLanguage === "string" && defaultLanguage.trim())
@@ -188,7 +220,11 @@ router.patch("/:id", auth, requireAdmin, async (req, res) => {
     country.updatedBy = req.user?._id || null;
     await country.save();
 
-    return res.status(200).json({ message: "Country updated ✅", country });
+    const out = country.toObject();
+    out.dialCode = out.dialingCode || null;
+    out.currencyDisplay = out.currencyDisplay || out.currency || null;
+
+    return res.status(200).json({ message: "Country updated ✅", country: out });
   } catch (err) {
     return res.status(500).json({ message: "Update failed", error: err.message });
   }

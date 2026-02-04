@@ -14,14 +14,19 @@ const CountrySchema = new mongoose.Schema(
 
     name: { type: String, required: true, trim: true },
 
+    // ✅ ISO code / backend currency value (usually uppercase)
     currency: { type: String, required: true, uppercase: true, trim: true },
 
     /**
+     * ✅ NEW: Display currency label/prefix (what app shows)
+     * Examples: "Ksh", "ZAR", "Ugx", "ZIG", "Tsh"
+     * If not set, app should fallback to `currency`.
+     */
+    currencyDisplay: { type: String, default: null, trim: true },
+
+    /**
      * ✅ Country dialing code like "+27", "+256"
-     * NOTE:
-     * - Your routes were using "dialCode"
-     * - Your existing code elsewhere (auth.js) looks for "dialingCode"
-     * So we standardize on "dialingCode" in DB.
+     * Standardized field name in DB: dialingCode
      */
     dialingCode: { type: String, default: null, trim: true, index: true },
 
@@ -43,6 +48,12 @@ const CountrySchema = new mongoose.Schema(
 CountrySchema.pre("validate", function (next) {
   if (this.code) this.code = String(this.code).trim().toUpperCase();
   if (this.currency) this.currency = String(this.currency).trim().toUpperCase();
+
+  if (this.currencyDisplay != null) {
+    const x = String(this.currencyDisplay).trim();
+    this.currencyDisplay = x ? x : null;
+  }
+
   if (this.defaultLanguage) this.defaultLanguage = String(this.defaultLanguage).trim().toLowerCase();
 
   if (Array.isArray(this.supportedLanguages)) {
