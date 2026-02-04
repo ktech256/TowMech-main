@@ -451,6 +451,41 @@ function generateCountryOtpCode(phone) {
 }
 
 /**
+ * ✅ =========================================
+ * ✅ NEW: CHECK IF PHONE EXISTS (PUBLIC)
+ * ✅ =========================================
+ * POST /api/auth/phone-exists
+ * body: { phone: "+27..." }
+ * returns: { exists: true/false }
+ */
+router.post("/phone-exists", async (req, res) => {
+  try {
+    const { phone } = req.body || {};
+    const normalizedPhone = normalizePhone(phone);
+
+    if (!normalizedPhone) {
+      return res.status(400).json({ message: "phone is required", exists: false });
+    }
+
+    const requestCountryCode = resolveReqCountryCode(req);
+    const dialingCode = await getDialingCodeForCountry(requestCountryCode);
+
+    const phoneCandidates = buildPhoneCandidates(normalizedPhone, dialingCode);
+
+    const user = await User.findOne({ phone: { $in: phoneCandidates } }).select("_id phone role");
+
+    return res.status(200).json({
+      exists: !!user,
+      // optional extra info (safe, does not expose sensitive)
+      role: user?.role || null,
+    });
+  } catch (err) {
+    console.error("❌ PHONE EXISTS ERROR:", err.message);
+    return res.status(500).json({ message: "Phone check failed", error: err.message, exists: false });
+  }
+});
+
+/**
  * ✅ Register user
  * POST /api/auth/register
  */
