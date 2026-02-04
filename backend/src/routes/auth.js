@@ -1,3 +1,5 @@
+// backend/src/routes/auth.js
+
 import express from "express";
 import crypto from "crypto";
 import jwt from "jsonwebtoken";
@@ -372,11 +374,15 @@ function normalizeMechanicCategories(input) {
 
 /**
  * ✅ Allowed types/categories should come from PricingConfig (dashboard)
- * Falls back to constants for safety.
+ * ✅ FIX: COUNTRY-PARALLEL (per countryCode)
  */
-async function getAllowedProviderTypesFromPricingConfig() {
-  let pricing = await PricingConfig.findOne();
-  if (!pricing) pricing = await PricingConfig.create({});
+async function getAllowedProviderTypesFromPricingConfig(countryCode) {
+  const cc = String(countryCode || process.env.DEFAULT_COUNTRY || "ZA")
+    .trim()
+    .toUpperCase();
+
+  let pricing = await PricingConfig.findOne({ countryCode: cc });
+  if (!pricing) pricing = await PricingConfig.create({ countryCode: cc });
 
   const allowedTowTruckTypes =
     Array.isArray(pricing.towTruckTypes) && pricing.towTruckTypes.length > 0
@@ -388,7 +394,7 @@ async function getAllowedProviderTypesFromPricingConfig() {
       ? pricing.mechanicCategories
       : MECHANIC_CATEGORIES;
 
-  return { pricing, allowedTowTruckTypes, allowedMechanicCategories };
+  return { pricing, allowedTowTruckTypes, allowedMechanicCategories, countryCode: cc };
 }
 
 /**
@@ -453,11 +459,10 @@ function generateCountryOtpCode(phone) {
  * ✅ =========================================
  * ✅ FIX: CHECK IF PHONE EXISTS (PUBLIC) ✅
  * ✅ =========================================
- * Your Android calls: POST /api/auth/check-phone
- * So we MUST expose /check-phone (not /phone-exists), otherwise it throws and routes wrong.
  *
- * body: { phone: "+27...", countryCode: "ZA" }
- * returns: { exists: boolean, role?: string, countryCode?: string }
+ * ✅ PARALLEL LOGIC:
+ * - A phone can exist in another country; we should only block duplicates WITHIN SAME COUNTRY.
+ * - Return existsInThisCountry + existsAnywhere
  */
 router.post("/check-phone", async (req, res) => {
   try {
@@ -476,12 +481,22 @@ router.post("/check-phone", async (req, res) => {
     const dialingCode = await getDialingCodeForCountry(requestCountryCode);
     const phoneCandidates = buildPhoneCandidates(normalizedPhone, dialingCode);
 
-    const user = await User.findOne({ phone: { $in: phoneCandidates } }).select("_id phone role countryCode");
+    const userInCountry = await User.findOne({
+      countryCode: requestCountryCode,
+      phone: { $in: phoneCandidates },
+    }).select("_id phone role countryCode");
+
+    const userAnywhere = await User.findOne({
+      phone: { $in: phoneCandidates },
+    }).select("_id phone role countryCode");
 
     return res.status(200).json({
-      exists: !!user,
-      role: user?.role || null,
-      countryCode: user?.countryCode || requestCountryCode,
+      exists: !!userInCountry,
+      existsInThisCountry: !!userInCountry,
+      existsAnywhere: !!userAnywhere,
+      role: userInCountry?.role || userAnywhere?.role || null,
+      countryCode: requestCountryCode,
+      matchedUserCountryCode: userInCountry?.countryCode || userAnywhere?.countryCode || null,
     });
   } catch (err) {
     console.error("❌ CHECK PHONE ERROR:", err.message);
@@ -511,12 +526,22 @@ router.post("/phone-exists", async (req, res) => {
     const dialingCode = await getDialingCodeForCountry(requestCountryCode);
     const phoneCandidates = buildPhoneCandidates(normalizedPhone, dialingCode);
 
-    const user = await User.findOne({ phone: { $in: phoneCandidates } }).select("_id role countryCode");
+    const userInCountry = await User.findOne({
+      countryCode: requestCountryCode,
+      phone: { $in: phoneCandidates },
+    }).select("_id role countryCode");
+
+    const userAnywhere = await User.findOne({
+      phone: { $in: phoneCandidates },
+    }).select("_id role countryCode");
 
     return res.status(200).json({
-      exists: !!user,
-      role: user?.role || null,
-      countryCode: user?.countryCode || requestCountryCode,
+      exists: !!userInCountry,
+      existsInThisCountry: !!userInCountry,
+      existsAnywhere: !!userAnywhere,
+      role: userInCountry?.role || userAnywhere?.role || null,
+      countryCode: requestCountryCode,
+      matchedUserCountryCode: userInCountry?.countryCode || userAnywhere?.countryCode || null,
     });
   } catch (err) {
     console.error("❌ PHONE EXISTS ERROR:", err.message);
@@ -527,6 +552,10 @@ router.post("/phone-exists", async (req, res) => {
 /**
  * ✅ Register user
  * POST /api/auth/register
+ *
+ * ✅ PARALLEL LOGIC:
+ * - uniqueness must be enforced PER COUNTRY (countryCode + phone/email)
+ * - towTruckTypes/mechanicCategories must be read from PricingConfig PER COUNTRY
  */
 router.post("/register", async (req, res) => {
   try {
@@ -559,7 +588,14 @@ router.post("/register", async (req, res) => {
 
     // ✅ Skip strict validation for SuperAdmin/Admin
     if (role === USER_ROLES.SUPER_ADMIN || role === USER_ROLES.ADMIN) {
-      const existing = await User.findOne({ email });
+      // ✅ Admins should still be country-scoped for dashboards
+      const emailClean = (email || "").trim().toLowerCase();
+
+      const existing = await User.findOne({
+        countryCode: requestCountryCode,
+        email: emailClean,
+      });
+
       if (existing) return res.status(409).json({ message: "User already exists" });
 
       const user = await User.create({
@@ -567,7 +603,7 @@ router.post("/register", async (req, res) => {
         firstName: firstName || "Admin",
         lastName: lastName || "",
         phone: normalizedPhone || "",
-        email,
+        email: emailClean,
         password,
         birthday: birthday || null,
         role,
@@ -586,6 +622,9 @@ router.post("/register", async (req, res) => {
       });
     }
 
+    // ✅ NOTE: You requested "nationalityType abandoned" on customer,
+    // but backend currently requires it for ALL roles.
+    // We keep logic intact here to avoid breaking existing calls.
     if (!nationalityType || !["SouthAfrican", "ForeignNational"].includes(nationalityType)) {
       return res.status(400).json({
         message: "nationalityType must be SouthAfrican or ForeignNational",
@@ -613,7 +652,7 @@ router.post("/register", async (req, res) => {
     }
 
     const { allowedTowTruckTypes, allowedMechanicCategories } =
-      await getAllowedProviderTypesFromPricingConfig();
+      await getAllowedProviderTypesFromPricingConfig(requestCountryCode);
 
     let normalizedTowTypes = [];
     if (role === USER_ROLES.TOW_TRUCK) {
@@ -655,10 +694,20 @@ router.post("/register", async (req, res) => {
 
     const phoneCandidates = buildPhoneCandidates(normalizedPhone, dialingCode);
 
-    const existingEmail = await User.findOne({ email });
+    const emailClean = String(email).trim().toLowerCase();
+
+    // ✅ PARALLEL: enforce email uniqueness per country
+    const existingEmail = await User.findOne({
+      countryCode: requestCountryCode,
+      email: emailClean,
+    });
     if (existingEmail) return res.status(409).json({ message: "Email already registered" });
 
-    const existingPhone = await User.findOne({ phone: { $in: phoneCandidates } });
+    // ✅ PARALLEL: enforce phone uniqueness per country
+    const existingPhone = await User.findOne({
+      countryCode: requestCountryCode,
+      phone: { $in: phoneCandidates },
+    });
     if (existingPhone) return res.status(409).json({ message: "Phone number already registered" });
 
     const name = `${firstName.trim()} ${lastName.trim()}`;
@@ -668,7 +717,7 @@ router.post("/register", async (req, res) => {
       firstName,
       lastName,
       phone: normalizedPhone,
-      email,
+      email: emailClean,
       password,
       birthday,
       countryCode: requestCountryCode,
@@ -703,6 +752,10 @@ router.post("/register", async (req, res) => {
 /**
  * ✅ Login user (PHONE + PASSWORD) → ALWAYS OTP
  * POST /api/auth/login
+ *
+ * ✅ PARALLEL LOGIC:
+ * - login must resolve the user within the selected countryCode
+ * - prevents cross-country phone collisions returning wrong tenant user
  */
 router.post("/login", async (req, res) => {
   try {
@@ -720,11 +773,29 @@ router.post("/login", async (req, res) => {
 
     const phoneCandidates = buildPhoneCandidates(normalizedPhone, dialingCode);
 
-    const user = await User.findOne({ phone: { $in: phoneCandidates } });
+    // ✅ Prefer tenant match first
+    let user = await User.findOne({
+      countryCode: requestCountryCode,
+      phone: { $in: phoneCandidates },
+    });
+
+    // ✅ fallback to legacy user without countryCode (old data), but DO NOT cross into other country
+    if (!user) {
+      user = await User.findOne({
+        $and: [{ phone: { $in: phoneCandidates } }, { $or: [{ countryCode: { $exists: false } }, { countryCode: null }] }],
+      });
+    }
+
     if (!user) return res.status(401).json({ message: "Invalid credentials" });
 
     const isMatch = await user.matchPassword(password);
     if (!isMatch) return res.status(401).json({ message: "Invalid credentials" });
+
+    // ✅ If user has no countryCode yet, bind it now (one-time migration)
+    if (!user.countryCode) {
+      user.countryCode = requestCountryCode;
+      await user.save();
+    }
 
     const otpCode = await generateAndSaveOtp(user, { minutes: 10 });
 
@@ -755,6 +826,9 @@ router.post("/login", async (req, res) => {
 /**
  * ✅ VERIFY OTP (PHONE + OTP) → returns token
  * POST /api/auth/verify-otp
+ *
+ * ✅ PARALLEL LOGIC:
+ * - verify otp must match the same tenant countryCode
  */
 router.post("/verify-otp", async (req, res) => {
   try {
@@ -772,7 +846,19 @@ router.post("/verify-otp", async (req, res) => {
 
     const phoneCandidates = buildPhoneCandidates(normalizedPhone, dialingCode);
 
-    const user = await User.findOne({ phone: { $in: phoneCandidates } });
+    // ✅ Prefer tenant match first
+    let user = await User.findOne({
+      countryCode: requestCountryCode,
+      phone: { $in: phoneCandidates },
+    });
+
+    // ✅ fallback to legacy user without countryCode (old data)
+    if (!user) {
+      user = await User.findOne({
+        $and: [{ phone: { $in: phoneCandidates } }, { $or: [{ countryCode: { $exists: false } }, { countryCode: null }] }],
+      });
+    }
+
     if (!user) return res.status(404).json({ message: "User not found" });
 
     if (!user.otpCode || user.otpCode !== otp) {
@@ -804,6 +890,9 @@ router.post("/verify-otp", async (req, res) => {
       user.providerProfile.sessionIssuedAt = new Date();
       user.providerProfile.isOnline = false;
     }
+
+    // ✅ If user has no countryCode yet, bind it now (one-time migration)
+    if (!user.countryCode) user.countryCode = requestCountryCode;
 
     await user.save();
 
@@ -958,6 +1047,9 @@ router.post("/country/verify-otp", async (req, res) => {
 /**
  * ✅ Forgot Password → sends OTP via SMS
  * POST /api/auth/forgot-password
+ *
+ * ✅ PARALLEL LOGIC:
+ * - target user must be resolved inside selected countryCode
  */
 router.post("/forgot-password", async (req, res) => {
   try {
@@ -973,7 +1065,18 @@ router.post("/forgot-password", async (req, res) => {
 
     const phoneCandidates = buildPhoneCandidates(normalizedPhone, dialingCode);
 
-    const user = await User.findOne({ phone: { $in: phoneCandidates } });
+    // ✅ Prefer tenant match first
+    let user = await User.findOne({
+      countryCode: requestCountryCode,
+      phone: { $in: phoneCandidates },
+    });
+
+    // ✅ fallback to legacy user without countryCode (old data)
+    if (!user) {
+      user = await User.findOne({
+        $and: [{ phone: { $in: phoneCandidates } }, { $or: [{ countryCode: { $exists: false } }, { countryCode: null }] }],
+      });
+    }
 
     if (!user) {
       return res.status(200).json({ message: "If your phone exists, an SMS code has been sent ✅" });
@@ -1008,6 +1111,9 @@ router.post("/forgot-password", async (req, res) => {
 /**
  * ✅ Reset Password (PHONE + OTP + newPassword)
  * POST /api/auth/reset-password
+ *
+ * ✅ PARALLEL LOGIC:
+ * - user must resolve inside selected countryCode
  */
 router.post("/reset-password", async (req, res) => {
   try {
@@ -1023,7 +1129,19 @@ router.post("/reset-password", async (req, res) => {
 
     const phoneCandidates = buildPhoneCandidates(normalizedPhone, dialingCode);
 
-    const user = await User.findOne({ phone: { $in: phoneCandidates } });
+    // ✅ Prefer tenant match first
+    let user = await User.findOne({
+      countryCode: requestCountryCode,
+      phone: { $in: phoneCandidates },
+    });
+
+    // ✅ fallback to legacy user without countryCode (old data)
+    if (!user) {
+      user = await User.findOne({
+        $and: [{ phone: { $in: phoneCandidates } }, { $or: [{ countryCode: { $exists: false } }, { countryCode: null }] }],
+      });
+    }
+
     if (!user) return res.status(404).json({ message: "User not found" });
 
     if (!user.otpCode || user.otpCode !== otp) {
@@ -1037,6 +1155,9 @@ router.post("/reset-password", async (req, res) => {
     user.password = newPassword;
     user.otpCode = null;
     user.otpExpiresAt = null;
+
+    // ✅ If user has no countryCode yet, bind it now (one-time migration)
+    if (!user.countryCode) user.countryCode = requestCountryCode;
 
     await user.save();
 
@@ -1086,17 +1207,32 @@ router.patch("/me", auth, async (req, res) => {
 
     if (Object.keys(updates).length === 0) return res.status(400).json({ message: "Nothing to update" });
 
+    // ✅ determine current tenant country for uniqueness checks
+    const currentUser = await User.findById(userId).select("countryCode");
+    if (!currentUser) return res.status(404).json({ message: "User not found" });
+
+    const tenantCountryCode = String(currentUser.countryCode || resolveReqCountryCode(req))
+      .trim()
+      .toUpperCase();
+
     if (updates.email) {
-      const existingEmail = await User.findOne({ email: updates.email, _id: { $ne: userId } });
+      const existingEmail = await User.findOne({
+        countryCode: tenantCountryCode,
+        email: updates.email,
+        _id: { $ne: userId },
+      });
       if (existingEmail) return res.status(409).json({ message: "Email already registered" });
     }
 
     if (updates.phone) {
-      const currentUser = await User.findById(userId).select("countryCode");
-      const dialingCode = await getDialingCodeForCountry(currentUser?.countryCode || "ZA");
+      const dialingCode = await getDialingCodeForCountry(tenantCountryCode);
       const candidates = buildPhoneCandidates(updates.phone, dialingCode);
 
-      const existingPhone = await User.findOne({ phone: { $in: candidates }, _id: { $ne: userId } });
+      const existingPhone = await User.findOne({
+        countryCode: tenantCountryCode,
+        phone: { $in: candidates },
+        _id: { $ne: userId },
+      });
       if (existingPhone) return res.status(409).json({ message: "Phone number already registered" });
     }
 
