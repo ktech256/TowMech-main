@@ -1,4 +1,4 @@
-// src/routes/jobs.js
+// backend/src/routes/jobs.js
 import express from "express";
 import mongoose from "mongoose"; // ✅ needed for aggregation ObjectId
 import Job, { JOB_STATUSES } from "../models/Job.js";
@@ -17,6 +17,25 @@ import { sendJobAcceptedEmail } from "../utils/sendJobAcceptedEmail.js";
 import { calculateJobPricing } from "../utils/calculateJobPricing.js";
 
 const router = express.Router();
+
+/**
+ * ✅ Resolve request countryCode (tenant middleware normally sets req.countryCode)
+ * Keeps compatibility with dashboard (X-COUNTRY-CODE) + mobile (body/query)
+ */
+function resolveReqCountryCode(req) {
+  return (
+    req.countryCode ||
+    req.headers["x-country-code"] ||
+    req.query?.country ||
+    req.query?.countryCode ||
+    req.body?.countryCode ||
+    process.env.DEFAULT_COUNTRY ||
+    "ZA"
+  )
+    .toString()
+    .trim()
+    .toUpperCase();
+}
 
 /**
  * ✅ NEW: statuses that should BLOCK a customer from creating another job
@@ -150,6 +169,8 @@ router.post("/preview", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, r
     console.log("✅ PREVIEW HIT");
     console.log("✅ BODY RECEIVED:", req.body);
 
+    const requestCountryCode = resolveReqCountryCode(req);
+
     const {
       title,
       description,
@@ -199,8 +220,9 @@ router.post("/preview", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, r
       ? normalizeTowTruckType(towTruckTypeNeeded)
       : null;
 
-    let config = await PricingConfig.findOne();
-    if (!config) config = await PricingConfig.create({});
+    // ✅ IMPORTANT: country-scoped PricingConfig (PARALLEL PER COUNTRY)
+    let config = await PricingConfig.findOne({ countryCode: requestCountryCode });
+    if (!config) config = await PricingConfig.create({ countryCode: requestCountryCode });
 
     let towTruckTypes = config.towTruckTypes || [];
 
@@ -245,9 +267,10 @@ router.post("/preview", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, r
         vehicleType,
         distanceKm: 0,
 
-        // NOTE: calculateJobPricing currently does NOT use mechanicCategory,
-        // but we keep this param to avoid breaking future extensions.
         mechanicCategory: mechanicCategoryNeeded,
+
+        // ✅ country isolation
+        countryCode: requestCountryCode,
       });
 
       const providers = await findNearbyProviders({
@@ -301,6 +324,9 @@ router.post("/preview", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, r
         towTruckTypeNeeded: normalizedTowTruckTypeNeeded,
         vehicleType,
         distanceKm,
+
+        // ✅ country isolation
+        countryCode: requestCountryCode,
       });
 
       const providers = await findNearbyProviders({
@@ -339,6 +365,9 @@ router.post("/preview", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, r
         towTruckTypeNeeded: normalizedType,
         vehicleType,
         distanceKm,
+
+        // ✅ country isolation
+        countryCode: requestCountryCode,
       });
 
       const providersForType = await findNearbyProviders({
@@ -405,6 +434,8 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
   try {
     console.log("✅ CREATE JOB HIT");
     console.log("✅ BODY RECEIVED:", req.body);
+
+    const requestCountryCode = resolveReqCountryCode(req);
 
     const existingActive = await Job.findOne({
       customer: req.user._id,
@@ -516,10 +547,11 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
       vehicleType,
       distanceKm,
 
-      // NOTE: calculateJobPricing currently does NOT use mechanicCategory,
-      // but we keep this param to avoid breaking future extensions.
       mechanicCategory:
         roleNeeded === USER_ROLES.MECHANIC ? mechanicCategoryNeeded : null,
+
+      // ✅ country isolation
+      countryCode: requestCountryCode,
     });
 
     const hasDropoff =
@@ -1128,3 +1160,4 @@ router.post("/rate", auth, async (req, res) => {
 });
 
 export default router;
+```0

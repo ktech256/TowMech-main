@@ -1,3 +1,4 @@
+// backend/src/utils/calculateJobPricing.js
 import PricingConfig from "../models/PricingConfig.js";
 import { USER_ROLES } from "../models/User.js";
 
@@ -37,12 +38,35 @@ const isWeekend = () => {
   return day === 0 || day === 6; // Sunday or Saturday
 };
 
-async function getLatestPricingConfig() {
-  let pricingConfig = await PricingConfig.findOne().sort({
+/**
+ * ✅ Normalize country code
+ */
+function normalizeCountryCode(countryCode) {
+  return (
+    countryCode ||
+    process.env.DEFAULT_COUNTRY ||
+    "ZA"
+  )
+    .toString()
+    .trim()
+    .toUpperCase();
+}
+
+/**
+ * ✅ Country-scoped PricingConfig (PARALLEL PER COUNTRY)
+ */
+async function getLatestPricingConfig(countryCode) {
+  const cc = normalizeCountryCode(countryCode);
+
+  let pricingConfig = await PricingConfig.findOne({ countryCode: cc }).sort({
     updatedAt: -1,
     createdAt: -1,
   });
-  if (!pricingConfig) pricingConfig = await PricingConfig.create({});
+
+  if (!pricingConfig) {
+    pricingConfig = await PricingConfig.create({ countryCode: cc });
+  }
+
   return pricingConfig;
 }
 
@@ -62,8 +86,11 @@ export const calculateJobPricing = async ({
   // ✅ NEW: accept both names to avoid breaking callers
   mechanicCategoryNeeded = null,
   mechanicCategory = null,
+
+  // ✅ NEW: country isolation (do NOT break old callers)
+  countryCode = null,
 }) => {
-  const pricingConfig = await getLatestPricingConfig();
+  const pricingConfig = await getLatestPricingConfig(countryCode);
 
   const currency = pricingConfig.currency || "ZAR";
 
