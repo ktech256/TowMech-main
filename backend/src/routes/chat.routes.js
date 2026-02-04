@@ -1,4 +1,4 @@
-// /backend/src/routes/chat.routes.js
+// backend/src/routes/chat.routes.js
 import express from "express";
 import mongoose from "mongoose";
 import auth from "../middleware/auth.js";
@@ -12,7 +12,30 @@ import ChatMessage from "../models/ChatMessage.js";
 import { chatRulesMiddleware } from "../middleware/chatRules.js";
 import { maskDigits } from "../utils/maskDigits.js";
 
+import CountryServiceConfig from "../models/CountryServiceConfig.js";
+
 const router = express.Router();
+
+function resolveReqCountryCode(req) {
+  return (
+    req.countryCode ||
+    req.headers["x-country-code"] ||
+    req.query?.country ||
+    req.query?.countryCode ||
+    req.body?.countryCode ||
+    process.env.DEFAULT_COUNTRY ||
+    "ZA"
+  )
+    .toString()
+    .trim()
+    .toUpperCase();
+}
+
+async function isChatEnabledForCountry(countryCode) {
+  const cfg = await CountryServiceConfig.findOne({ countryCode }).select("services.chatEnabled").lean();
+  const v = cfg?.services?.chatEnabled;
+  return typeof v === "boolean" ? v : true;
+}
 
 /**
  * ✅ Helpers
@@ -31,7 +54,6 @@ function isActiveChatStatus(st) {
 
 /**
  * ✅ Get or create a thread for a job
- * - Only available if job is active AND assignment lockedAt >= 3 minutes ago.
  *
  * GET /api/chat/thread/:jobId
  */
@@ -45,16 +67,20 @@ router.get("/thread/:jobId", auth, chatRulesMiddleware, async (req, res) => {
     const job = await Job.findById(jobId).select("customer assignedTo status lockedAt");
     if (!job) return res.status(404).json({ message: "Job not found" });
 
+    const isAdmin = [USER_ROLES.ADMIN, USER_ROLES.SUPER_ADMIN].includes(req.user.role);
+
+    // ✅ Country chat toggle (admins can still access for moderation)
+    if (!isAdmin) {
+      const cc = resolveReqCountryCode(req);
+      const enabled = await isChatEnabledForCountry(cc);
+      if (!enabled) return res.status(403).json({ message: "Chat is disabled in this country." });
+    }
+
     const status = normalizeStatus(job.status);
 
-    // chatRulesMiddleware already blocks non-active / not-unlocked,
-    // but keep safety here too.
     if (!isActiveChatStatus(status)) {
       return res.status(403).json({ message: "Chat is not available for this job status." });
     }
-
-    // ✅ Only participants (customer or assigned provider) OR admin can access
-    const isAdmin = [USER_ROLES.ADMIN, USER_ROLES.SUPER_ADMIN].includes(req.user.role);
 
     const isCustomer = job.customer?.toString() === req.user._id.toString();
     const isProvider = job.assignedTo?.toString() === req.user._id.toString();
@@ -74,7 +100,6 @@ router.get("/thread/:jobId", auth, chatRulesMiddleware, async (req, res) => {
         lastMessageAt: null,
       });
     } else {
-      // ✅ keep participants synced
       const updates = {};
       if (job.customer && !thread.customer) updates.customer = job.customer;
       if (job.assignedTo && !thread.provider) updates.provider = job.assignedTo;
@@ -92,8 +117,7 @@ router.get("/thread/:jobId", auth, chatRulesMiddleware, async (req, res) => {
 });
 
 /**
- * ✅ List messages in a thread (paged)
- *
+ * ✅ List messages
  * GET /api/chat/messages/:threadId?page=1&limit=30
  */
 router.get("/messages/:threadId", auth, async (req, res) => {
@@ -101,6 +125,15 @@ router.get("/messages/:threadId", auth, async (req, res) => {
     const { threadId } = req.params;
     if (!mongoose.Types.ObjectId.isValid(threadId)) {
       return res.status(400).json({ message: "Invalid threadId" });
+    }
+
+    const isAdmin = [USER_ROLES.ADMIN, USER_ROLES.SUPER_ADMIN].includes(req.user.role);
+
+    // ✅ Country chat toggle (admins can still access)
+    if (!isAdmin) {
+      const cc = resolveReqCountryCode(req);
+      const enabled = await isChatEnabledForCountry(cc);
+      if (!enabled) return res.status(403).json({ message: "Chat is disabled in this country." });
     }
 
     const page = Math.max(1, Number(req.query.page || 1));
@@ -115,14 +148,12 @@ router.get("/messages/:threadId", auth, async (req, res) => {
 
     const status = normalizeStatus(job.status);
 
-    // ✅ Block history when completed/cancelled/draft/broadcasted
     if (!isActiveChatStatus(status)) {
       return res.status(403).json({
         message: "Chat history not available after job completion/cancellation.",
       });
     }
 
-    const isAdmin = [USER_ROLES.ADMIN, USER_ROLES.SUPER_ADMIN].includes(req.user.role);
     const isCustomer = job.customer?.toString() === req.user._id.toString();
     const isProvider = job.assignedTo?.toString() === req.user._id.toString();
 
@@ -131,19 +162,11 @@ router.get("/messages/:threadId", auth, async (req, res) => {
     }
 
     const [items, total] = await Promise.all([
-      ChatMessage.find({ thread: thread._id })
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(limit)
-        .lean(),
+      ChatMessage.find({ thread: thread._id }).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
       ChatMessage.countDocuments({ thread: thread._id }),
     ]);
 
-    // reverse to show oldest→newest
-    const messages = items.reverse().map((m) => ({
-      ...m,
-      text: maskDigits(m.text || ""),
-    }));
+    const messages = items.reverse().map((m) => ({ ...m, text: maskDigits(m.text || "") }));
 
     return res.status(200).json({
       page,
@@ -159,11 +182,8 @@ router.get("/messages/:threadId", auth, async (req, res) => {
 });
 
 /**
- * ✅ Send message (REST fallback)
- * - socket is preferred, but REST is useful too.
- *
+ * ✅ Send message
  * POST /api/chat/messages/:threadId
- * body: { text: "..." }
  */
 router.post("/messages/:threadId", auth, async (req, res) => {
   try {
@@ -180,6 +200,15 @@ router.post("/messages/:threadId", auth, async (req, res) => {
       return res.status(400).json({ message: "Message too long (max 600 chars)" });
     }
 
+    const isAdmin = [USER_ROLES.ADMIN, USER_ROLES.SUPER_ADMIN].includes(req.user.role);
+
+    // ✅ Country chat toggle (admins can still access)
+    if (!isAdmin) {
+      const cc = resolveReqCountryCode(req);
+      const enabled = await isChatEnabledForCountry(cc);
+      if (!enabled) return res.status(403).json({ message: "Chat is disabled in this country." });
+    }
+
     const thread = await ChatThread.findById(threadId).select("job customer provider status");
     if (!thread) return res.status(404).json({ message: "Thread not found" });
 
@@ -191,8 +220,6 @@ router.post("/messages/:threadId", auth, async (req, res) => {
       return res.status(403).json({ message: "Chat is not available for this job status." });
     }
 
-    // ✅ Only participants OR admin
-    const isAdmin = [USER_ROLES.ADMIN, USER_ROLES.SUPER_ADMIN].includes(req.user.role);
     const isCustomer = job.customer?.toString() === req.user._id.toString();
     const isProvider = job.assignedTo?.toString() === req.user._id.toString();
 
@@ -200,7 +227,6 @@ router.post("/messages/:threadId", auth, async (req, res) => {
       return res.status(403).json({ message: "Not allowed" });
     }
 
-    // ✅ Mask digits before saving to DB (so admin review is also masked)
     const safeText = maskDigits(rawText);
 
     const msg = await ChatMessage.create({
@@ -235,8 +261,7 @@ router.post("/messages/:threadId", auth, async (req, res) => {
 });
 
 /**
- * ✅ ADMIN: list all threads (for dashboard)
- * GET /api/admin/chat/threads?q=&status=ACTIVE&page=1&limit=30
+ * ✅ ADMIN routes unchanged
  */
 router.get(
   "/admin/threads",
@@ -249,33 +274,26 @@ router.get(
       const skip = (page - 1) * limit;
 
       const q = String(req.query.q || "").trim();
-      const status = String(req.query.status || "").trim().toUpperCase(); // ACTIVE/CLOSED
+      const status = String(req.query.status || "").trim().toUpperCase();
 
       const filter = {};
       if (status) filter.status = status;
 
-      let threadsQuery = ChatThread.find(filter)
-        .sort({ lastMessageAt: -1, updatedAt: -1 })
-        .skip(skip)
-        .limit(limit)
-        .populate("job", "status lockedAt createdAt")
-        .populate("customer", "name email role")
-        .populate("provider", "name email role");
-
-      // ✅ Basic search on job id or user name/email
-      // (kept simple to avoid slow regex on large db)
       if (q) {
-        // if looks like objectId: filter by job
         if (mongoose.Types.ObjectId.isValid(q)) {
           filter.job = q;
-        } else {
-          // fallback: fetch more by user name/email via populate is limited,
-          // so we just return normal threads; dashboard can filter client-side for now.
         }
       }
 
       const [items, total] = await Promise.all([
-        threadsQuery.lean(),
+        ChatThread.find(filter)
+          .sort({ lastMessageAt: -1, updatedAt: -1 })
+          .skip(skip)
+          .limit(limit)
+          .populate("job", "status lockedAt createdAt")
+          .populate("customer", "name email role")
+          .populate("provider", "name email role")
+          .lean(),
         ChatThread.countDocuments(filter),
       ]);
 
@@ -293,10 +311,6 @@ router.get(
   }
 );
 
-/**
- * ✅ ADMIN: list messages by thread (admin review)
- * GET /api/admin/chat/messages/:threadId
- */
 router.get(
   "/admin/messages/:threadId",
   auth,
@@ -322,10 +336,7 @@ router.get(
         ChatMessage.countDocuments({ thread: threadId }),
       ]);
 
-      const messages = items.reverse().map((m) => ({
-        ...m,
-        text: maskDigits(m.text || ""),
-      }));
+      const messages = items.reverse().map((m) => ({ ...m, text: maskDigits(m.text || "") }));
 
       return res.status(200).json({
         page,

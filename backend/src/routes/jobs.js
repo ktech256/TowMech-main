@@ -1,11 +1,13 @@
 // backend/src/routes/jobs.js
 import express from "express";
-import mongoose from "mongoose"; // ✅ needed for aggregation ObjectId
+import mongoose from "mongoose";
 import Job, { JOB_STATUSES } from "../models/Job.js";
 import User, { USER_ROLES } from "../models/User.js";
 import Rating from "../models/Rating.js";
 import Payment, { PAYMENT_STATUSES } from "../models/Payment.js";
 import PricingConfig from "../models/PricingConfig.js";
+import Country from "../models/Country.js";
+import CountryServiceConfig from "../models/CountryServiceConfig.js";
 import auth from "../middleware/auth.js";
 import authorizeRoles from "../middleware/role.js";
 
@@ -18,10 +20,6 @@ import { calculateJobPricing } from "../utils/calculateJobPricing.js";
 
 const router = express.Router();
 
-/**
- * ✅ Resolve request countryCode (tenant middleware normally sets req.countryCode)
- * Keeps compatibility with dashboard (X-COUNTRY-CODE) + mobile (body/query)
- */
 function resolveReqCountryCode(req) {
   return (
     req.countryCode ||
@@ -37,36 +35,73 @@ function resolveReqCountryCode(req) {
     .toUpperCase();
 }
 
-/**
- * ✅ NEW: statuses that should BLOCK a customer from creating another job
- * - We do NOT include CREATED, because that can be an unpaid/draft job.
- */
+async function getCountryCurrency(countryCode) {
+  try {
+    const c = await Country.findOne({ code: countryCode }).select("currency code").lean();
+    return c?.currency || "ZAR";
+  } catch {
+    return "ZAR";
+  }
+}
+
+function normalizeServicesForEnforcement(services = {}) {
+  const s = services || {};
+  const emergency =
+    typeof s.emergencySupportEnabled === "boolean"
+      ? s.emergencySupportEnabled
+      : typeof s.supportEnabled === "boolean"
+      ? s.supportEnabled
+      : true;
+
+  return {
+    towingEnabled: typeof s.towingEnabled === "boolean" ? s.towingEnabled : true,
+    mechanicEnabled: typeof s.mechanicEnabled === "boolean" ? s.mechanicEnabled : true,
+    emergencySupportEnabled: emergency,
+    chatEnabled: typeof s.chatEnabled === "boolean" ? s.chatEnabled : true,
+    ratingsEnabled: typeof s.ratingsEnabled === "boolean" ? s.ratingsEnabled : true,
+    insuranceEnabled: typeof s.insuranceEnabled === "boolean" ? s.insuranceEnabled : false,
+  };
+}
+
+async function enforceServiceEnabledOrThrow({ countryCode, roleNeeded }) {
+  const cfg =
+    (await CountryServiceConfig.findOne({ countryCode }).select("services").lean()) || null;
+
+  const services = normalizeServicesForEnforcement(cfg?.services);
+
+  if (roleNeeded === USER_ROLES.TOW_TRUCK && !services.towingEnabled) {
+    return {
+      ok: false,
+      code: "SERVICE_DISABLED",
+      message: "Towing service is disabled in this country.",
+    };
+  }
+
+  if (roleNeeded === USER_ROLES.MECHANIC && !services.mechanicEnabled) {
+    return {
+      ok: false,
+      code: "SERVICE_DISABLED",
+      message: "Mechanic service is disabled in this country.",
+    };
+  }
+
+  return { ok: true };
+}
+
 const CUSTOMER_BLOCK_STATUSES = [
   JOB_STATUSES.BROADCASTED,
   JOB_STATUSES.ASSIGNED,
   JOB_STATUSES.IN_PROGRESS,
 ];
 
-/**
- * ✅ NEW: Customer cancellation windows
- */
-const CUSTOMER_CANCEL_REFUND_WINDOW_MS = 3 * 60 * 1000; // 3 minutes after ASSIGNED
-const PROVIDER_NO_SHOW_REFUND_WINDOW_MS = 45 * 60 * 1000; // 45 minutes after ASSIGNED
+const CUSTOMER_CANCEL_REFUND_WINDOW_MS = 3 * 60 * 1000;
+const PROVIDER_NO_SHOW_REFUND_WINDOW_MS = 45 * 60 * 1000;
 
-/**
- * ✅ NEW: Provider start-job distance rule
- */
 const START_JOB_MAX_DISTANCE_METERS = 30;
 
-/**
- * ✅ Mechanic disclaimer text (shown on multiple screens)
- */
 const MECHANIC_FINAL_FEE_DISCLAIMER =
   "⚠️ Mechanic final fee will be determined after diagnosis. Only the booking fee is paid now.";
 
-/**
- * ✅ TowTruck Type Normalizer (NEW preferred names + legacy compatibility)
- */
 function normalizeTowTruckType(type) {
   if (!type) return null;
   const x = String(type).trim();
@@ -85,13 +120,11 @@ function normalizeTowTruckType(type) {
     return "Flatbed/Roll Back";
 
   if (lower.includes("boom")) return "Boom Trucks(With Crane)";
-  if (lower.includes("integrated") || lower.includes("wrecker"))
-    return "Integrated / Wrecker";
+  if (lower.includes("integrated") || lower.includes("wrecker")) return "Integrated / Wrecker";
 
   if (lower.includes("rotator") || lower.includes("heavy-duty") || lower === "recovery")
     return "Heavy-Duty Rotator(Recovery)";
 
-  // ✅ Legacy values mapping (safe)
   if (lower === "towtruck") return "Integrated / Wrecker";
   if (lower === "towtruck-xl" || lower === "towtruck xl") return "Integrated / Wrecker";
   if (lower === "towtruck-xxl" || lower === "towtruck xxl") return "Integrated / Wrecker";
@@ -99,10 +132,6 @@ function normalizeTowTruckType(type) {
   return x;
 }
 
-/**
- * ✅ Helper: Recompute rating stats for a target user
- * IMPORTANT: uses Rating schema fields: target + targetRole
- */
 async function recomputeUserRatingStats(userId) {
   const targetId = new mongoose.Types.ObjectId(userId);
 
@@ -132,9 +161,6 @@ async function recomputeUserRatingStats(userId) {
   });
 }
 
-/**
- * ✅ Helper: Haversine Distance (km)
- */
 function haversineDistanceKm(lat1, lng1, lat2, lng2) {
   const toRad = (v) => (v * Math.PI) / 180;
 
@@ -144,18 +170,12 @@ function haversineDistanceKm(lat1, lng1, lat2, lng2) {
 
   const a =
     Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.cos(toRad(lat1)) *
-      Math.cos(toRad(lat2)) *
-      Math.sin(dLng / 2) *
-      Math.sin(dLng / 2);
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) * Math.sin(dLng / 2);
 
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   return Number((R * c).toFixed(2));
 }
 
-/**
- * ✅ Helper: Haversine Distance (meters)
- */
 function haversineDistanceMeters(lat1, lng1, lat2, lng2) {
   return Math.round(haversineDistanceKm(lat1, lng1, lat2, lng2) * 1000);
 }
@@ -183,11 +203,7 @@ router.post("/preview", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, r
       dropoffAddressText,
       towTruckTypeNeeded,
       vehicleType,
-
-      // ✅ NEW: mechanic category selection
       mechanicCategoryNeeded,
-
-      // ✅ NEW: customer can describe problem briefly
       customerProblemDescription,
     } = req.body;
 
@@ -197,17 +213,25 @@ router.post("/preview", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, r
       });
     }
 
-    // ✅ TowTruck requires dropoff
-    if (
-      roleNeeded === USER_ROLES.TOW_TRUCK &&
-      (dropoffLat === undefined || dropoffLng === undefined)
-    ) {
+    // ✅ Enforce per-country service toggle
+    const serviceGate = await enforceServiceEnabledOrThrow({
+      countryCode: requestCountryCode,
+      roleNeeded,
+    });
+    if (!serviceGate.ok) {
+      return res.status(403).json({
+        message: serviceGate.message,
+        code: serviceGate.code,
+        countryCode: requestCountryCode,
+      });
+    }
+
+    if (roleNeeded === USER_ROLES.TOW_TRUCK && (dropoffLat === undefined || dropoffLng === undefined)) {
       return res.status(400).json({
         message: "TowTruck jobs require dropoffLat and dropoffLng",
       });
     }
 
-    // ✅ Mechanic requires mechanicCategoryNeeded
     if (roleNeeded === USER_ROLES.MECHANIC) {
       if (!mechanicCategoryNeeded) {
         return res.status(400).json({
@@ -220,15 +244,12 @@ router.post("/preview", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, r
       ? normalizeTowTruckType(towTruckTypeNeeded)
       : null;
 
-    // ✅ IMPORTANT: country-scoped PricingConfig (PARALLEL PER COUNTRY)
+    // ✅ PricingConfig is parallel per country (already)
     let config = await PricingConfig.findOne({ countryCode: requestCountryCode });
     if (!config) config = await PricingConfig.create({ countryCode: requestCountryCode });
 
     let towTruckTypes = config.towTruckTypes || [];
-
     if (!towTruckTypes || towTruckTypes.length === 0) {
-      console.log("⚠️ towTruckTypes empty → setting defaults...");
-
       config.towTruckTypes = [
         "Hook & Chain",
         "Wheel-Lift",
@@ -237,7 +258,6 @@ router.post("/preview", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, r
         "Integrated / Wrecker",
         "Heavy-Duty Rotator(Recovery)",
       ];
-
       await config.save();
       towTruckTypes = config.towTruckTypes;
     }
@@ -249,29 +269,25 @@ router.post("/preview", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, r
         ? haversineDistanceKm(pickupLat, pickupLng, dropoffLat, dropoffLng)
         : 0;
 
-    /**
-     * ============================================================
-     * ✅ MECHANIC PREVIEW FLOW
-     * ============================================================
-     */
+    const countryCurrency = await getCountryCurrency(requestCountryCode);
+
+    // ✅ MECHANIC PREVIEW
     if (roleNeeded === USER_ROLES.MECHANIC) {
       const pricing = await calculateJobPricing({
         roleNeeded,
         pickupLat,
         pickupLng,
-
         dropoffLat: undefined,
         dropoffLng: undefined,
-
         towTruckTypeNeeded: null,
         vehicleType,
         distanceKm: 0,
-
         mechanicCategory: mechanicCategoryNeeded,
-
-        // ✅ country isolation
         countryCode: requestCountryCode,
       });
+
+      // currency safety
+      if (!pricing.currency) pricing.currency = countryCurrency;
 
       const providers = await findNearbyProviders({
         roleNeeded,
@@ -299,21 +315,15 @@ router.post("/preview", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, r
         preview: {
           currency: pricing.currency,
           bookingFee: pricing.bookingFee,
-
           estimatedTotal: 0,
           estimatedDistanceKm: 0,
-
           mechanicCategoryNeeded,
           customerProblemDescription: customerProblemDescription || null,
         },
       });
     }
 
-    /**
-     * ============================================================
-     * ✅ TOWTRUCK PREVIEW FLOW
-     * ============================================================
-     */
+    // ✅ TOWTRUCK PREVIEW (single type)
     if (normalizedTowTruckTypeNeeded) {
       const pricing = await calculateJobPricing({
         roleNeeded,
@@ -324,10 +334,10 @@ router.post("/preview", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, r
         towTruckTypeNeeded: normalizedTowTruckTypeNeeded,
         vehicleType,
         distanceKm,
-
-        // ✅ country isolation
         countryCode: requestCountryCode,
       });
+
+      if (!pricing.currency) pricing.currency = countryCurrency;
 
       const providers = await findNearbyProviders({
         roleNeeded,
@@ -351,6 +361,7 @@ router.post("/preview", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, r
       });
     }
 
+    // ✅ TOWTRUCK PREVIEW (list all types)
     const resultsByTowTruckType = {};
 
     for (const type of towTruckTypes) {
@@ -365,10 +376,10 @@ router.post("/preview", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, r
         towTruckTypeNeeded: normalizedType,
         vehicleType,
         distanceKm,
-
-        // ✅ country isolation
         countryCode: requestCountryCode,
       });
+
+      if (!pricing.currency) pricing.currency = countryCurrency;
 
       const providersForType = await findNearbyProviders({
         roleNeeded,
@@ -412,7 +423,7 @@ router.post("/preview", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, r
           ? "Providers found ✅ Please select tow truck type"
           : "No providers online within range.",
       preview: {
-        currency: config.currency || "ZAR",
+        currency: countryCurrency,
         distanceKm,
         resultsByTowTruckType,
       },
@@ -436,6 +447,19 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
     console.log("✅ BODY RECEIVED:", req.body);
 
     const requestCountryCode = resolveReqCountryCode(req);
+
+    // ✅ Enforce per-country service toggle
+    const serviceGate = await enforceServiceEnabledOrThrow({
+      countryCode: requestCountryCode,
+      roleNeeded: req.body?.roleNeeded,
+    });
+    if (!serviceGate.ok) {
+      return res.status(403).json({
+        message: serviceGate.message,
+        code: serviceGate.code,
+        countryCode: requestCountryCode,
+      });
+    }
 
     const existingActive = await Job.findOne({
       customer: req.user._id,
@@ -469,11 +493,7 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
       dropoffAddressText,
       towTruckTypeNeeded,
       vehicleType,
-
-      // ✅ NEW: mechanic category
       mechanicCategoryNeeded,
-
-      // ✅ NEW: customer describes issue briefly
       customerProblemDescription,
     } = req.body;
 
@@ -508,13 +528,9 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
       roleNeeded,
       pickupLng,
       pickupLat,
-
       towTruckTypeNeeded: normalizedTowTruckTypeNeeded,
       vehicleType,
-
-      mechanicCategoryNeeded:
-        roleNeeded === USER_ROLES.MECHANIC ? mechanicCategoryNeeded : null,
-
+      mechanicCategoryNeeded: roleNeeded === USER_ROLES.MECHANIC ? mechanicCategoryNeeded : null,
       excludedProviders: [],
       maxDistanceMeters: 20000,
       limit: 10,
@@ -537,63 +553,43 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
       roleNeeded,
       pickupLat,
       pickupLng,
-
       dropoffLat: roleNeeded === USER_ROLES.TOW_TRUCK ? dropoffLat : undefined,
       dropoffLng: roleNeeded === USER_ROLES.TOW_TRUCK ? dropoffLng : undefined,
-
-      towTruckTypeNeeded:
-        roleNeeded === USER_ROLES.TOW_TRUCK ? normalizedTowTruckTypeNeeded : null,
-
+      towTruckTypeNeeded: roleNeeded === USER_ROLES.TOW_TRUCK ? normalizedTowTruckTypeNeeded : null,
       vehicleType,
       distanceKm,
-
-      mechanicCategory:
-        roleNeeded === USER_ROLES.MECHANIC ? mechanicCategoryNeeded : null,
-
-      // ✅ country isolation
+      mechanicCategory: roleNeeded === USER_ROLES.MECHANIC ? mechanicCategoryNeeded : null,
       countryCode: requestCountryCode,
     });
 
-    const hasDropoff =
-      roleNeeded === USER_ROLES.TOW_TRUCK &&
-      dropoffLat !== undefined &&
-      dropoffLng !== undefined;
+    // currency safety
+    if (!pricing.currency) pricing.currency = await getCountryCurrency(requestCountryCode);
 
-    // ✅ FIX: Job model enum expects PAY_AFTER_COMPLETION (NOT PAY_AFTER_SERVICE)
+    const hasDropoff =
+      roleNeeded === USER_ROLES.TOW_TRUCK && dropoffLat !== undefined && dropoffLng !== undefined;
+
     const paymentMode =
       roleNeeded === USER_ROLES.TOW_TRUCK ? "DIRECT_TO_PROVIDER" : "PAY_AFTER_COMPLETION";
 
-    // ✅ Mechanic: force estimatedTotal to 0 (final fee unknown)
     const safePricing =
       roleNeeded === USER_ROLES.MECHANIC
-        ? {
-            ...pricing,
-            estimatedTotal: 0,
-            estimatedDistanceKm: 0,
-          }
+        ? { ...pricing, estimatedTotal: 0, estimatedDistanceKm: 0 }
         : pricing;
 
     const job = await Job.create({
       title,
       description,
-
       customerProblemDescription: customerProblemDescription || null,
-
       roleNeeded,
 
       pickupLocation: { type: "Point", coordinates: [pickupLng, pickupLat] },
       pickupAddressText: pickupAddressText || null,
 
-      dropoffLocation: hasDropoff
-        ? { type: "Point", coordinates: [dropoffLng, dropoffLat] }
-        : undefined,
-
+      dropoffLocation: hasDropoff ? { type: "Point", coordinates: [dropoffLng, dropoffLat] } : undefined,
       dropoffAddressText: hasDropoff ? dropoffAddressText : undefined,
 
       towTruckTypeNeeded: normalizedTowTruckTypeNeeded || null,
-
-      mechanicCategoryNeeded:
-        roleNeeded === USER_ROLES.MECHANIC ? mechanicCategoryNeeded : null,
+      mechanicCategoryNeeded: roleNeeded === USER_ROLES.MECHANIC ? mechanicCategoryNeeded : null,
 
       vehicleType: vehicleType || null,
 
@@ -603,14 +599,8 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
 
       disclaimers:
         roleNeeded === USER_ROLES.MECHANIC
-          ? {
-              mechanicFinalFeeNotPredetermined: true,
-              text: MECHANIC_FINAL_FEE_DISCLAIMER,
-            }
-          : {
-              mechanicFinalFeeNotPredetermined: false,
-              text: null,
-            },
+          ? { mechanicFinalFeeNotPredetermined: true, text: MECHANIC_FINAL_FEE_DISCLAIMER }
+          : { mechanicFinalFeeNotPredetermined: false, text: null },
 
       pricing: {
         ...safePricing,
@@ -633,10 +623,7 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
       message: `Job created ✅ Providers found: ${providers.length}. Booking fee required.`,
       disclaimer:
         roleNeeded === USER_ROLES.MECHANIC
-          ? {
-              mechanicFinalFeeNotPredetermined: true,
-              text: MECHANIC_FINAL_FEE_DISCLAIMER,
-            }
+          ? { mechanicFinalFeeNotPredetermined: true, text: MECHANIC_FINAL_FEE_DISCLAIMER }
           : null,
       job,
       payment,
@@ -817,14 +804,6 @@ router.get("/:id", auth, async (req, res) => {
     safeJob.providerLocation = providerLocation;
     safeJob.providerLastSeenAt = providerLastSeenAt;
 
-    console.log("🛰️ GET /api/jobs/:id TRACKING DEBUG", {
-      jobId: safeJob._id?.toString(),
-      status: safeJob.status,
-      assignedToId: safeJob.assignedTo?._id?.toString(),
-      providerLocation: safeJob.providerLocation,
-      providerLastSeenAt: safeJob.providerLastSeenAt,
-    });
-
     return res.status(200).json({ job: safeJob });
   } catch (err) {
     console.error("❌ GET JOB ERROR:", err);
@@ -835,9 +814,7 @@ router.get("/:id", auth, async (req, res) => {
   }
 });
 
-/**
- * ✅ CUSTOMER CANCEL ROUTE WITH REFUND RULES
- */
+// ✅ Remaining routes unchanged
 router.patch("/:id/cancel", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => {
   try {
     const job = await Job.findById(req.params.id);
@@ -941,9 +918,6 @@ router.patch("/:id/cancel", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (re
   }
 });
 
-/**
- * ✅ UPDATE JOB STATUS
- */
 router.patch("/:id/status", auth, async (req, res) => {
   try {
     const { status } = req.body || {};
@@ -1077,9 +1051,6 @@ router.patch("/:id/status", auth, async (req, res) => {
   }
 });
 
-/**
- * ✅ RATE JOB
- */
 router.post("/rate", auth, async (req, res) => {
   try {
     const { jobId, rating, comment } = req.body || {};

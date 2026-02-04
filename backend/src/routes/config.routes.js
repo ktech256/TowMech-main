@@ -1,4 +1,4 @@
-// src/routes/config.routes.js
+// backend/src/routes/config.routes.js
 import express from "express";
 import Country from "../models/Country.js";
 import CountryServiceConfig from "../models/CountryServiceConfig.js";
@@ -7,45 +7,75 @@ import PricingConfig from "../models/PricingConfig.js";
 
 const router = express.Router();
 
+function resolveCountryCode(req) {
+  const headerCountry = req.headers["x-country-code"];
+  const queryCountry = req.query.country;
+
+  return String(headerCountry || queryCountry || process.env.DEFAULT_COUNTRY_CODE || "ZA")
+    .trim()
+    .toUpperCase();
+}
+
+function normalizeServiceDefaults(services = {}) {
+  const s = services || {};
+  const emergency =
+    typeof s.emergencySupportEnabled === "boolean"
+      ? s.emergencySupportEnabled
+      : typeof s.supportEnabled === "boolean"
+      ? s.supportEnabled
+      : true;
+
+  return {
+    towingEnabled: typeof s.towingEnabled === "boolean" ? s.towingEnabled : true,
+    mechanicEnabled: typeof s.mechanicEnabled === "boolean" ? s.mechanicEnabled : true,
+
+    emergencySupportEnabled: emergency,
+    supportEnabled: emergency,
+
+    insuranceEnabled: typeof s.insuranceEnabled === "boolean" ? s.insuranceEnabled : false,
+    chatEnabled: typeof s.chatEnabled === "boolean" ? s.chatEnabled : true,
+    ratingsEnabled: typeof s.ratingsEnabled === "boolean" ? s.ratingsEnabled : true,
+
+    winchRecoveryEnabled: typeof s.winchRecoveryEnabled === "boolean" ? s.winchRecoveryEnabled : false,
+    roadsideAssistanceEnabled:
+      typeof s.roadsideAssistanceEnabled === "boolean" ? s.roadsideAssistanceEnabled : false,
+    jumpStartEnabled: typeof s.jumpStartEnabled === "boolean" ? s.jumpStartEnabled : false,
+    tyreChangeEnabled: typeof s.tyreChangeEnabled === "boolean" ? s.tyreChangeEnabled : false,
+    fuelDeliveryEnabled: typeof s.fuelDeliveryEnabled === "boolean" ? s.fuelDeliveryEnabled : false,
+    lockoutEnabled: typeof s.lockoutEnabled === "boolean" ? s.lockoutEnabled : false,
+  };
+}
+
 /**
  * ✅ PUBLIC: Get app config for a given country
  * GET /api/config/all
- *
- * Country resolution priority:
- * 1) Header: X-COUNTRY-CODE
- * 2) Query:  ?country=ZA
- * 3) Fallback: process.env.DEFAULT_COUNTRY_CODE || "ZA"
  */
 router.get("/all", async (req, res) => {
   try {
-    const headerCountry = req.headers["x-country-code"];
-    const queryCountry = req.query.country;
+    const countryCode = resolveCountryCode(req);
 
-    const countryCode = String(
-      headerCountry || queryCountry || process.env.DEFAULT_COUNTRY_CODE || "ZA"
-    )
-      .trim()
-      .toUpperCase();
-
-    // ✅ Load Country (optional but recommended)
+    // ✅ Load Country (recommended)
     const country = await Country.findOne({ code: countryCode }).lean();
 
-    // ✅ Load per-country service flags + KYC + payment routing
-    const serviceConfig = await CountryServiceConfig.findOne({
-      countryCode,
-    }).lean();
+    // ✅ Load per-country service flags + payment routing
+    let serviceConfig = await CountryServiceConfig.findOne({ countryCode }).lean();
+    if (!serviceConfig) {
+      // create defaults so dashboard/app are consistent
+      const created = await CountryServiceConfig.create({ countryCode, services: {}, payments: {} });
+      serviceConfig = created.toObject();
+    }
 
     // ✅ Load per-country UI config
-    const uiConfig = await CountryUiConfig.findOne({
-      countryCode,
-    }).lean();
+    const uiConfig = await CountryUiConfig.findOne({ countryCode }).lean();
 
-    // ✅ Existing pricing config (global for now)
-    // Later you can change this to per-country pricing (CountryPricingConfig)
-    let pricing = await PricingConfig.findOne().lean();
+    // ✅ Pricing config (parallel per country OR fallback to global record)
+    let pricing =
+      (await PricingConfig.findOne({ countryCode }).lean()) ||
+      (await PricingConfig.findOne().lean());
+
     if (!pricing) {
-      pricing = await PricingConfig.create({});
-      pricing = pricing.toObject();
+      const created = await PricingConfig.create({ countryCode });
+      pricing = created.toObject();
     }
 
     // ✅ If country not found, still return safe defaults
@@ -53,52 +83,19 @@ router.get("/all", async (req, res) => {
       code: countryCode,
       name: countryCode,
       currency: "ZAR",
-      languages: ["en"],
-      phone: { mode: "E164_OR_LOCAL", example: "0711111111" },
-      enabled: true,
+      supportedLanguages: ["en"],
+      isActive: true,
     };
 
-    const resolvedServiceConfig =
-      serviceConfig || {
-        countryCode,
-        enabled: true,
-        services: {
-          towingEnabled: true,
-          mechanicEnabled: true,
-          roadsideAssistanceEnabled: false,
-          batteryJumpstartEnabled: false,
-          tyreChangeEnabled: false,
-          fuelDeliveryEnabled: false,
-          carWashEnabled: false,
-          insuranceModeEnabled: false,
-        },
-        kyc: {
-          idDocumentRequired: true,
-          selfieRequired: false,
-          proofOfAddressRequired: false,
-          towTruckLicenseRequired: true,
-          vehicleProofRequired: true,
-          workshopProofRequired: false,
-          extraDocs: [],
-        },
-        payments: {
-          paystackEnabled: false,
-          ikhokhaEnabled: false,
-          payfastEnabled: false,
-          mpesaEnabled: false,
-          flutterwaveEnabled: false,
-          stripeEnabled: false,
-          bookingFeeRequired: true,
-          bookingFeePercent: 0,
-          bookingFeeFlat: 0,
-        },
-        support: {
-          supportEmail: null,
-          supportWhatsApp: null,
-          supportPhone: null,
-          queueKey: null,
-        },
-      };
+    // ✅ Ensure serviceConfig.services contains the dashboard keys
+    const normalizedServices = normalizeServiceDefaults(serviceConfig?.services);
+
+    const resolvedServiceConfig = {
+      ...(serviceConfig || {}),
+      countryCode,
+      services: normalizedServices,
+      payments: serviceConfig?.payments || {},
+    };
 
     const resolvedUiConfig =
       uiConfig || {
@@ -111,11 +108,16 @@ router.get("/all", async (req, res) => {
         enabled: true,
       };
 
+    // ✅ IMPORTANT: currency should come from Country (dashboard Countries table)
+    // Android currently reads config.pricing.currency in places, so we inject it here.
+    pricing = { ...(pricing || {}) };
+    pricing.currency = resolvedCountry.currency || pricing.currency || "ZAR";
+
     return res.status(200).json({
       country: resolvedCountry,
       services: resolvedServiceConfig,
       ui: resolvedUiConfig,
-      pricing, // existing global pricing model
+      pricing,
       serverTime: new Date().toISOString(),
     });
   } catch (err) {

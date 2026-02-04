@@ -3,17 +3,38 @@ import mongoose from "mongoose";
 
 const CountryServiceConfigSchema = new mongoose.Schema(
   {
-    countryCode: { type: String, required: true, uppercase: true, trim: true, unique: true },
+    countryCode: {
+      type: String,
+      required: true,
+      uppercase: true,
+      trim: true,
+      unique: true,
+      index: true,
+    },
 
+    /**
+     * ✅ Country service flags (Dashboard controls these)
+     * We standardize on *Enabled keys, but accept legacy/simple keys via routes.
+     */
     services: {
+      // ✅ Dashboard “core” toggles
       towingEnabled: { type: Boolean, default: true },
       mechanicEnabled: { type: Boolean, default: true },
+      emergencySupportEnabled: { type: Boolean, default: true },
+      insuranceEnabled: { type: Boolean, default: false },
+      chatEnabled: { type: Boolean, default: true },
+      ratingsEnabled: { type: Boolean, default: true },
+
+      // ✅ Extended services (future proof)
       winchRecoveryEnabled: { type: Boolean, default: false },
       roadsideAssistanceEnabled: { type: Boolean, default: false },
       jumpStartEnabled: { type: Boolean, default: false },
       tyreChangeEnabled: { type: Boolean, default: false },
       fuelDeliveryEnabled: { type: Boolean, default: false },
       lockoutEnabled: { type: Boolean, default: false },
+
+      // ✅ alias flags (kept for backward-compat reads in old code)
+      supportEnabled: { type: Boolean, default: true },
     },
 
     payments: {
@@ -38,6 +59,20 @@ const CountryServiceConfigSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
+
+// ✅ Normalize (safe)
+CountryServiceConfigSchema.pre("validate", function (next) {
+  if (this.countryCode) this.countryCode = String(this.countryCode).trim().toUpperCase();
+
+  // ✅ keep supportEnabled aligned with emergencySupportEnabled for legacy reads
+  if (this.services) {
+    if (typeof this.services.emergencySupportEnabled === "boolean") {
+      this.services.supportEnabled = this.services.emergencySupportEnabled;
+    }
+  }
+
+  next();
+});
 
 export default mongoose.models.CountryServiceConfig ||
   mongoose.model("CountryServiceConfig", CountryServiceConfigSchema);

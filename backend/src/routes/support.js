@@ -1,17 +1,61 @@
+// backend/src/routes/support.js
 import express from "express";
 import auth from "../middleware/auth.js";
 import SupportTicket, { TICKET_TYPES, TICKET_STATUSES } from "../models/SupportTicket.js";
 import { USER_ROLES } from "../models/User.js";
+import CountryServiceConfig from "../models/CountryServiceConfig.js";
 
 const router = express.Router();
+
+function resolveReqCountryCode(req) {
+  return (
+    req.countryCode ||
+    req.headers["x-country-code"] ||
+    req.query?.country ||
+    req.query?.countryCode ||
+    req.body?.countryCode ||
+    process.env.DEFAULT_COUNTRY ||
+    "ZA"
+  )
+    .toString()
+    .trim()
+    .toUpperCase();
+}
+
+async function supportEnabledOr403(req, res, next) {
+  try {
+    const cc = resolveReqCountryCode(req);
+    const cfg = await CountryServiceConfig.findOne({ countryCode: cc })
+      .select("services.emergencySupportEnabled services.supportEnabled")
+      .lean();
+
+    const emergency =
+      typeof cfg?.services?.emergencySupportEnabled === "boolean"
+        ? cfg.services.emergencySupportEnabled
+        : typeof cfg?.services?.supportEnabled === "boolean"
+        ? cfg.services.supportEnabled
+        : true;
+
+    if (!emergency) {
+      return res.status(403).json({
+        message: "Emergency Support is disabled in this country.",
+        code: "SERVICE_DISABLED",
+        countryCode: cc,
+      });
+    }
+
+    return next();
+  } catch (err) {
+    return res.status(500).json({ message: "Service check failed", error: err.message });
+  }
+}
 
 /**
  * ✅ Customer creates support ticket
  * POST /api/support/tickets
  */
-router.post("/tickets", auth, async (req, res) => {
+router.post("/tickets", auth, supportEnabledOr403, async (req, res) => {
   try {
-    // ✅ Only customers/providers can create tickets (admins should use admin panel)
     if ([USER_ROLES.ADMIN, USER_ROLES.SUPER_ADMIN].includes(req.user.role)) {
       return res.status(403).json({
         message: "Admins should create/manage tickets via Admin dashboard ❌",
@@ -60,7 +104,7 @@ router.post("/tickets", auth, async (req, res) => {
  * ✅ Customer fetches own tickets
  * GET /api/support/tickets
  */
-router.get("/tickets", auth, async (req, res) => {
+router.get("/tickets", auth, supportEnabledOr403, async (req, res) => {
   try {
     const tickets = await SupportTicket.find({ createdBy: req.user._id })
       .sort({ createdAt: -1 })
@@ -80,7 +124,7 @@ router.get("/tickets", auth, async (req, res) => {
  * ✅ Customer fetches single ticket (includes thread)
  * GET /api/support/tickets/:id
  */
-router.get("/tickets/:id", auth, async (req, res) => {
+router.get("/tickets/:id", auth, supportEnabledOr403, async (req, res) => {
   try {
     const ticket = await SupportTicket.findById(req.params.id)
       .populate("job")
@@ -90,7 +134,6 @@ router.get("/tickets/:id", auth, async (req, res) => {
 
     if (!ticket) return res.status(404).json({ message: "Ticket not found ❌" });
 
-    // ✅ Only owner can view
     if (ticket.createdBy.toString() !== req.user._id.toString()) {
       return res.status(403).json({ message: "Not authorized ❌" });
     }
@@ -107,11 +150,9 @@ router.get("/tickets/:id", auth, async (req, res) => {
 /**
  * ✅ Customer replies to ticket (THREAD)
  * POST /api/support/tickets/:id/reply
- * Body: { message: "..." }
  */
-router.post("/tickets/:id/reply", auth, async (req, res) => {
+router.post("/tickets/:id/reply", auth, supportEnabledOr403, async (req, res) => {
   try {
-    // admins should reply via admin route
     if ([USER_ROLES.ADMIN, USER_ROLES.SUPER_ADMIN].includes(req.user.role)) {
       return res.status(403).json({
         message: "Admins should reply via Admin dashboard ❌",
@@ -127,12 +168,10 @@ router.post("/tickets/:id/reply", auth, async (req, res) => {
     const ticket = await SupportTicket.findById(req.params.id);
     if (!ticket) return res.status(404).json({ message: "Ticket not found ❌" });
 
-    // ✅ Only owner can reply
     if (ticket.createdBy.toString() !== req.user._id.toString()) {
       return res.status(403).json({ message: "Not authorized ❌" });
     }
 
-    // ✅ block replies to CLOSED
     if (ticket.status === TICKET_STATUSES.CLOSED) {
       return res.status(400).json({ message: "Ticket is closed ❌" });
     }
@@ -143,7 +182,6 @@ router.post("/tickets/:id/reply", auth, async (req, res) => {
       message: message.trim(),
     });
 
-    // ✅ If customer replies after RESOLVED, reopen it to IN_PROGRESS (useful)
     if (ticket.status === TICKET_STATUSES.RESOLVED) {
       ticket.status = TICKET_STATUSES.IN_PROGRESS;
       ticket.auditLogs.push({

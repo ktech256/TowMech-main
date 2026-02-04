@@ -6,6 +6,8 @@ import User, { USER_ROLES } from "../models/User.js";
 import InsurancePartner from "../models/InsurancePartner.js";
 import InsuranceCode from "../models/InsuranceCode.js";
 
+import CountryServiceConfig from "../models/CountryServiceConfig.js";
+
 import {
   generateCodesForPartner,
   validateInsuranceCode,
@@ -14,6 +16,40 @@ import {
 } from "../services/insurance/codeService.js";
 
 const router = express.Router();
+
+function resolveReqCountryCode(req) {
+  return String(
+    req.countryCode ||
+      req.headers["x-country-code"] ||
+      req.query?.countryCode ||
+      req.query?.country ||
+      req.body?.countryCode ||
+      "ZA"
+  )
+    .trim()
+    .toUpperCase();
+}
+
+async function insuranceEnabledOr403(req, res, next) {
+  try {
+    const cc = resolveReqCountryCode(req);
+    const cfg = await CountryServiceConfig.findOne({ countryCode: cc }).select("services.insuranceEnabled").lean();
+    const enabled = typeof cfg?.services?.insuranceEnabled === "boolean" ? cfg.services.insuranceEnabled : false;
+
+    // If no config exists yet, insurance defaults to false (safer)
+    if (!enabled) {
+      return res.status(403).json({
+        message: "Insurance service is disabled in this country.",
+        countryCode: cc,
+        code: "SERVICE_DISABLED",
+      });
+    }
+
+    return next();
+  } catch (err) {
+    return res.status(500).json({ message: "Service check failed", error: err.message });
+  }
+}
 
 /**
  * Helper: Only Admin/SuperAdmin
@@ -47,13 +83,9 @@ async function requireAdmin(req, res, next) {
  * GET /api/insurance/partners
  * Returns active insurance partners for dropdown
  */
-router.get("/partners", async (req, res) => {
+router.get("/partners", insuranceEnabledOr403, async (req, res) => {
   try {
-    const countryCode = String(
-      req.headers["x-country-code"] || req.query.countryCode || "ZA"
-    )
-      .trim()
-      .toUpperCase();
+    const countryCode = resolveReqCountryCode(req);
 
     const partners = await InsurancePartner.find({
       isActive: true,
@@ -72,14 +104,9 @@ router.get("/partners", async (req, res) => {
  * POST /api/insurance/validate-code
  * Body: { partnerId, code, phone?, email? }
  */
-router.post("/validate-code", async (req, res) => {
+router.post("/validate-code", insuranceEnabledOr403, async (req, res) => {
   try {
-    const countryCode = String(
-      req.headers["x-country-code"] || req.body?.countryCode || "ZA"
-    )
-      .trim()
-      .toUpperCase();
-
+    const countryCode = resolveReqCountryCode(req);
     const { partnerId, code, phone, email } = req.body || {};
 
     const result = await validateInsuranceCode({
@@ -101,18 +128,14 @@ router.post("/validate-code", async (req, res) => {
 /**
  * ============================
  * ADMIN ROUTES (DASHBOARD)
+ * (Admins can manage even if insurance is OFF for a country)
  * ============================
  */
 
-/**
- * GET /api/insurance/admin/partners
- */
 router.get("/admin/partners", auth, requireAdmin, async (req, res) => {
   try {
     const partners = await InsurancePartner.find()
-      .select(
-        "name partnerCode email phone logoUrl description countryCodes isActive createdAt updatedAt"
-      )
+      .select("name partnerCode email phone logoUrl description countryCodes isActive createdAt updatedAt")
       .sort({ createdAt: -1 });
 
     return res.status(200).json({ partners });
@@ -121,10 +144,6 @@ router.get("/admin/partners", auth, requireAdmin, async (req, res) => {
   }
 });
 
-/**
- * POST /api/insurance/admin/partners
- * Create partner
- */
 router.post("/admin/partners", auth, requireAdmin, async (req, res) => {
   try {
     const {
@@ -168,9 +187,6 @@ router.post("/admin/partners", auth, requireAdmin, async (req, res) => {
   }
 });
 
-/**
- * PATCH /api/insurance/admin/partners/:id
- */
 router.patch("/admin/partners/:id", auth, requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
@@ -200,10 +216,6 @@ router.patch("/admin/partners/:id", auth, requireAdmin, async (req, res) => {
   }
 });
 
-/**
- * POST /api/insurance/admin/partners/:partnerId/codes/generate
- * Body: { count, length, expiresInDays, maxUses, countryCode }
- */
 router.post("/admin/partners/:partnerId/codes/generate", auth, requireAdmin, async (req, res) => {
   try {
     const { partnerId } = req.params;
@@ -235,10 +247,6 @@ router.post("/admin/partners/:partnerId/codes/generate", auth, requireAdmin, asy
   }
 });
 
-/**
- * GET /api/insurance/admin/codes
- * Query optional: partnerId, countryCode, isActive, used
- */
 router.get("/admin/codes", auth, requireAdmin, async (req, res) => {
   try {
     const { partnerId, countryCode, isActive, used } = req.query || {};
@@ -249,7 +257,6 @@ router.get("/admin/codes", auth, requireAdmin, async (req, res) => {
     if (countryCode) filter.countryCode = String(countryCode).trim().toUpperCase();
     if (typeof isActive !== "undefined") filter.isActive = String(isActive) === "true";
 
-    // used=true => usedCount > 0
     if (typeof used !== "undefined") {
       const wantUsed = String(used) === "true";
       filter["usage.usedCount"] = wantUsed ? { $gt: 0 } : 0;
@@ -266,9 +273,6 @@ router.get("/admin/codes", auth, requireAdmin, async (req, res) => {
   }
 });
 
-/**
- * PATCH /api/insurance/admin/codes/:id/disable
- */
 router.patch("/admin/codes/:id/disable", auth, requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
@@ -284,10 +288,6 @@ router.patch("/admin/codes/:id/disable", auth, requireAdmin, async (req, res) =>
   }
 });
 
-/**
- * POST /api/insurance/admin/codes/:id/mark-used
- * (Admin manual override if needed)
- */
 router.post("/admin/codes/:id/mark-used", auth, requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;

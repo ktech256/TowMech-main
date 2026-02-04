@@ -86,7 +86,15 @@ app.use(
     },
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "X-COUNTRY-CODE", "Accept-Language"],
+    // ✅ IMPORTANT: allow both header casings (some clients/browsers send lowercase)
+    allowedHeaders: [
+      "Content-Type",
+      "Authorization",
+      "X-COUNTRY-CODE",
+      "x-country-code",
+      "Accept-Language",
+      "accept-language",
+    ],
   })
 );
 
