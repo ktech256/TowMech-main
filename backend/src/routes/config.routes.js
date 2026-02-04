@@ -1,4 +1,4 @@
-// backend/src/routes/config.routes.js
+// backend/src/routes/config.js
 import express from "express";
 import Country from "../models/Country.js";
 import CountryServiceConfig from "../models/CountryServiceConfig.js";
@@ -49,6 +49,9 @@ function normalizeServiceDefaults(services = {}) {
 /**
  * ✅ PUBLIC: Get app config for a given country
  * GET /api/config/all
+ *
+ * ✅ MUST RETURN services so Android can disable buttons on RequestServiceScreen.
+ * ✅ ALSO keeps legacy fields so old screens don't break.
  */
 router.get("/all", async (req, res) => {
   try {
@@ -60,7 +63,6 @@ router.get("/all", async (req, res) => {
     // ✅ Load per-country service flags + payment routing
     let serviceConfig = await CountryServiceConfig.findOne({ countryCode }).lean();
     if (!serviceConfig) {
-      // create defaults so dashboard/app are consistent
       const created = await CountryServiceConfig.create({ countryCode, services: {}, payments: {} });
       serviceConfig = created.toObject();
     }
@@ -68,7 +70,7 @@ router.get("/all", async (req, res) => {
     // ✅ Load per-country UI config
     const uiConfig = await CountryUiConfig.findOne({ countryCode }).lean();
 
-    // ✅ Pricing config (parallel per country OR fallback to global record)
+    // ✅ Pricing config (per country OR fallback to any record)
     let pricing =
       (await PricingConfig.findOne({ countryCode }).lean()) ||
       (await PricingConfig.findOne().lean());
@@ -108,17 +110,29 @@ router.get("/all", async (req, res) => {
         enabled: true,
       };
 
-    // ✅ IMPORTANT: currency should come from Country (dashboard Countries table)
-    // Android currently reads config.pricing.currency in places, so we inject it here.
+    // ✅ Ensure pricing has currency (Android reads pricing.currency)
     pricing = { ...(pricing || {}) };
     pricing.currency = resolvedCountry.currency || pricing.currency || "ZAR";
 
+    // ✅ LEGACY FIELDS (keep older app screens working)
+    // These are read by older screens, and your Android log proves they exist in current usage.
+    const legacyVehicleTypes = Array.isArray(resolvedCountry?.vehicleTypes) ? resolvedCountry.vehicleTypes : [];
+    const legacyTowTruckTypes = Array.isArray(resolvedCountry?.towTruckTypes) ? resolvedCountry.towTruckTypes : [];
+    const legacyMechanicCats = Array.isArray(pricing?.mechanicCategories) ? pricing.mechanicCategories : [];
+
     return res.status(200).json({
+      // ✅ NEW dashboard-first structure
       country: resolvedCountry,
       services: resolvedServiceConfig,
       ui: resolvedUiConfig,
       pricing,
       serverTime: new Date().toISOString(),
+
+      // ✅ LEGACY / COMPAT OUTPUTS (do NOT remove)
+      success: true,
+      vehicleTypes: legacyVehicleTypes,
+      towTruckTypes: legacyTowTruckTypes,
+      mechanicCategories: legacyMechanicCats,
     });
   } catch (err) {
     console.error("❌ CONFIG /all ERROR:", err);
