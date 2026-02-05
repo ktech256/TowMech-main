@@ -21,6 +21,9 @@ import { calculateJobPricing } from "../utils/calculateJobPricing.js";
 // ✅ INSURANCE SERVICES
 import { validateInsuranceCode, markInsuranceCodeUsed } from "../services/insurance/codeService.js";
 
+// ✅ BROADCAST (so insurance/free jobs broadcast immediately)
+import { broadcastJobToProviders } from "../utils/broadcastJob.js";
+
 const router = express.Router();
 
 function resolveReqCountryCode(req) {
@@ -186,11 +189,7 @@ function haversineDistanceMeters(lat1, lng1, lat2, lng2) {
 /**
  * Helper: validate insurance payload (if present) and return waiver decision
  */
-async function resolveInsuranceWaiver({
-  req,
-  requestCountryCode,
-  services,
-}) {
+async function resolveInsuranceWaiver({ req, requestCountryCode, services }) {
   const insurance = req.body?.insurance || null;
 
   // If app did not send insurance object -> no waiver
@@ -309,7 +308,10 @@ router.post("/preview", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, r
       });
     }
 
-    if (roleNeeded === USER_ROLES.TOW_TRUCK && (dropoffLat === undefined || dropoffLng === undefined)) {
+    if (
+      roleNeeded === USER_ROLES.TOW_TRUCK &&
+      (dropoffLat === undefined || dropoffLng === undefined)
+    ) {
       return res.status(400).json({
         message: "TowTruck jobs require dropoffLat and dropoffLng",
       });
@@ -735,7 +737,9 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
       pickupLocation: { type: "Point", coordinates: [pickupLng, pickupLat] },
       pickupAddressText: pickupAddressText || null,
 
-      dropoffLocation: hasDropoff ? { type: "Point", coordinates: [dropoffLng, dropoffLat] } : undefined,
+      dropoffLocation: hasDropoff
+        ? { type: "Point", coordinates: [dropoffLng, dropoffLat] }
+        : undefined,
       dropoffAddressText: hasDropoff ? dropoffAddressText : undefined,
 
       towTruckTypeNeeded: normalizedTowTruckTypeNeeded || null,
@@ -794,6 +798,16 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
           error: err.message,
         });
       }
+    }
+
+    // ✅ NEW: If booking fee is already PAID (insurance / free booking), broadcast immediately
+    // This matches the normal behavior where payment verification triggers broadcast.
+    try {
+      if (job?.pricing?.bookingFeeStatus === "PAID") {
+        await broadcastJobToProviders(job._id);
+      }
+    } catch (e) {
+      console.error("❌ Failed to broadcast insurance/free job:", e?.message || e);
     }
 
     // ✅ Payment record only if booking fee > 0
