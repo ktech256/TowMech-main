@@ -9,6 +9,7 @@ import { USER_ROLES } from "../models/User.js";
  *
  * ✅ Called from:
  * - routes/payments.js (after booking fee payment)
+ * - routes/jobs.js (when insuranceWaived sets booking fee as paid)
  */
 export const broadcastJobToProviders = async (jobId) => {
   const job = await Job.findById(jobId);
@@ -19,8 +20,12 @@ export const broadcastJobToProviders = async (jobId) => {
    * ✅ BOOKING FEE CHECK
    * Only broadcast if booking fee is PAID
    */
+  const bookingFeeStatus = job.pricing?.bookingFeeStatus
+    ? String(job.pricing.bookingFeeStatus).toUpperCase()
+    : null;
+
   const bookingFeePaid =
-    job.pricing?.bookingFeeStatus === "PAID" || job.pricing?.bookingFeePaidAt != null;
+    bookingFeeStatus === "PAID" || job.pricing?.bookingFeePaidAt != null;
 
   if (!bookingFeePaid) {
     console.log("⛔ Booking fee NOT PAID. Job not broadcasted.");
@@ -149,9 +154,7 @@ export const broadcastJobToProviders = async (jobId) => {
       const vehicle = job.vehicleType ? `Vehicle: ${job.vehicleType}` : "";
 
       // Mechanic extras
-      const mechCategory = mechanicCategoryNeeded
-        ? `Category: ${mechanicCategoryNeeded}`
-        : "";
+      const mechCategory = mechanicCategoryNeeded ? `Category: ${mechanicCategoryNeeded}` : "";
 
       const pickupText = job.pickupAddressText ? `Pickup: ${job.pickupAddressText}` : "";
 
