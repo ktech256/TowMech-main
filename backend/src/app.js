@@ -86,7 +86,6 @@ app.use(
     },
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    // ✅ IMPORTANT: allow both header casings (some clients/browsers send lowercase)
     allowedHeaders: [
       "Content-Type",
       "Authorization",
@@ -216,7 +215,10 @@ app.use("/api/admin/countries", adminCountriesRoutes);
 app.use("/api/admin/country-services", adminCountryServicesRoutes);
 app.use("/api/admin/payment-routing", adminPaymentRoutingRoutes);
 app.use("/api/admin/legal", adminLegalRoutes);
+
+// ✅ ✅ ✅ THIS IS THE ONLY “MOUNT” YOU NEED FOR INVOICE + PDF
 app.use("/api/admin/insurance", adminInsuranceRoutes);
+
 app.use("/api/admin/service-categories", adminServiceCategoriesRoutes);
 
 /**
