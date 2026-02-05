@@ -1,4 +1,4 @@
-// src/services/insurance/codeService.js
+// backend/src/services/insurance/codeService.js
 import crypto from "crypto";
 import InsuranceCode from "../../models/InsuranceCode.js";
 import InsurancePartner from "../../models/InsurancePartner.js";
@@ -38,7 +38,6 @@ export async function generateCodesForPartner({
   if (!partnerCode) throw new Error("Partner missing partnerCode");
 
   const normalizedCountry = String(countryCode || "ZA").trim().toUpperCase();
-
   const expiresAt = new Date(Date.now() + expiresInDays * 24 * 60 * 60 * 1000);
 
   const created = [];
@@ -102,13 +101,7 @@ export async function generateCodesForPartner({
  * - not expired
  * - usage remaining
  */
-export async function validateInsuranceCode({
-  partnerId,
-  code,
-  countryCode = "ZA",
-  phone = "",
-  email = "",
-}) {
+export async function validateInsuranceCode({ partnerId, code, countryCode = "ZA", phone = "", email = "" }) {
   if (!partnerId) throw new Error("partnerId is required");
   if (!code) throw new Error("code is required");
 
@@ -122,9 +115,7 @@ export async function validateInsuranceCode({
     isActive: true,
   });
 
-  if (!doc) {
-    return { ok: false, message: "Invalid code" };
-  }
+  if (!doc) return { ok: false, message: "Invalid code" };
 
   if (!doc.expiresAt || doc.expiresAt < new Date()) {
     return { ok: false, message: "Code expired" };
@@ -165,12 +156,7 @@ export async function validateInsuranceCode({
  * Mark a code as used.
  * Call this AFTER job creation (insurance booking) succeeds.
  */
-export async function markInsuranceCodeUsed({
-  partnerId,
-  code,
-  countryCode = "ZA",
-  userId = null,
-}) {
+export async function markInsuranceCodeUsed({ partnerId, code, countryCode = "ZA", userId = null, jobId = null }) {
   if (!partnerId) throw new Error("partnerId is required");
   if (!code) throw new Error("code is required");
 
@@ -184,9 +170,7 @@ export async function markInsuranceCodeUsed({
     isActive: true,
   });
 
-  if (!doc) {
-    return { ok: false, message: "Invalid code" };
-  }
+  if (!doc) return { ok: false, message: "Invalid code" };
 
   if (!doc.expiresAt || doc.expiresAt < new Date()) {
     return { ok: false, message: "Code expired" };
@@ -203,6 +187,9 @@ export async function markInsuranceCodeUsed({
   doc.usage.lastUsedAt = new Date();
   doc.usage.lastUsedByUser = userId || null;
 
+  // NOTE: jobId is accepted for future enhancement (not stored unless schema supports it)
+  // You can later add doc.usage.lastUsedJobId = jobId if you introduce that field.
+
   await doc.save();
 
   return {
@@ -210,6 +197,7 @@ export async function markInsuranceCodeUsed({
     message: "Code marked as used ✅",
     usedCount: doc.usage.usedCount,
     maxUses: doc.usage.maxUses,
+    jobId: jobId || null,
   };
 }
 

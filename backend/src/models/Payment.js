@@ -72,4 +72,7 @@ paymentSchema.pre("validate", function (next) {
 // ✅ TowMech Global helpful index
 paymentSchema.index({ countryCode: 1, status: 1, createdAt: -1 });
 
+// ✅ Invoice performance indexes
+paymentSchema.index({ job: 1, status: 1, createdAt: -1 });
+
 export default mongoose.model("Payment", paymentSchema);

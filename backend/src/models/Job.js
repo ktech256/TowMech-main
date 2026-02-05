@@ -191,9 +191,7 @@ const jobSchema = new mongoose.Schema(
     },
 
     broadcastedTo: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
-    excludedProviders: [
-      { type: mongoose.Schema.Types.ObjectId, ref: "User", default: [] },
-    ],
+    excludedProviders: [{ type: mongoose.Schema.Types.ObjectId, ref: "User", default: [] }],
 
     assignedTo: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
 
@@ -237,11 +235,21 @@ jobSchema.index({ assignedTo: 1, status: 1 });
 // ✅ TowMech Global index (country isolation + filtering)
 jobSchema.index({ countryCode: 1, status: 1, createdAt: -1 });
 
+// ✅ Insurance invoice indexes
+jobSchema.index({ "insurance.enabled": 1, countryCode: 1, createdAt: -1 });
+jobSchema.index({ "insurance.partnerId": 1, countryCode: 1, createdAt: -1 });
+jobSchema.index({ "insurance.validatedAt": 1 });
+
 /**
- * ✅ Ensure countryCode normalized
+ * ✅ Ensure countryCode + insurance.code normalized
  */
 jobSchema.pre("validate", function (next) {
   if (this.countryCode) this.countryCode = String(this.countryCode).trim().toUpperCase();
+
+  if (this.insurance?.code) {
+    this.insurance.code = String(this.insurance.code).trim().toUpperCase();
+  }
+
   next();
 });
 

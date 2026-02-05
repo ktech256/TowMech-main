@@ -1,4 +1,4 @@
-// src/models/InsuranceCode.js
+// backend/src/models/InsuranceCode.js
 import mongoose from "mongoose";
 
 /**
