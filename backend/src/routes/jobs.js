@@ -10,6 +10,7 @@ import Country from "../models/Country.js";
 import CountryServiceConfig from "../models/CountryServiceConfig.js";
 import auth from "../middleware/auth.js";
 import authorizeRoles from "../middleware/role.js";
+import { broadcastJobToProviders } from "../utils/broadcastJob.js";
 
 import { findNearbyProviders } from "../utils/findNearbyProviders.js";
 import { sendJobCompletedEmail } from "../utils/sendJobCompletedEmail.js";
@@ -189,19 +190,19 @@ function haversineDistanceMeters(lat1, lng1, lat2, lng2) {
  */
 async function resolveInsuranceWaiver({ req, requestCountryCode, services }) {
   // ✅ Accept both the new nested payload (insurance: { enabled, code, partnerId })
-// and legacy flat fields from older mobile builds.
-const insurance =
-  req.body?.insurance && typeof req.body.insurance === "object"
-    ? req.body.insurance
-    : req.body?.insuranceEnabled !== undefined ||
-      req.body?.insuranceCode !== undefined ||
-      req.body?.insurancePartnerId !== undefined
-    ? {
-        enabled: Boolean(req.body?.insuranceEnabled),
-        code: req.body?.insuranceCode,
-        partnerId: req.body?.insurancePartnerId,
-      }
-    : null;
+  // and legacy flat fields from older mobile builds.
+  const insurance =
+    req.body?.insurance && typeof req.body.insurance === "object"
+      ? req.body.insurance
+      : req.body?.insuranceEnabled !== undefined ||
+        req.body?.insuranceCode !== undefined ||
+        req.body?.insurancePartnerId !== undefined
+      ? {
+          enabled: Boolean(req.body?.insuranceEnabled),
+          code: req.body?.insuranceCode,
+          partnerId: req.body?.insurancePartnerId,
+        }
+      : null;
 
   // If app did not send insurance object -> no waiver
   if (!insurance || typeof insurance !== "object") {
@@ -319,7 +320,10 @@ router.post("/preview", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, r
       });
     }
 
-    if (roleNeeded === USER_ROLES.TOW_TRUCK && (dropoffLat === undefined || dropoffLng === undefined)) {
+    if (
+      roleNeeded === USER_ROLES.TOW_TRUCK &&
+      (dropoffLat === undefined || dropoffLng === undefined)
+    ) {
       return res.status(400).json({
         message: "TowTruck jobs require dropoffLat and dropoffLng",
       });
@@ -747,7 +751,9 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
       pickupLocation: { type: "Point", coordinates: [pickupLng, pickupLat] },
       pickupAddressText: pickupAddressText || null,
 
-      dropoffLocation: hasDropoff ? { type: "Point", coordinates: [dropoffLng, dropoffLat] } : undefined,
+      dropoffLocation: hasDropoff
+        ? { type: "Point", coordinates: [dropoffLng, dropoffLat] }
+        : undefined,
       dropoffAddressText: hasDropoff ? dropoffAddressText : undefined,
 
       towTruckTypeNeeded: normalizedTowTruckTypeNeeded || null,
@@ -805,6 +811,34 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
           code: "INSURANCE_LOCK_FAILED",
           error: err.message,
         });
+      }
+    }
+
+    // ✅ If insurance waived: create a PAID payment record (amount 0) so dashboards show "paid"
+    let insurancePayment = null;
+    if (insuranceWaived) {
+      try {
+        insurancePayment = await Payment.create({
+          job: job._id,
+          customer: req.user._id,
+          amount: 0,
+          currency: safePricing.currency,
+          status: PAYMENT_STATUSES.PAID,
+          provider: "INSURANCE",
+          providerReference: waiver.code || null,
+          paidAt: new Date(),
+          countryCode: requestCountryCode,
+        });
+      } catch (e) {
+        // Not fatal for broadcast, but useful to log
+        console.warn("⚠️ Failed to create insurance payment record:", e.message);
+      }
+
+      // ✅ Broadcast now (same as when payment is marked paid)
+      try {
+        await broadcastJobToProviders(job._id, requestCountryCode);
+      } catch (e) {
+        console.error("❌ Insurance job broadcast failed:", e.message);
       }
     }
 
@@ -1226,7 +1260,11 @@ router.patch("/:id/status", auth, async (req, res) => {
         const myLng = Number(myCoords[0]);
         const myLat = Number(myCoords[1]);
 
-        if (!Number.isFinite(myLat) || !Number.isFinite(myLng) || (myLat === 0 && myLng === 0)) {
+        if (
+          !Number.isFinite(myLat) ||
+          !Number.isFinite(myLng) ||
+          (myLat === 0 && myLng === 0)
+        ) {
           return res.status(409).json({
             code: "PROVIDER_GPS_INVALID",
             message: "Your GPS location is invalid. Refresh location and try again.",
