@@ -21,7 +21,7 @@ import { calculateJobPricing } from "../utils/calculateJobPricing.js";
 // ✅ INSURANCE SERVICES
 import { validateInsuranceCode, markInsuranceCodeUsed } from "../services/insurance/codeService.js";
 
-// ✅ BROADCAST (so insurance/free jobs broadcast immediately)
+// ✅✅✅ IMPORTANT: broadcast helper (previously only used in payments.js)
 import { broadcastJobToProviders } from "../utils/broadcastJob.js";
 
 const router = express.Router();
@@ -308,10 +308,7 @@ router.post("/preview", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, r
       });
     }
 
-    if (
-      roleNeeded === USER_ROLES.TOW_TRUCK &&
-      (dropoffLat === undefined || dropoffLng === undefined)
-    ) {
+    if (roleNeeded === USER_ROLES.TOW_TRUCK && (dropoffLat === undefined || dropoffLng === undefined)) {
       return res.status(400).json({
         message: "TowTruck jobs require dropoffLat and dropoffLng",
       });
@@ -724,9 +721,14 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
         ? { ...pricing, estimatedTotal: 0, estimatedDistanceKm: 0 }
         : pricing;
 
+    // ✅✅✅ FIX #1:
+    // Treat bookingFee == 0 as PAID so broadcast rules work
+    const numericBookingFee = Number(safePricing.bookingFee || 0);
+    const bookingFeeIsZero = !Number.isFinite(numericBookingFee) ? false : numericBookingFee <= 0;
+
     // Decide booking fee status
-    const bookingFeeStatus = insuranceWaived ? "PAID" : "PENDING";
-    const bookingFeePaidAt = insuranceWaived ? new Date() : null;
+    const bookingFeeStatus = insuranceWaived || bookingFeeIsZero ? "PAID" : "PENDING";
+    const bookingFeePaidAt = insuranceWaived || bookingFeeIsZero ? new Date() : null;
 
     const job = await Job.create({
       title,
@@ -737,9 +739,7 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
       pickupLocation: { type: "Point", coordinates: [pickupLng, pickupLat] },
       pickupAddressText: pickupAddressText || null,
 
-      dropoffLocation: hasDropoff
-        ? { type: "Point", coordinates: [dropoffLng, dropoffLat] }
-        : undefined,
+      dropoffLocation: hasDropoff ? { type: "Point", coordinates: [dropoffLng, dropoffLat] } : undefined,
       dropoffAddressText: hasDropoff ? dropoffAddressText : undefined,
 
       towTruckTypeNeeded: normalizedTowTruckTypeNeeded || null,
@@ -800,16 +800,6 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
       }
     }
 
-    // ✅ NEW: If booking fee is already PAID (insurance / free booking), broadcast immediately
-    // This matches the normal behavior where payment verification triggers broadcast.
-    try {
-      if (job?.pricing?.bookingFeeStatus === "PAID") {
-        await broadcastJobToProviders(job._id);
-      }
-    } catch (e) {
-      console.error("❌ Failed to broadcast insurance/free job:", e?.message || e);
-    }
-
     // ✅ Payment record only if booking fee > 0
     let payment = null;
 
@@ -824,10 +814,23 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
       });
     }
 
+    // ✅✅✅ FIX #2:
+    // If booking fee is already PAID (insurance OR fee==0), broadcast immediately
+    let broadcast = null;
+    if (bookingFeeStatus === "PAID") {
+      try {
+        broadcast = await broadcastJobToProviders(job._id);
+      } catch (e) {
+        console.error("❌ AUTO-BROADCAST FAILED:", e);
+        // do not fail job creation; job exists and is marked paid, but broadcast can be retried
+      }
+    }
+
     return res.status(201).json({
-      message: insuranceWaived
-        ? `Job created ✅ Providers found: ${providers.length}. Insurance applied — booking fee waived.`
-        : `Job created ✅ Providers found: ${providers.length}. Booking fee required.`,
+      message:
+        bookingFeeStatus === "PAID"
+          ? `Job created ✅ Booking fee already paid (insurance/free). Broadcasting now...`
+          : `Job created ✅ Providers found: ${providers.length}. Booking fee required.`,
       disclaimer:
         roleNeeded === USER_ROLES.MECHANIC
           ? { mechanicFinalFeeNotPredetermined: true, text: MECHANIC_FINAL_FEE_DISCLAIMER }
@@ -841,6 +844,7 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
         : { applied: false },
       job,
       payment,
+      broadcast,
     });
   } catch (err) {
     console.error("❌ CREATE JOB ERROR:", err);
