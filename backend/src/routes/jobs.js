@@ -10,7 +10,6 @@ import Country from "../models/Country.js";
 import CountryServiceConfig from "../models/CountryServiceConfig.js";
 import auth from "../middleware/auth.js";
 import authorizeRoles from "../middleware/role.js";
-import { broadcastJobToProviders } from "../utils/broadcastJob.js";
 
 import { findNearbyProviders } from "../utils/findNearbyProviders.js";
 import { sendJobCompletedEmail } from "../utils/sendJobCompletedEmail.js";
