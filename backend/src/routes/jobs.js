@@ -188,7 +188,20 @@ function haversineDistanceMeters(lat1, lng1, lat2, lng2) {
  * Helper: validate insurance payload (if present) and return waiver decision
  */
 async function resolveInsuranceWaiver({ req, requestCountryCode, services }) {
-  const insurance = req.body?.insurance || null;
+  // ✅ Accept both the new nested payload (insurance: { enabled, code, partnerId })
+// and legacy flat fields from older mobile builds.
+const insurance =
+  req.body?.insurance && typeof req.body.insurance === "object"
+    ? req.body.insurance
+    : req.body?.insuranceEnabled !== undefined ||
+      req.body?.insuranceCode !== undefined ||
+      req.body?.insurancePartnerId !== undefined
+    ? {
+        enabled: Boolean(req.body?.insuranceEnabled),
+        code: req.body?.insuranceCode,
+        partnerId: req.body?.insurancePartnerId,
+      }
+    : null;
 
   // If app did not send insurance object -> no waiver
   if (!insurance || typeof insurance !== "object") {
