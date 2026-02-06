@@ -1,6 +1,13 @@
 // backend/src/utils/pdf/invoicePdf.js
 import PDFDocument from "pdfkit";
 
+/**
+ * ✅ Professional Insurance Billing PDFs (Landscape)
+ * - Partner invoice (gross claim - no deductions)
+ * - Providers owed summary (tabulated by provider)
+ * - Provider detailed statement (job breakdown)
+ */
+
 function money(n) {
   const v = Number(n || 0) || 0;
   return v.toFixed(2);
@@ -23,57 +30,238 @@ function titlePeriod(period) {
   return `From ${ymd(period?.from)} to ${ymd(period?.to)}`;
 }
 
-function addHeader(doc, heading, invoice) {
-  doc.fontSize(16).text("TowMech", { continued: true }).fontSize(10).text("  |  Insurance Billing", { align: "left" });
-  doc.moveDown(0.2);
-  doc.fontSize(14).text(heading);
-  doc.moveDown(0.5);
-
-  doc.fontSize(10).text(`Partner: ${safe(invoice?.partner?.name)} (${safe(invoice?.partner?.partnerCode)})`);
-  doc.text(`Country: ${safe(invoice?.countryCode)}   Currency: ${safe(invoice?.currency)}`);
-  doc.text(titlePeriod(invoice?.period));
-  doc.moveDown(0.8);
-
-  doc.moveTo(40, doc.y).lineTo(555, doc.y).stroke();
-  doc.moveDown(0.6);
+function createDocLandscape() {
+  // A4 landscape: 842 x 595 points
+  return new PDFDocument({
+    size: "A4",
+    layout: "landscape",
+    margin: 36,
+    info: {
+      Title: "TowMech Insurance Billing",
+      Author: "TowMech",
+    },
+  });
 }
 
+/**
+ * Page geometry helpers (landscape)
+ */
+function pageBox(doc) {
+  const m = doc.page.margins.left; // all equal in our doc config
+  const left = doc.page.margins.left;
+  const right = doc.page.width - doc.page.margins.right;
+  const top = doc.page.margins.top;
+  const bottom = doc.page.height - doc.page.margins.bottom;
+  return { left, right, top, bottom, width: right - left, height: bottom - top, m };
+}
+
+function hr(doc, y, color = "#111111") {
+  const { left, right } = pageBox(doc);
+  doc.save();
+  doc.lineWidth(1);
+  doc.strokeColor(color);
+  doc.moveTo(left, y).lineTo(right, y).stroke();
+  doc.restore();
+}
+
+function drawRoundedRect(doc, x, y, w, h, r = 8) {
+  doc.roundedRect(x, y, w, h, r);
+}
+
+/**
+ * ✅ Professional header with brand + title + invoice meta block
+ */
+function addHeader(doc, heading, invoice) {
+  const { left, right } = pageBox(doc);
+
+  // Brand line
+  doc.save();
+  doc.fillColor("#111827");
+  doc.font("Helvetica-Bold").fontSize(18).text("TowMech", left, doc.y, { continued: true });
+  doc.font("Helvetica").fontSize(10).fillColor("#374151").text("  |  Insurance Billing", { continued: false });
+  doc.restore();
+
+  doc.moveDown(0.25);
+
+  // Title
+  doc.save();
+  doc.font("Helvetica-Bold").fontSize(16).fillColor("#111827").text(heading, left, doc.y);
+  doc.restore();
+
+  doc.moveDown(0.5);
+
+  // Meta block
+  const boxY = doc.y;
+  const boxH = 54;
+  const boxW = right - left;
+
+  doc.save();
+  doc.fillColor("#F3F4F6");
+  drawRoundedRect(doc, left, boxY, boxW, boxH, 10).fill();
+  doc.restore();
+
+  doc.save();
+  doc.fillColor("#111827");
+  doc.fontSize(10).font("Helvetica");
+
+  const partnerName = safe(invoice?.partner?.name);
+  const partnerCode = safe(invoice?.partner?.partnerCode);
+  const cc = safe(invoice?.countryCode);
+  const currency = safe(invoice?.currency);
+  const periodText = titlePeriod(invoice?.period);
+
+  // Left meta
+  doc.text(`Partner: ${partnerName}${partnerCode ? ` (${partnerCode})` : ""}`, left + 14, boxY + 12);
+  doc.text(`Period: ${periodText}`, left + 14, boxY + 30);
+
+  // Right meta
+  const rightColX = left + boxW * 0.68;
+  doc.text(`Country: ${cc}`, rightColX, boxY + 12);
+  doc.text(`Currency: ${currency}`, rightColX, boxY + 30);
+
+  doc.restore();
+
+  doc.y = boxY + boxH + 14;
+
+  hr(doc, doc.y, "#E5E7EB");
+  doc.moveDown(0.7);
+}
+
+/**
+ * ✅ Totals panel (boxed)
+ */
+function totalsPanel(doc, title, lines) {
+  const { left, right } = pageBox(doc);
+  const boxW = right - left;
+  const boxY = doc.y;
+  const boxH = 78;
+
+  doc.save();
+  doc.fillColor("#FFFFFF");
+  doc.strokeColor("#E5E7EB");
+  doc.lineWidth(1);
+  drawRoundedRect(doc, left, boxY, boxW, boxH, 10).fillAndStroke();
+  doc.restore();
+
+  doc.save();
+  doc.fillColor("#111827");
+  doc.font("Helvetica-Bold").fontSize(12).text(title, left + 14, boxY + 12);
+  doc.restore();
+
+  doc.save();
+  doc.fillColor("#111827");
+  doc.font("Helvetica").fontSize(10);
+
+  let y = boxY + 32;
+  for (const ln of lines) {
+    doc.text(ln, left + 14, y);
+    y += 14;
+  }
+  doc.restore();
+
+  doc.y = boxY + boxH + 14;
+}
+
+function amountCalloutRight(doc, label, valueText) {
+  const { left, right } = pageBox(doc);
+  const w = 220;
+  const h = 74;
+  const x = right - w;
+  const y = doc.y;
+
+  doc.save();
+  doc.fillColor("#111827");
+  drawRoundedRect(doc, x, y, w, h, 12).fill();
+  doc.restore();
+
+  doc.save();
+  doc.fillColor("#FFFFFF");
+  doc.font("Helvetica-Bold").fontSize(10).text(label, x + 14, y + 14);
+  doc.font("Helvetica-Bold").fontSize(18).text(valueText, x + 14, y + 34);
+  doc.restore();
+
+  // Move cursor slightly below callout area if needed
+  doc.y = y + h + 10;
+}
+
+/**
+ * ✅ Table renderer for landscape with:
+ * - header shading
+ * - row separators
+ * - page breaks that redraw header row
+ */
 function drawTable(doc, columns, rows) {
-  // columns: [{key, label, width}]
-  const startX = 40;
-  const usableW = 515;
+  const { left, right, bottom } = pageBox(doc);
+
+  const usableW = right - left;
   const totalW = columns.reduce((s, c) => s + c.width, 0);
   const scale = totalW > usableW ? usableW / totalW : 1;
-
   const cols = columns.map((c) => ({ ...c, w: c.width * scale }));
-  const rowH = 16;
 
-  const headerY = doc.y;
-  let x = startX;
-  doc.fontSize(9).font("Helvetica-Bold");
-  for (const c of cols) {
-    doc.text(c.label, x, headerY, { width: c.w, align: "left" });
-    x += c.w;
-  }
-  doc.font("Helvetica");
-  doc.moveDown(0.6);
+  const rowH = 18;
+  const headerH = 22;
 
-  let y = doc.y;
-  for (const r of rows) {
-    if (y > 760) {
-      doc.addPage();
-      y = 50;
-    }
+  function drawHeaderRow(y) {
+    doc.save();
+    doc.fillColor("#F3F4F6");
+    doc.rect(left, y, usableW, headerH).fill();
+    doc.restore();
 
-    x = startX;
+    doc.save();
+    doc.font("Helvetica-Bold").fontSize(9).fillColor("#111827");
+    let x = left + 8;
+    const textY = y + 6;
+
     for (const c of cols) {
-      const text = safe(r[c.key]);
-      doc.fontSize(9).text(text, x, y, { width: c.w, align: "left" });
+      doc.text(c.label, x, textY, { width: c.w - 10, align: c.align || "left" });
       x += c.w;
     }
+    doc.restore();
+
+    // bottom border
+    doc.save();
+    doc.strokeColor("#E5E7EB").lineWidth(1);
+    doc.moveTo(left, y + headerH).lineTo(right, y + headerH).stroke();
+    doc.restore();
+  }
+
+  // Start table
+  let y = doc.y;
+  drawHeaderRow(y);
+  y += headerH;
+
+  doc.save();
+  doc.font("Helvetica").fontSize(9).fillColor("#111827");
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+
+    // Page break
+    if (y + rowH > bottom - 18) {
+      doc.addPage();
+      y = doc.y;
+      drawHeaderRow(y);
+      y += headerH;
+    }
+
+    // Row content
+    let x = left + 8;
+    for (const c of cols) {
+      const text = safe(r[c.key]);
+      doc.text(text, x, y + 4, { width: c.w - 10, align: c.align || "left" });
+      x += c.w;
+    }
+
+    // Row separator
+    doc.save();
+    doc.strokeColor("#F3F4F6").lineWidth(1);
+    doc.moveTo(left, y + rowH).lineTo(right, y + rowH).stroke();
+    doc.restore();
+
     y += rowH;
   }
-  doc.y = y + 4;
+  doc.restore();
+
+  doc.y = y + 12;
 }
 
 function bufferFromDoc(doc) {
@@ -89,31 +277,36 @@ function bufferFromDoc(doc) {
 /**
  * 1) ✅ Partner invoice (insurance company owes you)
  * Total = totals.totalPartnerAmountDue (gross)
+ * ✅ Landscape + professional layout
  */
 export async function renderPartnerInvoicePdfBuffer(invoice) {
-  const doc = new PDFDocument({ size: "A4", margin: 40 });
+  const doc = createDocLandscape();
   addHeader(doc, "Insurance Partner Invoice (Amount Due)", invoice);
 
-  doc.fontSize(11).font("Helvetica-Bold").text("Totals");
-  doc.font("Helvetica").moveDown(0.4);
-
   const t = invoice?.totals || {};
-  doc.fontSize(10).text(`Total jobs: ${safe(t.totalJobs)}`);
-  doc.text(`Gross total (partner owes): ${money(t.totalPartnerAmountDue)} ${safe(invoice?.currency)}`);
-  doc.moveDown(0.2);
-  doc.fontSize(9).text(`(Info) Booking fee waived: ${money(t.totalBookingFeeWaived)} ${safe(invoice?.currency)}`);
-  doc.fontSize(9).text(`(Info) Commission total: ${money(t.totalCommission)} ${safe(invoice?.currency)}`);
-  doc.moveDown(0.8);
+  const currency = safe(invoice?.currency);
 
-  doc.fontSize(11).font("Helvetica-Bold").text("Jobs Included");
-  doc.font("Helvetica").moveDown(0.4);
+  totalsPanel(doc, "Totals", [
+    `Total jobs: ${safe(t.totalJobs)}`,
+    `Gross total (partner owes): ${money(t.totalPartnerAmountDue)} ${currency}`,
+    `(Info) Booking fee waived: ${money(t.totalBookingFeeWaived)} ${currency}`,
+    `(Info) Commission total: ${money(t.totalCommission)} ${currency}`,
+  ]);
+
+  // Amount due callout (right)
+  amountCalloutRight(doc, "TOTAL AMOUNT DUE", `${money(t.totalPartnerAmountDue)} ${currency}`);
+
+  doc.save();
+  doc.font("Helvetica-Bold").fontSize(12).fillColor("#111827").text("Jobs Included");
+  doc.restore();
+  doc.moveDown(0.4);
 
   const rows = (invoice?.items || []).map((it) => ({
     shortId: it.shortId,
     createdAt: ymd(it.createdAt),
     provider: it?.provider?.name || "-",
-    pickup: (it.pickupAddressText || "-").slice(0, 30),
-    dropoff: (it.dropoffAddressText || "-").slice(0, 30),
+    pickup: safe(it.pickupAddressText || "-"),
+    dropoff: safe(it.dropoffAddressText || "-"),
     gross: money(it?.pricing?.estimatedTotal),
     code: it?.insurance?.code || "-",
   }));
@@ -121,22 +314,24 @@ export async function renderPartnerInvoicePdfBuffer(invoice) {
   drawTable(
     doc,
     [
-      { key: "shortId", label: "Job", width: 55 },
-      { key: "createdAt", label: "Date", width: 70 },
-      { key: "provider", label: "Provider", width: 110 },
-      { key: "pickup", label: "Pickup", width: 110 },
-      { key: "dropoff", label: "Dropoff", width: 110 },
-      { key: "gross", label: "Gross", width: 55 },
-      { key: "code", label: "Ins Code", width: 60 },
+      { key: "shortId", label: "Job", width: 70 },
+      { key: "createdAt", label: "Date", width: 80 },
+      { key: "provider", label: "Provider", width: 140 },
+      { key: "pickup", label: "Pickup", width: 190 },
+      { key: "dropoff", label: "Dropoff", width: 190 },
+      { key: "gross", label: "Gross", width: 70, align: "right" },
+      { key: "code", label: "Ins Code", width: 80 },
     ],
     rows
   );
 
-  doc.moveDown(0.6);
-  doc.fontSize(12).font("Helvetica-Bold").text(
-    `TOTAL AMOUNT DUE: ${money(t.totalPartnerAmountDue)} ${safe(invoice?.currency)}`,
+  // Footer total
+  doc.save();
+  doc.font("Helvetica-Bold").fontSize(12).fillColor("#111827").text(
+    `TOTAL AMOUNT DUE: ${money(t.totalPartnerAmountDue)} ${currency}`,
     { align: "right" }
   );
+  doc.restore();
 
   return bufferFromDoc(doc);
 }
@@ -149,24 +344,29 @@ export async function renderPartnerInvoicePdfBuffer(invoice) {
  * - commission (booking fee)
  */
 export async function renderProvidersSummaryPdfBuffer(invoice) {
-  const doc = new PDFDocument({ size: "A4", margin: 40 });
+  const doc = createDocLandscape();
   addHeader(doc, "Providers Owed Summary (Tabulated)", invoice);
 
   const t = invoice?.totals || {};
-  doc.fontSize(11).font("Helvetica-Bold").text("Totals");
-  doc.font("Helvetica").moveDown(0.4);
+  const currency = safe(invoice?.currency);
 
-  doc.fontSize(10).text(`Total jobs: ${safe(t.totalJobs)}`);
-  doc.text(`Total provider amount due (NET): ${money(t.totalProviderAmountDue)} ${safe(invoice?.currency)}`);
-  doc.fontSize(9).text(`(Info) Total commission/booking fee: ${money(t.totalCommission)} ${safe(invoice?.currency)}`);
-  doc.moveDown(0.8);
+  totalsPanel(doc, "Totals", [
+    `Total jobs: ${safe(t.totalJobs)}`,
+    `Total provider amount due (NET): ${money(t.totalProviderAmountDue)} ${currency}`,
+    `(Info) Total commission/booking fee: ${money(t.totalCommission)} ${currency}`,
+  ]);
 
-  doc.fontSize(11).font("Helvetica-Bold").text("Providers");
-  doc.font("Helvetica").moveDown(0.4);
+  // Callout: net due (all providers)
+  amountCalloutRight(doc, "TOTAL NET DUE (ALL PROVIDERS)", `${money(t.totalProviderAmountDue)} ${currency}`);
+
+  doc.save();
+  doc.font("Helvetica-Bold").fontSize(12).fillColor("#111827").text("Providers");
+  doc.restore();
+  doc.moveDown(0.4);
 
   const rows = (invoice?.groupedByProvider || []).map((p) => ({
     name: p?.name || "Unknown",
-    providerId: safe(p?.providerId).slice(0, 8) + "…",
+    providerId: safe(p?.providerId),
     jobs: String(p?.jobCount || 0),
     gross: money(p?.grossTotal),
     commission: money(p?.commissionTotal),
@@ -176,21 +376,22 @@ export async function renderProvidersSummaryPdfBuffer(invoice) {
   drawTable(
     doc,
     [
-      { key: "name", label: "Provider", width: 170 },
-      { key: "providerId", label: "ProviderId", width: 80 },
-      { key: "jobs", label: "Jobs", width: 40 },
-      { key: "gross", label: "Gross", width: 70 },
-      { key: "commission", label: "Commission", width: 80 },
-      { key: "net", label: "Net Due", width: 70 },
+      { key: "name", label: "Provider", width: 210 },
+      { key: "providerId", label: "Provider ID", width: 210 },
+      { key: "jobs", label: "Jobs", width: 55, align: "right" },
+      { key: "gross", label: "Gross", width: 90, align: "right" },
+      { key: "commission", label: "Commission", width: 110, align: "right" },
+      { key: "net", label: "Net Due", width: 90, align: "right" },
     ],
     rows
   );
 
-  doc.moveDown(0.6);
-  doc.fontSize(12).font("Helvetica-Bold").text(
-    `TOTAL NET DUE (ALL PROVIDERS): ${money(t.totalProviderAmountDue)} ${safe(invoice?.currency)}`,
+  doc.save();
+  doc.font("Helvetica-Bold").fontSize(12).fillColor("#111827").text(
+    `TOTAL NET DUE (ALL PROVIDERS): ${money(t.totalProviderAmountDue)} ${currency}`,
     { align: "right" }
   );
+  doc.restore();
 
   return bufferFromDoc(doc);
 }
@@ -204,7 +405,7 @@ export async function renderProvidersSummaryPdfBuffer(invoice) {
  * - per-job gross / commission / net
  */
 export async function renderProviderDetailPdfBuffer(invoice, providerId) {
-  const doc = new PDFDocument({ size: "A4", margin: 40 });
+  const doc = createDocLandscape();
 
   const pid = String(providerId || "").trim();
   if (!pid) {
@@ -216,40 +417,68 @@ export async function renderProviderDetailPdfBuffer(invoice, providerId) {
 
   addHeader(doc, "Provider Detailed Statement", invoice);
 
-  doc.fontSize(11).font("Helvetica-Bold").text("Provider");
-  doc.font("Helvetica").moveDown(0.3);
-  doc.fontSize(10).text(`Name: ${safe(providerBlock?.name || "Unknown Provider")}`);
-  doc.text(`ProviderId: ${safe(pid)}`);
-  if (providerBlock?.email) doc.text(`Email: ${safe(providerBlock.email)}`);
-  if (providerBlock?.phone) doc.text(`Phone: ${safe(providerBlock.phone)}`);
-  doc.moveDown(0.6);
+  const currency = safe(invoice?.currency);
 
-  doc.fontSize(11).font("Helvetica-Bold").text("Insurance Partner (Requester)");
-  doc.font("Helvetica").moveDown(0.3);
-  doc.fontSize(10).text(`Partner: ${safe(invoice?.partner?.name)} (${safe(invoice?.partner?.partnerCode)})`);
-  doc.moveDown(0.8);
+  // Provider card
+  const { left, right } = pageBox(doc);
+  const boxY = doc.y;
+  const boxW = right - left;
+  const boxH = 86;
 
-  doc.fontSize(11).font("Helvetica-Bold").text("Summary");
-  doc.font("Helvetica").moveDown(0.3);
+  doc.save();
+  doc.fillColor("#FFFFFF");
+  doc.strokeColor("#E5E7EB");
+  doc.lineWidth(1);
+  drawRoundedRect(doc, left, boxY, boxW, boxH, 10).fillAndStroke();
+  doc.restore();
 
-  doc.fontSize(10).text(`Jobs: ${safe(providerBlock?.jobCount || 0)}`);
-  doc.text(`Gross total: ${money(providerBlock?.grossTotal)} ${safe(invoice?.currency)}`);
-  doc.text(`Commission (booking fee): ${money(providerBlock?.commissionTotal)} ${safe(invoice?.currency)}`);
-  doc.fontSize(11).font("Helvetica-Bold").text(
-    `NET AMOUNT DUE: ${money(providerBlock?.netTotalDue)} ${safe(invoice?.currency)}`,
-    { align: "left" }
+  doc.save();
+  doc.fillColor("#111827");
+  doc.font("Helvetica-Bold").fontSize(12).text("Provider", left + 14, boxY + 12);
+  doc.font("Helvetica").fontSize(10);
+  doc.text(`Name: ${safe(providerBlock?.name || "Unknown Provider")}`, left + 14, boxY + 32);
+  doc.text(`ProviderId: ${safe(pid)}`, left + 14, boxY + 46);
+
+  if (providerBlock?.email) doc.text(`Email: ${safe(providerBlock.email)}`, left + 320, boxY + 32);
+  if (providerBlock?.phone) doc.text(`Phone: ${safe(providerBlock.phone)}`, left + 320, boxY + 46);
+
+  doc.font("Helvetica-Bold").fontSize(11).text(
+    `NET AMOUNT DUE: ${money(providerBlock?.netTotalDue)} ${currency}`,
+    left + 14,
+    boxY + 64
   );
+  doc.restore();
+
+  doc.y = boxY + boxH + 14;
+
+  // Insurance partner requester
+  doc.save();
+  doc.font("Helvetica-Bold").fontSize(12).fillColor("#111827").text("Insurance Partner (Requester)");
+  doc.font("Helvetica").fontSize(10).fillColor("#111827");
+  doc.text(`Partner: ${safe(invoice?.partner?.name)} (${safe(invoice?.partner?.partnerCode)})`);
+  doc.restore();
 
   doc.moveDown(0.8);
-  doc.fontSize(11).font("Helvetica-Bold").text("Job Breakdown");
-  doc.font("Helvetica").moveDown(0.4);
+
+  totalsPanel(doc, "Summary", [
+    `Jobs: ${safe(providerBlock?.jobCount || 0)}`,
+    `Gross total: ${money(providerBlock?.grossTotal)} ${currency}`,
+    `Commission (booking fee): ${money(providerBlock?.commissionTotal)} ${currency}`,
+    `Net amount due: ${money(providerBlock?.netTotalDue)} ${currency}`,
+  ]);
+
+  // Breakdown table
+  doc.save();
+  doc.font("Helvetica-Bold").fontSize(12).fillColor("#111827").text("Job Breakdown");
+  doc.restore();
+  doc.moveDown(0.4);
 
   const jobs = (providerBlock?.jobs || []).map((j) => ({
     shortId: j.shortId,
     createdAt: ymd(j.createdAt),
     status: j.status,
-    pickup: (j.pickupAddressText || "-").slice(0, 28),
-    dropoff: (j.dropoffAddressText || "-").slice(0, 28),
+    pickup: safe(j.pickupAddressText || "-"),
+    dropoff: safe(j.dropoffAddressText || "-"),
     gross: money(j.estimatedTotal),
     comm: money(j.commissionAmount),
     net: money(j.providerAmountDue),
@@ -259,24 +488,25 @@ export async function renderProviderDetailPdfBuffer(invoice, providerId) {
   drawTable(
     doc,
     [
-      { key: "shortId", label: "Job", width: 55 },
-      { key: "createdAt", label: "Date", width: 60 },
-      { key: "status", label: "Status", width: 70 },
-      { key: "pickup", label: "Pickup", width: 105 },
-      { key: "dropoff", label: "Dropoff", width: 105 },
-      { key: "gross", label: "Gross", width: 50 },
-      { key: "comm", label: "Comm", width: 45 },
-      { key: "net", label: "Net", width: 45 },
-      { key: "code", label: "Ins Code", width: 60 },
+      { key: "shortId", label: "Job", width: 70 },
+      { key: "createdAt", label: "Date", width: 85 },
+      { key: "status", label: "Status", width: 90 },
+      { key: "pickup", label: "Pickup", width: 185 },
+      { key: "dropoff", label: "Dropoff", width: 185 },
+      { key: "gross", label: "Gross", width: 70, align: "right" },
+      { key: "comm", label: "Comm", width: 70, align: "right" },
+      { key: "net", label: "Net", width: 70, align: "right" },
+      { key: "code", label: "Ins Code", width: 80 },
     ],
     jobs
   );
 
-  doc.moveDown(0.7);
-  doc.fontSize(12).font("Helvetica-Bold").text(
-    `NET AMOUNT DUE: ${money(providerBlock?.netTotalDue)} ${safe(invoice?.currency)}`,
+  doc.save();
+  doc.font("Helvetica-Bold").fontSize(12).fillColor("#111827").text(
+    `NET AMOUNT DUE: ${money(providerBlock?.netTotalDue)} ${currency}`,
     { align: "right" }
   );
+  doc.restore();
 
   return bufferFromDoc(doc);
 }
