@@ -5,13 +5,17 @@ import User, { USER_ROLES } from "../models/User.js";
 
 import InsurancePartner from "../models/InsurancePartner.js";
 import InsuranceCode from "../models/InsuranceCode.js";
+import Job from "../models/Job.js";
 
 import { generateCodesForPartner, disableInsuranceCode } from "../services/insurance/codeService.js";
+
+// ✅ Invoice builder + PDF renderers
+import { buildInsuranceInvoice } from "../services/insurance/invoiceService.js";
 import {
-  buildInsuranceInvoice,
-  parseInvoiceQueryToRange,
-} from "../services/insurance/invoiceService.js";
-import { renderInvoicePdfToBuffer } from "../utils/pdf/invoicePdf.js";
+  renderPartnerInvoicePdfBuffer,
+  renderProvidersSummaryPdfBuffer,
+  renderProviderDetailPdfBuffer,
+} from "../utils/pdf/invoicePdf.js";
 
 const router = express.Router();
 
@@ -64,9 +68,7 @@ router.get("/partners", auth, requireAdmin, async (req, res) => {
     const partners = await InsurancePartner.find(
       countryCode ? { countryCodes: { $in: [countryCode] } } : {}
     )
-      .select(
-        "name partnerCode email phone logoUrl description countryCodes isActive createdAt updatedAt"
-      )
+      .select("name partnerCode email phone logoUrl description countryCodes isActive createdAt updatedAt")
       .sort({ createdAt: -1 });
 
     return res.status(200).json({ partners });
@@ -228,39 +230,20 @@ router.patch("/codes/:id/disable", auth, requireAdmin, async (req, res) => {
 
 /**
  * ============================
- * INVOICE (JOB-BASED)
+ * INVOICE JSON
  * ============================
- *
- * GET /api/admin/insurance/invoice
- * Query:
- * - partnerId (required)
- * - countryCode (optional, header or query)
- * - month=YYYY-MM  OR  from=YYYY-MM-DD&to=YYYY-MM-DD
- * - providerId (optional) -> filter assignedTo
  */
 router.get("/invoice", auth, requireAdmin, async (req, res) => {
   try {
-    const partnerId = String(req.query?.partnerId || "").trim();
-    if (!partnerId) return res.status(400).json({ message: "partnerId is required" });
-
     const countryCode = resolveReqCountryCode(req);
 
-    const range = parseInvoiceQueryToRange({
-      month: req.query?.month,
-      from: req.query?.from,
-      to: req.query?.to,
-    });
-    if (!range.ok) return res.status(400).json({ message: range.message });
-
-    const providerId = String(req.query?.providerId || "").trim() || null;
-
     const invoice = await buildInsuranceInvoice({
-      partnerId,
       countryCode,
-      rangeStart: range.start,
-      rangeEnd: range.end,
-      month: range.month,
-      providerId,
+      partnerId: String(req.query?.partnerId || "").trim(),
+      month: String(req.query?.month || "").trim() || null,
+      from: String(req.query?.from || "").trim() || null,
+      to: String(req.query?.to || "").trim() || null,
+      providerId: String(req.query?.providerId || "").trim() || null,
     });
 
     return res.status(200).json({ ok: true, invoice });
@@ -270,48 +253,111 @@ router.get("/invoice", auth, requireAdmin, async (req, res) => {
 });
 
 /**
- * GET /api/admin/insurance/invoice/pdf
- * Same query params as /invoice.
+ * ============================
+ * 1) Partner invoice PDF (what insurer owes you)
+ * ============================
  */
 router.get("/invoice/pdf", auth, requireAdmin, async (req, res) => {
   try {
-    const partnerId = String(req.query?.partnerId || "").trim();
-    if (!partnerId) return res.status(400).json({ message: "partnerId is required" });
-
     const countryCode = resolveReqCountryCode(req);
 
-    const range = parseInvoiceQueryToRange({
-      month: req.query?.month,
-      from: req.query?.from,
-      to: req.query?.to,
-    });
-    if (!range.ok) return res.status(400).json({ message: range.message });
-
-    const providerId = String(req.query?.providerId || "").trim() || null;
-
     const invoice = await buildInsuranceInvoice({
-      partnerId,
       countryCode,
-      rangeStart: range.start,
-      rangeEnd: range.end,
-      month: range.month,
-      providerId,
+      partnerId: String(req.query?.partnerId || "").trim(),
+      month: String(req.query?.month || "").trim() || null,
+      from: String(req.query?.from || "").trim() || null,
+      to: String(req.query?.to || "").trim() || null,
+      providerId: String(req.query?.providerId || "").trim() || null,
     });
 
-    const pdfBuffer = await renderInvoicePdfToBuffer(invoice);
+    const pdfBuffer = await renderPartnerInvoicePdfBuffer(invoice);
 
-    const label =
-      (invoice?.period?.month && `invoice-${countryCode}-${invoice.period.month}`) ||
-      `invoice-${countryCode}-${invoice.period.from.slice(0, 10)}-to-${invoice.period.to.slice(
-        0,
-        10
-      )}`;
+    const filename = invoice?.period?.month
+      ? `partner-invoice-${invoice.countryCode}-${invoice.period.month}.pdf`
+      : `partner-invoice-${invoice.countryCode}-${invoice.period.from}-to-${invoice.period.to}.pdf`;
 
     res.setHeader("Content-Type", "application/pdf");
-    res.setHeader("Content-Disposition", `attachment; filename="${label}.pdf"`);
-    res.status(200).send(pdfBuffer);
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    res.setHeader("Content-Length", pdfBuffer.length);
+
+    return res.status(200).send(pdfBuffer);
   } catch (err) {
     return res.status(500).json({ message: "PDF failed", error: err.message });
+  }
+});
+
+/**
+ * ============================
+ * 2) Providers owed summary PDF (tabulated)
+ * ============================
+ * GET /api/admin/insurance/providers/pdf
+ * Query: partnerId + month/from/to (same as invoice)
+ */
+router.get("/providers/pdf", auth, requireAdmin, async (req, res) => {
+  try {
+    const countryCode = resolveReqCountryCode(req);
+
+    const invoice = await buildInsuranceInvoice({
+      countryCode,
+      partnerId: String(req.query?.partnerId || "").trim(),
+      month: String(req.query?.month || "").trim() || null,
+      from: String(req.query?.from || "").trim() || null,
+      to: String(req.query?.to || "").trim() || null,
+      providerId: null, // summary is all providers
+    });
+
+    const pdfBuffer = await renderProvidersSummaryPdfBuffer(invoice);
+
+    const filename = invoice?.period?.month
+      ? `providers-owed-${invoice.countryCode}-${invoice.period.month}.pdf`
+      : `providers-owed-${invoice.countryCode}-${invoice.period.from}-to-${invoice.period.to}.pdf`;
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    res.setHeader("Content-Length", pdfBuffer.length);
+
+    return res.status(200).send(pdfBuffer);
+  } catch (err) {
+    return res.status(500).json({ message: "Providers PDF failed", error: err.message });
+  }
+});
+
+/**
+ * ============================
+ * 3) Provider detailed statement PDF
+ * ============================
+ * GET /api/admin/insurance/provider/pdf
+ * Query: partnerId + providerId + month/from/to
+ */
+router.get("/provider/pdf", auth, requireAdmin, async (req, res) => {
+  try {
+    const countryCode = resolveReqCountryCode(req);
+
+    const providerId = String(req.query?.providerId || "").trim();
+    if (!providerId) return res.status(400).json({ message: "providerId is required" });
+
+    const invoice = await buildInsuranceInvoice({
+      countryCode,
+      partnerId: String(req.query?.partnerId || "").trim(),
+      month: String(req.query?.month || "").trim() || null,
+      from: String(req.query?.from || "").trim() || null,
+      to: String(req.query?.to || "").trim() || null,
+      providerId, // build invoice filtered to that provider
+    });
+
+    const pdfBuffer = await renderProviderDetailPdfBuffer(invoice, providerId);
+
+    const filename = invoice?.period?.month
+      ? `provider-statement-${invoice.countryCode}-${invoice.period.month}-${providerId}.pdf`
+      : `provider-statement-${invoice.countryCode}-${invoice.period.from}-to-${invoice.period.to}-${providerId}.pdf`;
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    res.setHeader("Content-Length", pdfBuffer.length);
+
+    return res.status(200).send(pdfBuffer);
+  } catch (err) {
+    return res.status(500).json({ message: "Provider PDF failed", error: err.message });
   }
 });
 
