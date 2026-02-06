@@ -50,13 +50,12 @@ async function requireAdmin(req, res, next) {
     req.adminUser = user;
     return next();
   } catch (err) {
-  console.error("PDF ERROR /invoice/pdf:", err);
-
-  return res.status(500).json({
-    message: "PDF failed",
-    error: err?.message || String(err),
-    stack: process.env.NODE_ENV === "development" ? err?.stack : undefined,
-  });
+    return res.status(500).json({
+      message: "Auth error",
+      error: err?.message || String(err),
+      stack: process.env.NODE_ENV === "development" ? err?.stack : undefined,
+    });
+  }
 }
 
 /**
@@ -78,7 +77,11 @@ router.get("/partners", auth, requireAdmin, async (req, res) => {
 
     return res.status(200).json({ partners });
   } catch (err) {
-    return res.status(500).json({ message: "Failed to load partners", error: err.message });
+    return res.status(500).json({
+      message: "Failed to load partners",
+      error: err?.message || String(err),
+      stack: process.env.NODE_ENV === "development" ? err?.stack : undefined,
+    });
   }
 });
 
@@ -122,7 +125,11 @@ router.post("/partners", auth, requireAdmin, async (req, res) => {
 
     return res.status(201).json({ message: "Insurance partner created ✅", partner });
   } catch (err) {
-    return res.status(500).json({ message: "Create failed", error: err.message });
+    return res.status(500).json({
+      message: "Create failed",
+      error: err?.message || String(err),
+      stack: process.env.NODE_ENV === "development" ? err?.stack : undefined,
+    });
   }
 });
 
@@ -151,7 +158,11 @@ router.patch("/partners/:id", auth, requireAdmin, async (req, res) => {
 
     return res.status(200).json({ message: "Partner updated ✅", partner });
   } catch (err) {
-    return res.status(500).json({ message: "Update failed", error: err.message });
+    return res.status(500).json({
+      message: "Update failed",
+      error: err?.message || String(err),
+      stack: process.env.NODE_ENV === "development" ? err?.stack : undefined,
+    });
   }
 });
 
@@ -183,7 +194,11 @@ router.get("/codes", auth, requireAdmin, async (req, res) => {
 
     return res.status(200).json({ codes });
   } catch (err) {
-    return res.status(500).json({ message: "Failed to load codes", error: err.message });
+    return res.status(500).json({
+      message: "Failed to load codes",
+      error: err?.message || String(err),
+      stack: process.env.NODE_ENV === "development" ? err?.stack : undefined,
+    });
   }
 });
 
@@ -213,7 +228,11 @@ router.post("/codes/generate", auth, requireAdmin, async (req, res) => {
 
     return res.status(201).json({ message: "Codes generated ✅", ...result });
   } catch (err) {
-    return res.status(500).json({ message: "Generate failed", error: err.message });
+    return res.status(500).json({
+      message: "Generate failed",
+      error: err?.message || String(err),
+      stack: process.env.NODE_ENV === "development" ? err?.stack : undefined,
+    });
   }
 });
 
@@ -229,7 +248,11 @@ router.patch("/codes/:id/disable", auth, requireAdmin, async (req, res) => {
 
     return res.status(200).json(result);
   } catch (err) {
-    return res.status(500).json({ message: "Disable failed", error: err.message });
+    return res.status(500).json({
+      message: "Disable failed",
+      error: err?.message || String(err),
+      stack: process.env.NODE_ENV === "development" ? err?.stack : undefined,
+    });
   }
 });
 
@@ -253,7 +276,11 @@ router.get("/invoice", auth, requireAdmin, async (req, res) => {
 
     return res.status(200).json({ ok: true, invoice });
   } catch (err) {
-    return res.status(500).json({ message: "Invoice fetch failed", error: err.message });
+    return res.status(500).json({
+      message: "Invoice fetch failed",
+      error: err?.message || String(err),
+      stack: process.env.NODE_ENV === "development" ? err?.stack : undefined,
+    });
   }
 });
 
@@ -287,7 +314,12 @@ router.get("/invoice/pdf", auth, requireAdmin, async (req, res) => {
 
     return res.status(200).send(pdfBuffer);
   } catch (err) {
-    return res.status(500).json({ message: "PDF failed", error: err.message });
+    console.error("PDF ERROR /invoice/pdf:", err);
+    return res.status(500).json({
+      message: "PDF failed",
+      error: err?.message || String(err),
+      stack: process.env.NODE_ENV === "development" ? err?.stack : undefined,
+    });
   }
 });
 
@@ -323,7 +355,12 @@ router.get("/providers/pdf", auth, requireAdmin, async (req, res) => {
 
     return res.status(200).send(pdfBuffer);
   } catch (err) {
-    return res.status(500).json({ message: "Providers PDF failed", error: err.message });
+    console.error("PDF ERROR /providers/pdf:", err);
+    return res.status(500).json({
+      message: "Providers PDF failed",
+      error: err?.message || String(err),
+      stack: process.env.NODE_ENV === "development" ? err?.stack : undefined,
+    });
   }
 });
 
@@ -362,7 +399,12 @@ router.get("/provider/pdf", auth, requireAdmin, async (req, res) => {
 
     return res.status(200).send(pdfBuffer);
   } catch (err) {
-    return res.status(500).json({ message: "Provider PDF failed", error: err.message });
+    console.error("PDF ERROR /provider/pdf:", err);
+    return res.status(500).json({
+      message: "Provider PDF failed",
+      error: err?.message || String(err),
+      stack: process.env.NODE_ENV === "development" ? err?.stack : undefined,
+    });
   }
 });
 
