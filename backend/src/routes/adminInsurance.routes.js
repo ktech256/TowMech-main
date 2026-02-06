@@ -5,7 +5,6 @@ import User, { USER_ROLES } from "../models/User.js";
 
 import InsurancePartner from "../models/InsurancePartner.js";
 import InsuranceCode from "../models/InsuranceCode.js";
-import Job from "../models/Job.js";
 
 import { generateCodesForPartner, disableInsuranceCode } from "../services/insurance/codeService.js";
 
@@ -37,6 +36,27 @@ function errPayload(err) {
     error: err?.message || String(err),
     stack: process.env.NODE_ENV === "development" ? err?.stack : undefined,
   };
+}
+
+function ymdForFilename(iso) {
+  try {
+    if (!iso) return "";
+    const d = new Date(iso);
+    if (!Number.isFinite(d.getTime())) return "";
+    return d.toISOString().slice(0, 10);
+  } catch {
+    return "";
+  }
+}
+
+function periodFilename(invoice, prefix, suffix = "") {
+  const cc = invoice?.countryCode || "ZA";
+  const m = invoice?.period?.month || null;
+  if (m) return `${prefix}-${cc}-${m}${suffix}.pdf`;
+
+  const from = ymdForFilename(invoice?.period?.from);
+  const to = ymdForFilename(invoice?.period?.to);
+  return `${prefix}-${cc}-${from || "from"}-to-${to || "to"}${suffix}.pdf`;
 }
 
 /**
@@ -103,7 +123,6 @@ router.post("/partners", auth, requireAdmin, async (req, res) => {
     }
 
     const codeUpper = String(partnerCode).trim().toUpperCase();
-
     const exists = await InsurancePartner.findOne({ partnerCode: codeUpper });
     if (exists) return res.status(409).json({ message: "partnerCode already exists" });
 
@@ -261,7 +280,7 @@ router.get("/invoice", auth, requireAdmin, async (req, res) => {
 
 /**
  * ============================
- * 1) Partner invoice PDF (what insurer owes you)
+ * 1) Partner invoice PDF
  * ============================
  */
 router.get("/invoice/pdf", auth, requireAdmin, async (req, res) => {
@@ -278,30 +297,26 @@ router.get("/invoice/pdf", auth, requireAdmin, async (req, res) => {
     });
 
     const pdfBuffer = await renderPartnerInvoicePdfBuffer(invoice);
-
-    const filename = invoice?.period?.month
-      ? `partner-invoice-${invoice.countryCode}-${invoice.period.month}.pdf`
-      : `partner-invoice-${invoice.countryCode}-${invoice.period.from}-to-${invoice.period.to}.pdf`;
+    const filename = periodFilename(invoice, "partner-invoice");
 
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
     res.setHeader("Content-Length", pdfBuffer.length);
+
+    // Helpful for some proxies / browsers:
     res.setHeader("Cache-Control", "no-store");
 
     return res.status(200).send(pdfBuffer);
   } catch (err) {
     console.error("PDF ERROR /invoice/pdf:", err);
-
-    if (res.headersSent) return;
     return res.status(500).json({ message: "PDF failed", ...errPayload(err) });
   }
 });
 
 /**
  * ============================
- * 2) Providers owed summary PDF (tabulated)
+ * 2) Providers owed summary PDF
  * ============================
- * GET /api/admin/insurance/providers/pdf
  */
 router.get("/providers/pdf", auth, requireAdmin, async (req, res) => {
   try {
@@ -317,10 +332,7 @@ router.get("/providers/pdf", auth, requireAdmin, async (req, res) => {
     });
 
     const pdfBuffer = await renderProvidersSummaryPdfBuffer(invoice);
-
-    const filename = invoice?.period?.month
-      ? `providers-owed-${invoice.countryCode}-${invoice.period.month}.pdf`
-      : `providers-owed-${invoice.countryCode}-${invoice.period.from}-to-${invoice.period.to}.pdf`;
+    const filename = periodFilename(invoice, "providers-owed");
 
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
@@ -330,8 +342,6 @@ router.get("/providers/pdf", auth, requireAdmin, async (req, res) => {
     return res.status(200).send(pdfBuffer);
   } catch (err) {
     console.error("PDF ERROR /providers/pdf:", err);
-
-    if (res.headersSent) return;
     return res.status(500).json({ message: "Providers PDF failed", ...errPayload(err) });
   }
 });
@@ -340,7 +350,6 @@ router.get("/providers/pdf", auth, requireAdmin, async (req, res) => {
  * ============================
  * 3) Provider detailed statement PDF
  * ============================
- * GET /api/admin/insurance/provider/pdf
  */
 router.get("/provider/pdf", auth, requireAdmin, async (req, res) => {
   try {
@@ -359,10 +368,7 @@ router.get("/provider/pdf", auth, requireAdmin, async (req, res) => {
     });
 
     const pdfBuffer = await renderProviderDetailPdfBuffer(invoice, providerId);
-
-    const filename = invoice?.period?.month
-      ? `provider-statement-${invoice.countryCode}-${invoice.period.month}-${providerId}.pdf`
-      : `provider-statement-${invoice.countryCode}-${invoice.period.from}-to-${invoice.period.to}-${providerId}.pdf`;
+    const filename = periodFilename(invoice, "provider-statement", `-${providerId}`);
 
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
@@ -372,8 +378,6 @@ router.get("/provider/pdf", auth, requireAdmin, async (req, res) => {
     return res.status(200).send(pdfBuffer);
   } catch (err) {
     console.error("PDF ERROR /provider/pdf:", err);
-
-    if (res.headersSent) return;
     return res.status(500).json({ message: "Provider PDF failed", ...errPayload(err) });
   }
 });

@@ -62,8 +62,11 @@ function hr(doc, y, color = "#111111") {
   doc.restore();
 }
 
+/**
+ * ✅ FIX: return doc so callers can chain .fill() / .fillAndStroke()
+ */
 function drawRoundedRect(doc, x, y, w, h, r = 8) {
-  doc.roundedRect(x, y, w, h, r);
+  return doc.roundedRect(x, y, w, h, r);
 }
 
 /**
@@ -162,7 +165,7 @@ function totalsPanel(doc, title, lines) {
 
 function amountCalloutRight(doc, label, valueText) {
   const { right } = pageBox(doc);
-  const w = 240;
+  const w = 220;
   const h = 74;
   const x = right - w;
   const y = doc.y;
@@ -188,7 +191,7 @@ function amountCalloutRight(doc, label, valueText) {
  * - page breaks that redraw header row
  */
 function drawTable(doc, columns, rows) {
-  const { left, right, bottom, top } = pageBox(doc);
+  const { left, right, bottom } = pageBox(doc);
 
   const usableW = right - left;
   const totalW = columns.reduce((s, c) => s + c.width, 0);
@@ -227,13 +230,12 @@ function drawTable(doc, columns, rows) {
 
   doc.save();
   doc.font("Helvetica").fontSize(9).fillColor("#111827");
-
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i];
 
     if (y + rowH > bottom - 18) {
       doc.addPage();
-      y = top; // ✅ ensure we restart from top margin
+      y = doc.y;
       drawHeaderRow(y);
       y += headerH;
     }
@@ -252,8 +254,8 @@ function drawTable(doc, columns, rows) {
 
     y += rowH;
   }
-
   doc.restore();
+
   doc.y = y + 12;
 }
 
@@ -269,7 +271,6 @@ function bufferFromDoc(doc) {
 
 /**
  * 1) ✅ Partner invoice (insurance company owes you)
- * Total = totals.totalPartnerAmountDue (gross)
  */
 export async function renderPartnerInvoicePdfBuffer(invoice) {
   const doc = createDocLandscape();
@@ -327,7 +328,7 @@ export async function renderPartnerInvoicePdfBuffer(invoice) {
 }
 
 /**
- * 2) ✅ Providers owed summary (tabulated by provider)
+ * 2) ✅ Providers owed summary (tabulated)
  */
 export async function renderProvidersSummaryPdfBuffer(invoice) {
   const doc = createDocLandscape();
@@ -382,7 +383,7 @@ export async function renderProvidersSummaryPdfBuffer(invoice) {
 }
 
 /**
- * 3) ✅ Per-provider detailed statement
+ * 3) ✅ Provider detailed statement PDF
  */
 export async function renderProviderDetailPdfBuffer(invoice, providerId) {
   const doc = createDocLandscape();

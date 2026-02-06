@@ -99,14 +99,14 @@ export async function buildInsuranceInvoice(args) {
   let totalJobs = 0;
 
   // ✅ Gross amount partner owes you (NO deductions)
-  let totalPartnerAmountDue = 0; // sum(pricing.estimatedTotal)
+  let totalPartnerAmountDue = 0;
 
   // ✅ Booking fee / commission you keep (informational)
-  let totalBookingFeeWaived = 0; // pricing.bookingFee
-  let totalCommission = 0; // pricing.commissionAmount
+  let totalBookingFeeWaived = 0;
+  let totalCommission = 0;
 
   // ✅ What you owe providers (net)
-  let totalProviderAmountDue = 0; // pricing.providerAmountDue
+  let totalProviderAmountDue = 0;
 
   const currency = "ZAR";
 
@@ -114,11 +114,11 @@ export async function buildInsuranceInvoice(args) {
     totalJobs += 1;
 
     const estimatedTotal = Number(j?.pricing?.estimatedTotal || 0) || 0; // gross
-    const bookingFee = Number(j?.pricing?.bookingFee || 0) || 0; // “booking fee waived”
-    const commission = Number(j?.pricing?.commissionAmount || 0) || 0; // your cut
+    const bookingFee = Number(j?.pricing?.bookingFee || 0) || 0;
+    const commission = Number(j?.pricing?.commissionAmount || 0) || 0;
     const providerDue = Number(j?.pricing?.providerAmountDue || 0) || 0; // net to provider
 
-    totalPartnerAmountDue += estimatedTotal; // ✅ insurer claim
+    totalPartnerAmountDue += estimatedTotal;
     totalBookingFeeWaived += bookingFee;
     totalCommission += commission;
     totalProviderAmountDue += providerDue;
@@ -154,10 +154,10 @@ export async function buildInsuranceInvoice(args) {
 
       pricing: {
         currency: j?.pricing?.currency || currency,
-        estimatedTotal, // gross
-        bookingFee, // booking fee waived
-        commissionAmount: commission, // your cut
-        providerAmountDue: providerDue, // net to provider
+        estimatedTotal,
+        bookingFee,
+        commissionAmount: commission,
+        providerAmountDue: providerDue,
         estimatedDistanceKm: Number(j?.pricing?.estimatedDistanceKm || 0) || 0,
       },
 
@@ -177,7 +177,7 @@ export async function buildInsuranceInvoice(args) {
    * - gross (sum estimatedTotal)
    * - commission (sum commissionAmount)
    * - netDue (sum providerAmountDue)
-   * - jobs covered (for easy verification)
+   * - jobs covered
    */
   const byProvider = new Map();
 
@@ -197,6 +197,9 @@ export async function buildInsuranceInvoice(args) {
       commissionTotal: 0,
       netTotalDue: 0,
 
+      // Backward compat field name used by some UIs
+      totalProviderAmountDue: 0,
+
       jobs: [],
     };
 
@@ -204,6 +207,7 @@ export async function buildInsuranceInvoice(args) {
     cur.grossTotal += Number(it?.pricing?.estimatedTotal || 0) || 0;
     cur.commissionTotal += Number(it?.pricing?.commissionAmount || 0) || 0;
     cur.netTotalDue += Number(it?.pricing?.providerAmountDue || 0) || 0;
+    cur.totalProviderAmountDue = cur.netTotalDue;
 
     cur.jobs.push({
       jobId: it.jobId,
@@ -252,6 +256,9 @@ export async function buildInsuranceInvoice(args) {
 
       // ✅ insurer claim (gross)
       totalPartnerAmountDue,
+
+      // Backward-compat: older dashboards used this name
+      totalEstimatedTotal: totalPartnerAmountDue,
 
       // informational
       totalBookingFeeWaived,
