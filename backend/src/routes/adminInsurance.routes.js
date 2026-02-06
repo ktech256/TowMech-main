@@ -50,8 +50,13 @@ async function requireAdmin(req, res, next) {
     req.adminUser = user;
     return next();
   } catch (err) {
-    return res.status(500).json({ message: "Auth error", error: err.message });
-  }
+  console.error("PDF ERROR /invoice/pdf:", err);
+
+  return res.status(500).json({
+    message: "PDF failed",
+    error: err?.message || String(err),
+    stack: process.env.NODE_ENV === "development" ? err?.stack : undefined,
+  });
 }
 
 /**
