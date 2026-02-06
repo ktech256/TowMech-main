@@ -31,7 +31,6 @@ function titlePeriod(period) {
 }
 
 function createDocLandscape() {
-  // A4 landscape: 842 x 595 points
   return new PDFDocument({
     size: "A4",
     layout: "landscape",
@@ -47,12 +46,11 @@ function createDocLandscape() {
  * Page geometry helpers (landscape)
  */
 function pageBox(doc) {
-  const m = doc.page.margins.left; // all equal in our doc config
   const left = doc.page.margins.left;
   const right = doc.page.width - doc.page.margins.right;
   const top = doc.page.margins.top;
   const bottom = doc.page.height - doc.page.margins.bottom;
-  return { left, right, top, bottom, width: right - left, height: bottom - top, m };
+  return { left, right, top, bottom, width: right - left, height: bottom - top };
 }
 
 function hr(doc, y, color = "#111111") {
@@ -163,8 +161,8 @@ function totalsPanel(doc, title, lines) {
 }
 
 function amountCalloutRight(doc, label, valueText) {
-  const { left, right } = pageBox(doc);
-  const w = 220;
+  const { right } = pageBox(doc);
+  const w = 240;
   const h = 74;
   const x = right - w;
   const y = doc.y;
@@ -180,7 +178,6 @@ function amountCalloutRight(doc, label, valueText) {
   doc.font("Helvetica-Bold").fontSize(18).text(valueText, x + 14, y + 34);
   doc.restore();
 
-  // Move cursor slightly below callout area if needed
   doc.y = y + h + 10;
 }
 
@@ -191,7 +188,7 @@ function amountCalloutRight(doc, label, valueText) {
  * - page breaks that redraw header row
  */
 function drawTable(doc, columns, rows) {
-  const { left, right, bottom } = pageBox(doc);
+  const { left, right, bottom, top } = pageBox(doc);
 
   const usableW = right - left;
   const totalW = columns.reduce((s, c) => s + c.width, 0);
@@ -218,32 +215,29 @@ function drawTable(doc, columns, rows) {
     }
     doc.restore();
 
-    // bottom border
     doc.save();
     doc.strokeColor("#E5E7EB").lineWidth(1);
     doc.moveTo(left, y + headerH).lineTo(right, y + headerH).stroke();
     doc.restore();
   }
 
-  // Start table
   let y = doc.y;
   drawHeaderRow(y);
   y += headerH;
 
   doc.save();
   doc.font("Helvetica").fontSize(9).fillColor("#111827");
+
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i];
 
-    // Page break
     if (y + rowH > bottom - 18) {
       doc.addPage();
-      y = doc.y;
+      y = top; // ✅ ensure we restart from top margin
       drawHeaderRow(y);
       y += headerH;
     }
 
-    // Row content
     let x = left + 8;
     for (const c of cols) {
       const text = safe(r[c.key]);
@@ -251,7 +245,6 @@ function drawTable(doc, columns, rows) {
       x += c.w;
     }
 
-    // Row separator
     doc.save();
     doc.strokeColor("#F3F4F6").lineWidth(1);
     doc.moveTo(left, y + rowH).lineTo(right, y + rowH).stroke();
@@ -259,8 +252,8 @@ function drawTable(doc, columns, rows) {
 
     y += rowH;
   }
-  doc.restore();
 
+  doc.restore();
   doc.y = y + 12;
 }
 
@@ -277,7 +270,6 @@ function bufferFromDoc(doc) {
 /**
  * 1) ✅ Partner invoice (insurance company owes you)
  * Total = totals.totalPartnerAmountDue (gross)
- * ✅ Landscape + professional layout
  */
 export async function renderPartnerInvoicePdfBuffer(invoice) {
   const doc = createDocLandscape();
@@ -293,7 +285,6 @@ export async function renderPartnerInvoicePdfBuffer(invoice) {
     `(Info) Commission total: ${money(t.totalCommission)} ${currency}`,
   ]);
 
-  // Amount due callout (right)
   amountCalloutRight(doc, "TOTAL AMOUNT DUE", `${money(t.totalPartnerAmountDue)} ${currency}`);
 
   doc.save();
@@ -325,7 +316,6 @@ export async function renderPartnerInvoicePdfBuffer(invoice) {
     rows
   );
 
-  // Footer total
   doc.save();
   doc.font("Helvetica-Bold").fontSize(12).fillColor("#111827").text(
     `TOTAL AMOUNT DUE: ${money(t.totalPartnerAmountDue)} ${currency}`,
@@ -337,11 +327,7 @@ export async function renderPartnerInvoicePdfBuffer(invoice) {
 }
 
 /**
- * 2) ✅ Providers owed summary (tabulated by driver)
- * Must show:
- * - total owed (net)
- * - gross
- * - commission (booking fee)
+ * 2) ✅ Providers owed summary (tabulated by provider)
  */
 export async function renderProvidersSummaryPdfBuffer(invoice) {
   const doc = createDocLandscape();
@@ -356,7 +342,6 @@ export async function renderProvidersSummaryPdfBuffer(invoice) {
     `(Info) Total commission/booking fee: ${money(t.totalCommission)} ${currency}`,
   ]);
 
-  // Callout: net due (all providers)
   amountCalloutRight(doc, "TOTAL NET DUE (ALL PROVIDERS)", `${money(t.totalProviderAmountDue)} ${currency}`);
 
   doc.save();
@@ -397,12 +382,7 @@ export async function renderProvidersSummaryPdfBuffer(invoice) {
 }
 
 /**
- * 3) ✅ Per-driver detailed statement
- * Include:
- * - provider info
- * - partner who requested service
- * - trip details + timestamps
- * - per-job gross / commission / net
+ * 3) ✅ Per-provider detailed statement
  */
 export async function renderProviderDetailPdfBuffer(invoice, providerId) {
   const doc = createDocLandscape();
@@ -413,13 +393,13 @@ export async function renderProviderDetailPdfBuffer(invoice, providerId) {
     return bufferFromDoc(doc);
   }
 
-  const providerBlock = (invoice?.groupedByProvider || []).find((p) => String(p?.providerId) === pid) || null;
+  const providerBlock =
+    (invoice?.groupedByProvider || []).find((p) => String(p?.providerId) === pid) || null;
 
   addHeader(doc, "Provider Detailed Statement", invoice);
 
   const currency = safe(invoice?.currency);
 
-  // Provider card
   const { left, right } = pageBox(doc);
   const boxY = doc.y;
   const boxW = right - left;
@@ -451,7 +431,6 @@ export async function renderProviderDetailPdfBuffer(invoice, providerId) {
 
   doc.y = boxY + boxH + 14;
 
-  // Insurance partner requester
   doc.save();
   doc.font("Helvetica-Bold").fontSize(12).fillColor("#111827").text("Insurance Partner (Requester)");
   doc.font("Helvetica").fontSize(10).fillColor("#111827");
@@ -467,7 +446,6 @@ export async function renderProviderDetailPdfBuffer(invoice, providerId) {
     `Net amount due: ${money(providerBlock?.netTotalDue)} ${currency}`,
   ]);
 
-  // Breakdown table
   doc.save();
   doc.font("Helvetica-Bold").fontSize(12).fillColor("#111827").text("Job Breakdown");
   doc.restore();
