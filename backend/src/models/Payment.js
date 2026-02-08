@@ -57,6 +57,12 @@ const paymentSchema = new mongoose.Schema(
      * Records which admin refunded payment
      */
     refundedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+
+    /**
+     * ✅ NEW: Refund reason (admin text)
+     * This is shown on the Payments "View" modal in Dashboard
+     */
+    refundReason: { type: String, default: null, trim: true },
   },
   { timestamps: true }
 );

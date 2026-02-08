@@ -92,6 +92,22 @@ const blockRestrictedAdmins = (req, res) => {
 };
 
 /**
+ * ✅ Insurance check helper
+ * Blocks refunds for insurance jobs
+ *
+ * We assume Job model stores insurance info on:
+ * job.insurance?.enabled === true
+ * If your job schema is different, adjust this checker only.
+ */
+const isInsuranceJob = (jobDoc) => {
+  try {
+    return !!(jobDoc && jobDoc.insurance && jobDoc.insurance.enabled);
+  } catch (e) {
+    return false;
+  }
+};
+
+/**
  * ✅ Get ALL payments (PER COUNTRY)
  * GET /api/admin/payments
  */
@@ -172,6 +188,12 @@ router.get(
 /**
  * ✅ Admin manually marks payment as REFUNDED (PER COUNTRY)
  * PATCH /api/admin/payments/:id/refund
+ *
+ * NEW:
+ * - Only PAID payments can be refunded
+ * - Insurance payments cannot be refunded
+ * - Accepts refund reason from body: { reason: "..." }
+ * - Saves refundReason on Payment
  */
 router.patch(
   "/:id/refund",
@@ -190,14 +212,31 @@ router.patch(
       const payment = await Payment.findOne({
         _id: req.params.id,
         countryCode: workspaceCountryCode,
-      });
+      }).populate("job");
 
       if (!payment) return res.status(404).json({ message: "Payment not found" });
+
+      // ✅ Only PAID can be refunded
+      if (payment.status !== PAYMENT_STATUSES.PAID) {
+        return res.status(400).json({
+          message: "Only PAID payments can be refunded ❌",
+        });
+      }
+
+      // ✅ Block insurance refunds
+      if (isInsuranceJob(payment.job)) {
+        return res.status(400).json({
+          message: "Insurance payments cannot be refunded ❌",
+        });
+      }
+
+      const reason = req.body?.reason ? String(req.body.reason).trim() : null;
 
       payment.status = PAYMENT_STATUSES.REFUNDED;
       payment.refundedAt = new Date();
       payment.refundReference = `MANUAL_REFUND-${Date.now()}`;
       payment.refundedBy = req.user._id;
+      payment.refundReason = reason;
 
       await payment.save();
 
