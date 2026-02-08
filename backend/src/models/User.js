@@ -152,6 +152,7 @@ const permissionsSchema = new mongoose.Schema(
 
     canViewAnalytics: { type: Boolean, default: false },
     canManagePricing: { type: Boolean, default: false },
+    canViewSupport: { type: Boolean, default: false },
 
     // ✅ Menu-based permissions you requested
     canManageChats: { type: Boolean, default: false },
