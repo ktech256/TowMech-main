@@ -77,6 +77,7 @@ router.post(
         canManagePricing: true,
         canViewStats: true,
         canVerifyProviders: true,
+        canViewSupport: false,
       };
 
       const creator = await User.findById(req.user._id);
