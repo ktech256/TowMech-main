@@ -1,3 +1,4 @@
+// src/models/Payment.js
 import mongoose from "mongoose";
 
 export const PAYMENT_STATUSES = {
@@ -80,5 +81,23 @@ paymentSchema.index({ countryCode: 1, status: 1, createdAt: -1 });
 
 // ✅ Invoice performance indexes
 paymentSchema.index({ job: 1, status: 1, createdAt: -1 });
+
+/**
+ * ✅ Prevent duplicate PAID entries per job/provider/country
+ * This fixes the “PAID printed twice” problem by enforcing ONE PAID payment
+ * per (job + provider + countryCode) at DB level.
+ *
+ * Notes:
+ * - Partial filter means it ONLY applies to PAID rows (so PENDING can still exist).
+ * - If you already have duplicates in DB, you must delete/merge them once before
+ *   the index can be created successfully.
+ */
+paymentSchema.index(
+  { job: 1, provider: 1, countryCode: 1, status: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { status: PAYMENT_STATUSES.PAID },
+  }
+);
 
 export default mongoose.model("Payment", paymentSchema);
