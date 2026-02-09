@@ -1,3 +1,4 @@
+// src/routes/jobs.js
 // backend/src/routes/jobs.js
 import express from "express";
 import mongoose from "mongoose";
@@ -264,8 +265,7 @@ async function resolveInsuranceWaiver({ req, requestCountryCode, services }) {
     };
   }
 
-  // ✅ FIX: derive partnerId correctly from validateInsuranceCode response
-  // validateInsuranceCode returns: { ok:true, code: { partnerId: ... , code: ... } }
+  // ✅ derive partnerId correctly from validateInsuranceCode response
   const derivedPartnerId =
     partnerId ||
     (validation?.code?.partnerId ? String(validation.code.partnerId).trim() : null) ||
@@ -826,40 +826,21 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
       }
     }
 
-    // ✅ If insurance waived: create a PAID payment record (amount 0) so dashboards show "paid"
-    let insurancePayment = null;
-    if (insuranceWaived) {
-      try {
-        insurancePayment = await Payment.create({
-          job: job._id,
-          customer: req.user._id,
-          amount: 0,
-          currency: safePricing.currency,
-          status: PAYMENT_STATUSES.PAID,
-          provider: "INSURANCE",
-          providerReference: waiver.code || null,
-          paidAt: new Date(),
-          countryCode: requestCountryCode,
-        });
-      } catch (e) {
-        // Not fatal for broadcast, but useful to log
-        console.warn("⚠️ Failed to create insurance payment record:", e.message);
-      }
-
-      // ✅ Broadcast now (same as when payment is marked paid)
-      try {
-        await broadcastJobToProviders(job._id, requestCountryCode);
-      } catch (e) {
-        console.error("❌ Insurance job broadcast failed:", e.message);
-      }
-    }
-
-    // ✅ Payment record
-    // - If booking fee > 0 -> create PENDING payment (customer must pay)
-    // - If booking fee == 0 (insurance / free booking) -> create a PAID payment for dashboard consistency
+    /**
+     * ✅ FIX: prevent duplicate “PAID” rows for same insurance job
+     *
+     * Previous logic created TWO payments when insuranceWaived:
+     *  - insurancePayment (PAID / INSURANCE)
+     *  - payment (PAID / INSURANCE) because bookingFee == 0
+     *
+     * New logic:
+     *  - Create ONLY ONE payment record per job/provider/country.
+     *  - Idempotent: if it already exists, reuse it (safe on retries).
+     */
     let payment = null;
 
     if (Number(safePricing.bookingFee) > 0) {
+      // Normal booking fee flow: one pending payment
       payment = await Payment.create({
         job: job._id,
         customer: req.user._id,
@@ -867,17 +848,57 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
         currency: safePricing.currency,
         status: PAYMENT_STATUSES.PENDING,
         provider: "SIMULATION",
+        countryCode: requestCountryCode,
       });
     } else {
-      payment = await Payment.create({
+      // bookingFee == 0 (insurance / free booking): create ONE PAID payment
+      const provider = insuranceWaived ? "INSURANCE" : "FREE_BOOKING";
+      const providerReference = insuranceWaived ? waiver.code || null : null;
+
+      // Try to find existing PAID first (handles retries & prevents duplicates)
+      payment = await Payment.findOne({
         job: job._id,
-        customer: req.user._id,
-        amount: 0,
-        currency: safePricing.currency,
+        countryCode: requestCountryCode,
+        provider,
         status: PAYMENT_STATUSES.PAID,
-        paidAt: new Date(),
-        provider: insuranceWaived ? "INSURANCE" : "FREE_BOOKING",
-      });
+      }).sort({ createdAt: -1 });
+
+      if (!payment) {
+        try {
+          payment = await Payment.create({
+            job: job._id,
+            customer: req.user._id,
+            amount: 0,
+            currency: safePricing.currency,
+            status: PAYMENT_STATUSES.PAID,
+            paidAt: new Date(),
+            provider,
+            providerReference,
+            countryCode: requestCountryCode,
+          });
+        } catch (e) {
+          // If unique index blocked a duplicate, fetch the existing one
+          if (e && (e.code === 11000 || String(e.message || "").toLowerCase().includes("duplicate"))) {
+            payment = await Payment.findOne({
+              job: job._id,
+              countryCode: requestCountryCode,
+              provider,
+              status: PAYMENT_STATUSES.PAID,
+            }).sort({ createdAt: -1 });
+          } else {
+            throw e;
+          }
+        }
+      }
+
+      // ✅ If insurance waived: broadcast now (same as when payment is marked paid)
+      if (insuranceWaived) {
+        try {
+          await broadcastJobToProviders(job._id, requestCountryCode);
+        } catch (e) {
+          console.error("❌ Insurance job broadcast failed:", e.message);
+        }
+      }
     }
 
     // ✅ If booking fee is already PAID (insurance / free booking), broadcast immediately
