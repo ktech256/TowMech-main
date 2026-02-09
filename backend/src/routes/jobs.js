@@ -264,10 +264,22 @@ async function resolveInsuranceWaiver({ req, requestCountryCode, services }) {
     };
   }
 
+  // ✅ FIX: derive partnerId correctly from validateInsuranceCode response
+  // validateInsuranceCode returns: { ok:true, code: { partnerId: ... , code: ... } }
+  const derivedPartnerId =
+    partnerId ||
+    (validation?.code?.partnerId ? String(validation.code.partnerId).trim() : null) ||
+    null;
+
+  const normalizedCode =
+    validation?.code?.code !== undefined && validation?.code?.code !== null
+      ? String(validation.code.code).trim()
+      : code;
+
   return {
     waived: true,
-    code,
-    partnerId: partnerId || validation?.partnerId || null,
+    code: normalizedCode,
+    partnerId: derivedPartnerId,
     partner: validation?.partner || null,
     validation,
   };
@@ -793,10 +805,11 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
     });
 
     // ✅ Mark insurance code used ONLY AFTER job is created successfully
+    // (Fix here is partnerId derivation via resolveInsuranceWaiver, so partnerId is no longer null)
     if (insuranceWaived) {
       try {
         await markInsuranceCodeUsed({
-          partnerId: waiver.partnerId,
+          partnerId: waiver.partnerId, // now correctly derived
           code: waiver.code,
           countryCode: requestCountryCode,
           userId: req.user?._id || null,
