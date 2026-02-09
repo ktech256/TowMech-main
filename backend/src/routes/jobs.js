@@ -20,11 +20,7 @@ import { broadcastJobToProviders } from "../utils/broadcastJob.js";
 import { calculateJobPricing } from "../utils/calculateJobPricing.js";
 
 // ✅ INSURANCE SERVICES
-import {
-  validateInsuranceCode,
-  lockInsuranceCodeForJob,
-  markInsuranceCodeUsed,
-} from "../services/insurance/codeService.js";
+import { validateInsuranceCode, markInsuranceCodeUsed } from "../services/insurance/codeService.js";
 
 const router = express.Router();
 
@@ -192,6 +188,8 @@ function haversineDistanceMeters(lat1, lng1, lat2, lng2) {
  * Helper: validate insurance payload (if present) and return waiver decision
  */
 async function resolveInsuranceWaiver({ req, requestCountryCode, services }) {
+  // ✅ Accept both the new nested payload (insurance: { enabled, code, partnerId })
+  // and legacy flat fields from older mobile builds.
   const insurance =
     req.body?.insurance && typeof req.body.insurance === "object"
       ? req.body.insurance
@@ -205,12 +203,14 @@ async function resolveInsuranceWaiver({ req, requestCountryCode, services }) {
         }
       : null;
 
+  // If app did not send insurance object -> no waiver
   if (!insurance || typeof insurance !== "object") {
     return { waived: false };
   }
 
   const enabledInCountry = Boolean(services?.insuranceEnabled);
 
+  // If country doesn't allow insurance but app sent it -> block
   if (!enabledInCountry) {
     return {
       waived: false,
@@ -227,7 +227,7 @@ async function resolveInsuranceWaiver({ req, requestCountryCode, services }) {
 
   const insuranceEnabled = Boolean(insurance.enabled);
   const code = String(insurance.code || "").trim();
-  const partnerIdRaw = insurance.partnerId ? String(insurance.partnerId).trim() : null;
+  const partnerId = insurance.partnerId ? String(insurance.partnerId).trim() : null;
 
   if (!insuranceEnabled) return { waived: false };
 
@@ -241,8 +241,9 @@ async function resolveInsuranceWaiver({ req, requestCountryCode, services }) {
     };
   }
 
+  // Validate code using existing service
   const validation = await validateInsuranceCode({
-    partnerId: partnerIdRaw,
+    partnerId,
     code,
     phone: req.user?.phone || null,
     email: req.user?.email || null,
@@ -263,14 +264,10 @@ async function resolveInsuranceWaiver({ req, requestCountryCode, services }) {
     };
   }
 
-  // 🔥 Important: in your validateInsuranceCode() the partnerId is in validation.code.partnerId (not validation.partnerId)
-  const derivedPartnerId =
-    partnerIdRaw || validation?.code?.partnerId || validation?.code?.partner?.id || null;
-
   return {
     waived: true,
-    code: String(validation?.code?.code || code).trim().toUpperCase(),
-    partnerId: derivedPartnerId,
+    code,
+    partnerId: partnerId || validation?.partnerId || null,
     partner: validation?.partner || null,
     validation,
   };
@@ -309,6 +306,7 @@ router.post("/preview", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, r
       });
     }
 
+    // ✅ Enforce per-country service toggle
     const serviceGate = await enforceServiceEnabledOrThrow({
       countryCode: requestCountryCode,
       roleNeeded,
@@ -342,6 +340,7 @@ router.post("/preview", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, r
       ? normalizeTowTruckType(towTruckTypeNeeded)
       : null;
 
+    // ✅ PricingConfig is parallel per country (already)
     let config = await PricingConfig.findOne({ countryCode: requestCountryCode });
     if (!config) config = await PricingConfig.create({ countryCode: requestCountryCode });
 
@@ -383,6 +382,7 @@ router.post("/preview", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, r
 
     const forceBookingFeeZero = waiver.waived === true;
 
+    // ✅ MECHANIC PREVIEW
     if (roleNeeded === USER_ROLES.MECHANIC) {
       const pricing = await calculateJobPricing({
         roleNeeded,
@@ -398,6 +398,8 @@ router.post("/preview", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, r
       });
 
       if (!pricing.currency) pricing.currency = countryCurrency;
+
+      // insurance override
       if (forceBookingFeeZero) pricing.bookingFee = 0;
 
       const providers = await findNearbyProviders({
@@ -443,6 +445,7 @@ router.post("/preview", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, r
       });
     }
 
+    // ✅ TOWTRUCK PREVIEW (single type)
     if (normalizedTowTruckTypeNeeded) {
       const pricing = await calculateJobPricing({
         roleNeeded,
@@ -457,6 +460,7 @@ router.post("/preview", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, r
       });
 
       if (!pricing.currency) pricing.currency = countryCurrency;
+
       if (forceBookingFeeZero) pricing.bookingFee = 0;
 
       const providers = await findNearbyProviders({
@@ -490,6 +494,7 @@ router.post("/preview", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, r
       });
     }
 
+    // ✅ TOWTRUCK PREVIEW (list all types)
     const resultsByTowTruckType = {};
 
     for (const type of towTruckTypes) {
@@ -576,11 +581,6 @@ router.post("/preview", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, r
 /**
  * ✅ CUSTOMER creates job
  * POST /api/jobs
- *
- * NOTE:
- * - We ONLY "LOCK" the insurance code here (soft-lock) so it can’t be taken by another user.
- * - We DO NOT increment usedCount here.
- * - usedCount is incremented AFTER successful customer-provider pairing (assignment).
  */
 router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => {
   try {
@@ -589,6 +589,7 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
 
     const requestCountryCode = resolveReqCountryCode(req);
 
+    // ✅ Enforce per-country service toggle
     const serviceGate = await enforceServiceEnabledOrThrow({
       countryCode: requestCountryCode,
       roleNeeded: req.body?.roleNeeded,
@@ -673,7 +674,7 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
       return res.status(waiver.error.status).json(waiver.error.body);
     }
 
-    const insuranceApplied = waiver.waived === true;
+    const insuranceWaived = waiver.waived === true;
 
     const normalizedTowTruckTypeNeeded = towTruckTypeNeeded
       ? normalizeTowTruckType(towTruckTypeNeeded)
@@ -717,8 +718,11 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
       countryCode: requestCountryCode,
     });
 
+    // currency safety
     if (!pricing.currency) pricing.currency = await getCountryCurrency(requestCountryCode);
-    if (insuranceApplied) pricing.bookingFee = 0;
+
+    // ✅ Insurance override booking fee
+    if (insuranceWaived) pricing.bookingFee = 0;
 
     const hasDropoff =
       roleNeeded === USER_ROLES.TOW_TRUCK && dropoffLat !== undefined && dropoffLng !== undefined;
@@ -731,8 +735,9 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
         ? { ...pricing, estimatedTotal: 0, estimatedDistanceKm: 0 }
         : pricing;
 
-    const bookingFeeStatus = insuranceApplied ? "PAID" : "PENDING";
-    const bookingFeePaidAt = insuranceApplied ? new Date() : null;
+    // Decide booking fee status
+    const bookingFeeStatus = insuranceWaived ? "PAID" : "PENDING";
+    const bookingFeePaidAt = insuranceWaived ? new Date() : null;
 
     const job = await Job.create({
       title,
@@ -759,20 +764,19 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
       status: JOB_STATUSES.CREATED,
       paymentMode,
 
-      insurance: insuranceApplied
+      // ✅ store insurance audit info
+      insurance: insuranceWaived
         ? {
             enabled: true,
             code: waiver.code,
             partnerId: waiver.partnerId || null,
             validatedAt: new Date(),
-            lockedAt: new Date(), // soft-lock time (requires schema support or will be ignored by mongoose strict)
           }
         : {
             enabled: false,
             code: null,
             partnerId: null,
             validatedAt: null,
-            lockedAt: null,
           },
 
       disclaimers:
@@ -788,26 +792,18 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
       },
     });
 
-    // ✅ SOFT LOCK the code AFTER job create (do NOT increment usedCount)
-    if (insuranceApplied) {
+    // ✅ Mark insurance code used ONLY AFTER job is created successfully
+    if (insuranceWaived) {
       try {
-        const lockRes = await lockInsuranceCodeForJob({
+        await markInsuranceCodeUsed({
+          partnerId: waiver.partnerId,
           code: waiver.code,
           countryCode: requestCountryCode,
-          partnerId: waiver.partnerId, // can be null; service will derive
           userId: req.user?._id || null,
-          jobId: job._id,
-          ttlMinutes: 20,
+          jobId: job._id, // harmless if service ignores
         });
-
-        if (!lockRes?.ok) {
-          await Job.findByIdAndDelete(job._id);
-          return res.status(409).json({
-            message: lockRes?.message || "Insurance code could not be locked. Try again.",
-            code: lockRes?.code || "INSURANCE_LOCK_FAILED",
-          });
-        }
       } catch (err) {
+        // If code usage fails, rollback job (safer than free job)
         await Job.findByIdAndDelete(job._id);
         return res.status(500).json({
           message: "Insurance code could not be locked. Try again.",
@@ -817,9 +813,9 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
       }
     }
 
-    // ✅ If insurance applied: create a PAID payment record (amount 0) so dashboards show "paid"
+    // ✅ If insurance waived: create a PAID payment record (amount 0) so dashboards show "paid"
     let insurancePayment = null;
-    if (insuranceApplied) {
+    if (insuranceWaived) {
       try {
         insurancePayment = await Payment.create({
           job: job._id,
@@ -833,10 +829,11 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
           countryCode: requestCountryCode,
         });
       } catch (e) {
+        // Not fatal for broadcast, but useful to log
         console.warn("⚠️ Failed to create insurance payment record:", e.message);
       }
 
-      // ✅ broadcast right away (still fine; code is only locked, not used)
+      // ✅ Broadcast now (same as when payment is marked paid)
       try {
         await broadcastJobToProviders(job._id, requestCountryCode);
       } catch (e) {
@@ -844,7 +841,9 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
       }
     }
 
-    // ✅ Payment record for booking fee flow
+    // ✅ Payment record
+    // - If booking fee > 0 -> create PENDING payment (customer must pay)
+    // - If booking fee == 0 (insurance / free booking) -> create a PAID payment for dashboard consistency
     let payment = null;
 
     if (Number(safePricing.bookingFee) > 0) {
@@ -864,10 +863,11 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
         currency: safePricing.currency,
         status: PAYMENT_STATUSES.PAID,
         paidAt: new Date(),
-        provider: insuranceApplied ? "INSURANCE" : "FREE_BOOKING",
+        provider: insuranceWaived ? "INSURANCE" : "FREE_BOOKING",
       });
     }
 
+    // ✅ If booking fee is already PAID (insurance / free booking), broadcast immediately
     if (job?.pricing?.bookingFeeStatus === "PAID") {
       try {
         await broadcastJobToProviders(job._id);
@@ -883,14 +883,14 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
     }
 
     return res.status(201).json({
-      message: insuranceApplied
+      message: insuranceWaived
         ? `Job created ✅ Providers found: ${providers.length}. Insurance applied — booking fee waived.`
         : `Job created ✅ Providers found: ${providers.length}. Booking fee required.`,
       disclaimer:
         roleNeeded === USER_ROLES.MECHANIC
           ? { mechanicFinalFeeNotPredetermined: true, text: MECHANIC_FINAL_FEE_DISCLAIMER }
           : null,
-      insurance: insuranceApplied
+      insurance: insuranceWaived
         ? {
             applied: true,
             code: waiver.code,
@@ -1086,5 +1086,324 @@ router.get("/:id", auth, async (req, res) => {
   }
 });
 
-// ✅ Remaining routes unchanged...
+// ✅ Remaining routes unchanged
+router.patch("/:id/cancel", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => {
+  try {
+    const job = await Job.findById(req.params.id);
+    if (!job) return res.status(404).json({ message: "Job not found" });
+
+    if (job.customer?.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ message: "Not allowed: job not yours" });
+    }
+
+    if (job.status === JOB_STATUSES.COMPLETED) {
+      return res.status(400).json({ message: "Cannot cancel a completed job" });
+    }
+
+    if (job.status === JOB_STATUSES.CANCELLED) {
+      return res.status(400).json({ message: "Job already cancelled" });
+    }
+
+    const nowMs = Date.now();
+    const assignedAtMs = job.lockedAt ? new Date(job.lockedAt).getTime() : null;
+
+    let refundBookingFee = false;
+    let refundReason = null;
+
+    if (job.status === JOB_STATUSES.ASSIGNED && assignedAtMs) {
+      const elapsed = nowMs - assignedAtMs;
+
+      if (elapsed <= CUSTOMER_CANCEL_REFUND_WINDOW_MS) {
+        refundBookingFee = true;
+        refundReason = "cancel_within_3_minutes";
+      } else if (elapsed >= PROVIDER_NO_SHOW_REFUND_WINDOW_MS) {
+        refundBookingFee = true;
+        refundReason = "provider_no_show_45_minutes";
+      } else {
+        refundBookingFee = false;
+        refundReason = "cancel_after_3_minutes_no_refund";
+      }
+    } else if (job.status === JOB_STATUSES.ASSIGNED && !assignedAtMs) {
+      refundBookingFee = false;
+      refundReason = "missing_lockedAt_no_refund";
+    } else if (job.status === JOB_STATUSES.BROADCASTED) {
+      refundBookingFee = false;
+      refundReason = "cancel_broadcasted_no_refund_rule";
+    } else if (job.status === JOB_STATUSES.IN_PROGRESS) {
+      refundBookingFee = false;
+      refundReason = "cancel_in_progress_no_refund";
+    } else if (job.status === JOB_STATUSES.CREATED) {
+      return res.status(400).json({
+        message: "This job is still a draft (CREATED). Use DELETE /api/jobs/:id/draft instead.",
+        code: "USE_DRAFT_DELETE",
+      });
+    }
+
+    job.status = JOB_STATUSES.CANCELLED;
+    job.cancelledBy = req.user._id;
+    job.cancelReason = req.body?.reason || "Cancelled by customer";
+    job.cancelledAt = new Date();
+
+    if (job.pricing) {
+      if (refundBookingFee) {
+        job.pricing.bookingFeeStatus = "REFUND_REQUESTED";
+        job.pricing.bookingFeeRefundedAt = new Date();
+      } else {
+        job.pricing.bookingFeeStatus = job.pricing.bookingFeeStatus || "PENDING";
+      }
+    }
+
+    await job.save();
+
+    const payment = await Payment.findOne({ job: job._id }).sort({ createdAt: -1 });
+
+    if (payment) {
+      if (refundBookingFee) {
+        payment.status = PAYMENT_STATUSES.REFUNDED || PAYMENT_STATUSES.CANCELLED;
+        await payment.save();
+      } else {
+        if (payment.status === PAYMENT_STATUSES.PENDING) {
+          payment.status = PAYMENT_STATUSES.CANCELLED;
+          await payment.save();
+        }
+      }
+    }
+
+    return res.status(200).json({
+      message: "Job cancelled ✅",
+      job,
+      refund: {
+        bookingFeeRefunded: refundBookingFee,
+        reason: refundReason,
+        windows: {
+          cancelRefundWindowMinutes: 3,
+          providerNoShowRefundMinutes: 45,
+        },
+      },
+    });
+  } catch (err) {
+    console.error("❌ CUSTOMER CANCEL ERROR:", err);
+    return res.status(500).json({
+      message: "Could not cancel job",
+      error: err.message,
+    });
+  }
+});
+
+router.patch("/:id/status", auth, async (req, res) => {
+  try {
+    const { status } = req.body || {};
+    if (!status) return res.status(400).json({ message: "status is required" });
+
+    const allowed = Object.values(JOB_STATUSES);
+    if (!allowed.includes(status)) {
+      return res.status(400).json({ message: "Invalid status", allowed });
+    }
+
+    const job = await Job.findById(req.params.id);
+    if (!job) return res.status(404).json({ message: "Job not found" });
+
+    const isProvider = [USER_ROLES.MECHANIC, USER_ROLES.TOW_TRUCK].includes(req.user.role);
+    const isCustomer = req.user.role === USER_ROLES.CUSTOMER;
+
+    if (isProvider) {
+      if (!job.assignedTo || job.assignedTo.toString() !== req.user._id.toString()) {
+        return res.status(403).json({ message: "Not allowed: job not assigned to you" });
+      }
+
+      const current = job.status;
+
+      const ok =
+        (current === JOB_STATUSES.ASSIGNED && status === JOB_STATUSES.IN_PROGRESS) ||
+        (current === JOB_STATUSES.IN_PROGRESS && status === JOB_STATUSES.COMPLETED);
+
+      if (!ok) {
+        return res.status(400).json({
+          message: "Invalid provider status transition",
+          current,
+          attempted: status,
+          allowedTransitions: ["ASSIGNED -> IN_PROGRESS", "IN_PROGRESS -> COMPLETED"],
+        });
+      }
+
+      if (current === JOB_STATUSES.ASSIGNED && status === JOB_STATUSES.IN_PROGRESS) {
+        const pickupCoords = job?.pickupLocation?.coordinates;
+        if (!Array.isArray(pickupCoords) || pickupCoords.length < 2) {
+          return res.status(400).json({
+            code: "PICKUP_LOCATION_MISSING",
+            message: "Pickup location is missing. Cannot start job.",
+          });
+        }
+
+        const pickupLng = Number(pickupCoords[0]);
+        const pickupLat = Number(pickupCoords[1]);
+
+        if (!Number.isFinite(pickupLat) || !Number.isFinite(pickupLng)) {
+          return res.status(400).json({
+            code: "PICKUP_LOCATION_INVALID",
+            message: "Pickup location is invalid. Cannot start job.",
+            pickupCoords,
+          });
+        }
+
+        const me = await User.findById(req.user._id).select("providerProfile.location");
+        const myCoords = me?.providerProfile?.location?.coordinates;
+
+        if (!Array.isArray(myCoords) || myCoords.length < 2) {
+          return res.status(409).json({
+            code: "PROVIDER_GPS_MISSING",
+            message: "Your GPS location is missing. Turn on location and try again.",
+          });
+        }
+
+        const myLng = Number(myCoords[0]);
+        const myLat = Number(myCoords[1]);
+
+        if (
+          !Number.isFinite(myLat) ||
+          !Number.isFinite(myLng) ||
+          (myLat === 0 && myLng === 0)
+        ) {
+          return res.status(409).json({
+            code: "PROVIDER_GPS_INVALID",
+            message: "Your GPS location is invalid. Refresh location and try again.",
+          });
+        }
+
+        const distMeters = haversineDistanceMeters(myLat, myLng, pickupLat, pickupLng);
+
+        if (distMeters > START_JOB_MAX_DISTANCE_METERS) {
+          return res.status(409).json({
+            code: "TOO_FAR_FROM_PICKUP",
+            message: `You must be within ${START_JOB_MAX_DISTANCE_METERS} meters of pickup to start this job.`,
+            distanceMeters: distMeters,
+            maxAllowedMeters: START_JOB_MAX_DISTANCE_METERS,
+          });
+        }
+      }
+
+      job.status = status;
+      await job.save();
+
+      return res.status(200).json({
+        message: "Job status updated ✅",
+        job,
+      });
+    }
+
+    if (isCustomer) {
+      if (job.customer?.toString() !== req.user._id.toString()) {
+        return res.status(403).json({ message: "Not allowed: job not yours" });
+      }
+
+      if (status !== JOB_STATUSES.CANCELLED) {
+        return res.status(403).json({ message: "Customer can only cancel jobs" });
+      }
+
+      if ([JOB_STATUSES.COMPLETED].includes(job.status)) {
+        return res.status(400).json({ message: "Cannot cancel a completed job" });
+      }
+
+      job.status = JOB_STATUSES.CANCELLED;
+      job.cancelledBy = req.user._id;
+      job.cancelReason = req.body.reason || "Cancelled by customer";
+      job.cancelledAt = new Date();
+
+      await job.save();
+
+      return res.status(200).json({
+        message: "Job cancelled ✅",
+        job,
+      });
+    }
+
+    return res.status(403).json({ message: "Role not allowed" });
+  } catch (err) {
+    console.error("❌ UPDATE STATUS ERROR:", err);
+    return res.status(500).json({
+      message: "Could not update job status",
+      error: err.message,
+    });
+  }
+});
+
+router.post("/rate", auth, async (req, res) => {
+  try {
+    const { jobId, rating, comment } = req.body || {};
+    if (!jobId) return res.status(400).json({ message: "jobId is required" });
+
+    const stars = Number(rating);
+    if (!stars || stars < 1 || stars > 5) {
+      return res.status(400).json({ message: "rating must be 1..5" });
+    }
+
+    const text = comment ? String(comment).trim().slice(0, 200) : null;
+
+    const job = await Job.findById(jobId).populate("customer").populate("assignedTo");
+    if (!job) return res.status(404).json({ message: "Job not found" });
+
+    if (job.status !== JOB_STATUSES.COMPLETED) {
+      return res.status(400).json({ message: "Job must be COMPLETED before rating" });
+    }
+
+    const me = await User.findById(req.user._id);
+    if (!me) return res.status(401).json({ message: "User not found" });
+
+    const myRole = me.role;
+    const isCustomer = myRole === USER_ROLES.CUSTOMER;
+    const isProvider = [USER_ROLES.MECHANIC, USER_ROLES.TOW_TRUCK].includes(myRole);
+
+    if (!isCustomer && !isProvider) {
+      return res.status(403).json({ message: "Role not allowed to rate" });
+    }
+
+    let targetUserId = null;
+    let targetRole = null;
+
+    if (isCustomer) {
+      if (!job.assignedTo) {
+        return res.status(400).json({ message: "Cannot rate: no provider assigned" });
+      }
+      targetUserId = job.assignedTo._id;
+      targetRole = job.assignedTo.role;
+    } else {
+      if (!job.customer) {
+        return res.status(400).json({ message: "Cannot rate: missing job customer" });
+      }
+      targetUserId = job.customer._id;
+      targetRole = USER_ROLES.CUSTOMER;
+    }
+
+    const existing = await Rating.findOne({ job: job._id, rater: me._id });
+    if (existing) return res.status(409).json({ message: "You already rated this job" });
+
+    await Rating.create({
+      job: job._id,
+      rater: me._id,
+      target: targetUserId,
+      raterRole: myRole,
+      targetRole,
+      rating: stars,
+      comment: text,
+    });
+
+    await recomputeUserRatingStats(targetUserId);
+
+    return res.status(201).json({
+      success: true,
+      message: "Rating submitted ✅",
+    });
+  } catch (err) {
+    if (err && err.code === 11000) {
+      return res.status(409).json({ message: "You already rated this job" });
+    }
+
+    console.error("❌ RATE JOB ERROR:", err);
+    return res.status(500).json({
+      message: "Could not submit rating",
+      error: err.message,
+    });
+  }
+});
+
 export default router;
