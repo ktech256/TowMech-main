@@ -1,13 +1,11 @@
 // backend/src/services/insurance/codeService.js
 import crypto from "crypto";
+import mongoose from "mongoose";
 import InsuranceCode from "../../models/InsuranceCode.js";
 import InsurancePartner from "../../models/InsurancePartner.js";
 
-/**
- * Generate a random code (no confusing chars)
- */
 function generateRandomCode(length = 8) {
-  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // removed I,O,0,1
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   let out = "";
   for (let i = 0; i < length; i++) {
     out += alphabet[Math.floor(Math.random() * alphabet.length)];
@@ -15,9 +13,6 @@ function generateRandomCode(length = 8) {
   return out;
 }
 
-/**
- * Create many codes for a partner
- */
 export async function generateCodesForPartner({
   partnerId,
   countryCode = "ZA",
@@ -68,7 +63,6 @@ export async function generateCodesForPartner({
 
       created.push(doc);
     } catch (err) {
-      // duplicate collision - just retry
       if (String(err?.message || "").toLowerCase().includes("duplicate")) continue;
       throw err;
     }
@@ -93,14 +87,6 @@ export async function generateCodesForPartner({
   };
 }
 
-/**
- * Validate a code for a selected partner.
- * - strict partner match
- * - country match
- * - active
- * - not expired
- * - usage remaining
- */
 export async function validateInsuranceCode({
   partnerId,
   code,
@@ -108,8 +94,6 @@ export async function validateInsuranceCode({
   phone = "",
   email = "",
 }) {
-  // Mobile app / public flows may only provide `code` and expect backend to derive the partner.
-  // We therefore treat partnerId as OPTIONAL and fallback to searching by (countryCode + code).
   if (!code) throw new Error("code is required");
 
   const normalizedCode = String(code).trim().toUpperCase();
@@ -122,14 +106,11 @@ export async function validateInsuranceCode({
     isActive: true,
   };
 
-  // If partnerId is not supplied, try to resolve a single active code for this country.
-  // Codes are intended to be unique enough, but in the rare case of a collision we error clearly.
   const doc = partnerId
     ? await InsuranceCode.findOne(query)
     : await InsuranceCode.findOne(query).sort({ createdAt: -1 });
 
   if (!partnerId) {
-    // Detect ambiguous matches (same code used by multiple partners in same country)
     const count = await InsuranceCode.countDocuments(query);
     if (count > 1) {
       return {
@@ -150,7 +131,23 @@ export async function validateInsuranceCode({
     return { ok: false, message: "Code already used" };
   }
 
-  // optional restrictions
+  // 🔒 if locked by someone else (and lock not expired), block
+  if (doc.lock && doc.lock.isLocked) {
+    const until = doc.lock.lockedUntil ? new Date(doc.lock.lockedUntil) : null;
+    const by = doc.lock.lockedByUser ? String(doc.lock.lockedByUser) : null;
+    const now = new Date();
+
+    if (until && until > now) {
+      return {
+        ok: false,
+        message: "Insurance code is currently locked. Try again.",
+        code: "INSURANCE_CODE_LOCKED",
+        lockedUntil: until,
+        lockedByUser: by,
+      };
+    }
+  }
+
   const boundPhone = String(doc.restrictions?.boundToPhone || "").trim();
   const boundEmail = String(doc.restrictions?.boundToEmail || "").trim().toLowerCase();
 
@@ -178,24 +175,125 @@ export async function validateInsuranceCode({
 }
 
 /**
- * Mark a code as used.
- * Call this AFTER job creation (insurance booking) succeeds.
+ * ✅ Soft-lock a code for a short time window
+ * - prevents other users from taking it while customer is in the flow
+ * - does NOT increment usedCount
+ * - partnerId is OPTIONAL (derived from code if missing)
  */
-export async function markInsuranceCodeUsed({
-  partnerId,
+export async function lockInsuranceCodeForJob({
+  partnerId = null,
   code,
   countryCode = "ZA",
   userId = null,
   jobId = null,
+  ttlMinutes = 20,
 }) {
-  if (!partnerId) throw new Error("partnerId is required");
   if (!code) throw new Error("code is required");
 
   const normalizedCode = String(code).trim().toUpperCase();
   const normalizedCountry = String(countryCode || "ZA").trim().toUpperCase();
 
+  // derive partnerId if not supplied
+  let resolvedPartnerId = partnerId;
+  if (!resolvedPartnerId) {
+    const found = await InsuranceCode.findOne({
+      code: normalizedCode,
+      countryCode: normalizedCountry,
+      isActive: true,
+    }).select("partner");
+    if (!found?.partner) {
+      return { ok: false, message: "Invalid code", code: "INSURANCE_INVALID" };
+    }
+    resolvedPartnerId = found.partner;
+  }
+
+  const until = new Date(Date.now() + ttlMinutes * 60 * 1000);
+
+  // Atomic lock:
+  // - allow lock if not locked OR lock expired OR locked by same user/job (re-entrant)
+  const filter = {
+    partner: resolvedPartnerId,
+    code: normalizedCode,
+    countryCode: normalizedCountry,
+    isActive: true,
+    $or: [
+      { "lock.isLocked": { $ne: true } },
+      { "lock.lockedUntil": { $exists: false } },
+      { "lock.lockedUntil": { $lte: new Date() } },
+      ...(userId ? [{ "lock.lockedByUser": userId }] : []),
+      ...(jobId ? [{ "lock.lockedByJob": jobId }] : []),
+    ],
+  };
+
+  const update = {
+    $set: {
+      "lock.isLocked": true,
+      "lock.lockedAt": new Date(),
+      "lock.lockedUntil": until,
+      "lock.lockedByUser": userId || null,
+      "lock.lockedByJob": jobId || null,
+    },
+  };
+
+  const doc = await InsuranceCode.findOneAndUpdate(filter, update, { new: true });
+
+  if (!doc) {
+    return {
+      ok: false,
+      message: "Insurance code could not be locked. Try again.",
+      code: "INSURANCE_LOCK_FAILED",
+    };
+  }
+
+  // final sanity
+  if (!doc.expiresAt || doc.expiresAt < new Date()) {
+    return { ok: false, message: "Code expired", code: "INSURANCE_EXPIRED" };
+  }
+  if (typeof doc.canUse === "function" && !doc.canUse()) {
+    return { ok: false, message: "Code already used", code: "INSURANCE_ALREADY_USED" };
+  }
+
+  return {
+    ok: true,
+    message: "Code locked ✅",
+    lockedUntil: doc.lock?.lockedUntil || until,
+    partnerId: doc.partner,
+    jobId: jobId || null,
+  };
+}
+
+/**
+ * ✅ Mark a code as used (INCREMENT usedCount)
+ * MUST be called AFTER successful customer-provider pairing (assignment).
+ *
+ * partnerId is OPTIONAL (derived from code if missing).
+ */
+export async function markInsuranceCodeUsed({
+  partnerId = null,
+  code,
+  countryCode = "ZA",
+  userId = null,
+  jobId = null,
+}) {
+  if (!code) throw new Error("code is required");
+
+  const normalizedCode = String(code).trim().toUpperCase();
+  const normalizedCountry = String(countryCode || "ZA").trim().toUpperCase();
+
+  // derive partnerId if not supplied
+  let resolvedPartnerId = partnerId;
+  if (!resolvedPartnerId) {
+    const found = await InsuranceCode.findOne({
+      code: normalizedCode,
+      countryCode: normalizedCountry,
+      isActive: true,
+    }).select("partner");
+    if (!found?.partner) throw new Error("Invalid code");
+    resolvedPartnerId = found.partner;
+  }
+
   const doc = await InsuranceCode.findOne({
-    partner: partnerId,
+    partner: resolvedPartnerId,
     code: normalizedCode,
     countryCode: normalizedCountry,
     isActive: true,
@@ -218,8 +316,14 @@ export async function markInsuranceCodeUsed({
   doc.usage.lastUsedAt = new Date();
   doc.usage.lastUsedByUser = userId || null;
 
-  // NOTE: jobId is accepted for future enhancement (not stored unless schema supports it)
-  // You can later add doc.usage.lastUsedJobId = jobId if you introduce that field.
+  // unlock after use
+  if (doc.lock) {
+    doc.lock.isLocked = false;
+    doc.lock.lockedUntil = null;
+    doc.lock.lockedByUser = null;
+    doc.lock.lockedByJob = null;
+    doc.lock.lockedAt = null;
+  }
 
   await doc.save();
 
@@ -232,9 +336,6 @@ export async function markInsuranceCodeUsed({
   };
 }
 
-/**
- * Revoke/disable a code
- */
 export async function disableInsuranceCode({ codeId, updatedBy = null }) {
   if (!codeId) throw new Error("codeId is required");
 
@@ -249,10 +350,6 @@ export async function disableInsuranceCode({ codeId, updatedBy = null }) {
   return { ok: true, message: "Code disabled ✅" };
 }
 
-/**
- * Generate cryptographically strong invoice reference for insurance jobs
- * (useful in future invoices)
- */
 export function generateInsuranceInvoiceRef(prefix = "INS") {
   const rand = crypto.randomBytes(6).toString("hex").toUpperCase();
   return `${prefix}-${rand}`;

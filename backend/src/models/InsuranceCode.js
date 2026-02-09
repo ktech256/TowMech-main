@@ -1,13 +1,6 @@
 // backend/src/models/InsuranceCode.js
 import mongoose from "mongoose";
 
-/**
- * InsuranceCode
- * - Codes are generated per InsurancePartner
- * - Customer selects InsurancePartner + enters a code
- * - Code MUST match partner (strictPartnerMatch)
- * - Code can be single-use or multi-use depending on partner settings
- */
 const InsuranceCodeSchema = new mongoose.Schema(
   {
     partner: {
@@ -17,7 +10,6 @@ const InsuranceCodeSchema = new mongoose.Schema(
       index: true,
     },
 
-    // Store partnerCode too for faster filtering + safety
     partnerCode: {
       type: String,
       required: true,
@@ -26,7 +18,6 @@ const InsuranceCodeSchema = new mongoose.Schema(
       index: true,
     },
 
-    // Actual code user enters (unique per partner)
     code: {
       type: String,
       required: true,
@@ -35,7 +26,6 @@ const InsuranceCodeSchema = new mongoose.Schema(
       index: true,
     },
 
-    // Which country this code can be used in
     countryCode: {
       type: String,
       required: true,
@@ -51,24 +41,16 @@ const InsuranceCodeSchema = new mongoose.Schema(
       index: true,
     },
 
-    // Expiry date (required)
     expiresAt: {
       type: Date,
       required: true,
       index: true,
     },
 
-    /**
-     * Usage tracking
-     */
     usage: {
       usedCount: { type: Number, default: 0, min: 0 },
       maxUses: { type: Number, default: 1, min: 1 },
-
-      // last time used
       lastUsedAt: { type: Date, default: null },
-
-      // who used it last (customer)
       lastUsedByUser: {
         type: mongoose.Schema.Types.ObjectId,
         ref: "User",
@@ -76,17 +58,34 @@ const InsuranceCodeSchema = new mongoose.Schema(
       },
     },
 
-    /**
-     * Optional: bind code to a specific customer phone/email if partner wants
-     */
     restrictions: {
       boundToPhone: { type: String, default: "", trim: true },
       boundToEmail: { type: String, default: "", trim: true, lowercase: true },
     },
 
     /**
-     * Audit
+     * ✅ Soft lock to prevent concurrent claims
+     * - used in job request flow
+     * - DOES NOT mean "usedCount" was incremented
      */
+    lock: {
+      isLocked: { type: Boolean, default: false, index: true },
+      lockedAt: { type: Date, default: null },
+      lockedUntil: { type: Date, default: null, index: true },
+      lockedByUser: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "User",
+        default: null,
+        index: true,
+      },
+      lockedByJob: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "Job",
+        default: null,
+        index: true,
+      },
+    },
+
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
@@ -101,10 +100,6 @@ const InsuranceCodeSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-/**
- * Unique constraint:
- * - code must be unique PER partner (not globally)
- */
 InsuranceCodeSchema.index({ partner: 1, code: 1 }, { unique: true });
 
 InsuranceCodeSchema.pre("save", function (next) {
@@ -114,9 +109,6 @@ InsuranceCodeSchema.pre("save", function (next) {
   next();
 });
 
-/**
- * Helper: can this code still be used?
- */
 InsuranceCodeSchema.methods.canUse = function () {
   if (!this.isActive) return false;
   if (!this.expiresAt || this.expiresAt < new Date()) return false;
