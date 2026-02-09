@@ -101,19 +101,44 @@ export async function generateCodesForPartner({
  * - not expired
  * - usage remaining
  */
-export async function validateInsuranceCode({ partnerId, code, countryCode = "ZA", phone = "", email = "" }) {
-  if (!partnerId) throw new Error("partnerId is required");
+export async function validateInsuranceCode({
+  partnerId,
+  code,
+  countryCode = "ZA",
+  phone = "",
+  email = "",
+}) {
+  // Mobile app / public flows may only provide `code` and expect backend to derive the partner.
+  // We therefore treat partnerId as OPTIONAL and fallback to searching by (countryCode + code).
   if (!code) throw new Error("code is required");
 
   const normalizedCode = String(code).trim().toUpperCase();
   const normalizedCountry = String(countryCode || "ZA").trim().toUpperCase();
 
-  const doc = await InsuranceCode.findOne({
-    partner: partnerId,
+  const query = {
+    ...(partnerId ? { partner: partnerId } : {}),
     code: normalizedCode,
     countryCode: normalizedCountry,
     isActive: true,
-  });
+  };
+
+  // If partnerId is not supplied, try to resolve a single active code for this country.
+  // Codes are intended to be unique enough, but in the rare case of a collision we error clearly.
+  const doc = partnerId
+    ? await InsuranceCode.findOne(query)
+    : await InsuranceCode.findOne(query).sort({ createdAt: -1 });
+
+  if (!partnerId) {
+    // Detect ambiguous matches (same code used by multiple partners in same country)
+    const count = await InsuranceCode.countDocuments(query);
+    if (count > 1) {
+      return {
+        ok: false,
+        message:
+          "Insurance code matches multiple partners for this country. Please contact support or regenerate codes.",
+      };
+    }
+  }
 
   if (!doc) return { ok: false, message: "Invalid code" };
 
@@ -156,7 +181,13 @@ export async function validateInsuranceCode({ partnerId, code, countryCode = "ZA
  * Mark a code as used.
  * Call this AFTER job creation (insurance booking) succeeds.
  */
-export async function markInsuranceCodeUsed({ partnerId, code, countryCode = "ZA", userId = null, jobId = null }) {
+export async function markInsuranceCodeUsed({
+  partnerId,
+  code,
+  countryCode = "ZA",
+  userId = null,
+  jobId = null,
+}) {
   if (!partnerId) throw new Error("partnerId is required");
   if (!code) throw new Error("code is required");
 
