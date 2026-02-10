@@ -1,3 +1,5 @@
+// backend/src/app.js
+
 import express from "express";
 import cors from "cors";
 
@@ -48,6 +50,9 @@ import adminChatRoutes from "./routes/adminChat.routes.js";
 // ✅ NEW: Multi-country / tenant middleware
 import tenant from "./middleware/tenant.js";
 
+// ✅ NEW: i18n middleware (adds req.lang + req.t())
+import i18n from "./middleware/i18n.js";
+
 // ✅ Existing public routes
 import legalRoutes from "./routes/legal.routes.js";
 import insuranceRoutes from "./routes/insurance.routes.js";
@@ -91,6 +96,10 @@ app.use(
       "Authorization",
       "X-COUNTRY-CODE",
       "x-country-code",
+
+      // ✅ language headers (Android can send any of these)
+      "X-LANGUAGE",
+      "x-language",
       "Accept-Language",
       "accept-language",
     ],
@@ -125,12 +134,21 @@ app.use(
 app.use(tenant);
 
 /**
+ * ✅ i18n middleware (after tenant, before routes)
+ * Adds:
+ * - req.lang   (e.g. "en", "sw", "pt")
+ * - req.t(key, vars)  translator
+ */
+app.use(i18n);
+
+/**
  * ✅ Health Check
  */
 app.get("/health", (req, res) => {
   return res.status(200).json({
     status: "ok ✅",
     countryCode: req.countryCode || "ZA",
+    lang: req.lang || "en",
   });
 });
 
@@ -225,8 +243,9 @@ app.use("/api/admin/service-categories", adminServiceCategoriesRoutes);
  * ✅ 404 Handler
  */
 app.use((req, res) => {
+  const t = typeof req.t === "function" ? req.t : (k) => k;
   return res.status(404).json({
-    message: "Route not found ❌",
+    message: t("errors.route_not_found", { fallback: "Route not found ❌" }),
     method: req.method,
     path: req.originalUrl,
   });

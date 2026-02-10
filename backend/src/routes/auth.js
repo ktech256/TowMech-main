@@ -35,6 +35,25 @@ const generateToken = (userId, role, sessionId = null) =>
   });
 
 /**
+ * ✅ i18n safe helpers (works even if middleware not mounted)
+ */
+function getReqLang(req) {
+  const fromBody = req.body?.language;
+  const fromHeader = req.headers["x-language"] || req.headers["accept-language"];
+  const fromMiddleware = req.lang;
+
+  const raw = (fromMiddleware || fromBody || fromHeader || "en").toString().trim();
+  // keep only first tag: "en-US,en;q=0.9" -> "en-US"
+  return raw.split(",")[0].trim() || "en";
+}
+
+function t(req, key, vars = {}) {
+  if (typeof req.t === "function") return req.t(key, vars);
+  // fallback: just use vars.fallback when middleware is not present
+  return vars.fallback || key;
+}
+
+/**
  * ✅ Normalize phone for consistent login + uniqueness (RAW)
  */
 function normalizePhone(phone) {
@@ -104,9 +123,6 @@ async function getDialingCodeForCountry(countryCode) {
 
 /**
  * ✅ Convert phone to E.164-ish for sending ONLY (Twilio requires +)
- * - If already + => keep
- * - If digits-only => try to prefix + (Twilio expects +)
- * - If local leading 0 => needs dialing code, so we attempt with cc if provided
  */
 function toE164PhoneForSms(phone, dialingCode = null) {
   const p = normalizePhone(phone);
@@ -117,23 +133,19 @@ function toE164PhoneForSms(phone, dialingCode = null) {
   const digitsOnly = p.replace(/[^\d]/g, "");
   if (!digitsOnly) return p;
 
-  // If already starts with dialing digits and dial known
   if (dialingCode) {
     const dialDigits = String(dialingCode).replace("+", "");
     if (digitsOnly.startsWith(dialDigits)) return `+${digitsOnly}`;
   }
 
-  // Local 0xxxx...
   if (dialingCode && /^0\d{6,14}$/.test(digitsOnly)) {
     return `${dialingCode}${digitsOnly.slice(1)}`;
   }
 
-  // If short digits and dial exists, prefix
   if (dialingCode && /^\d{7,12}$/.test(digitsOnly)) {
     return `${dialingCode}${digitsOnly}`;
   }
 
-  // Fallback: just add +
   if (/^\d{7,15}$/.test(digitsOnly)) return `+${digitsOnly}`;
 
   return p;
@@ -141,9 +153,6 @@ function toE164PhoneForSms(phone, dialingCode = null) {
 
 /**
  * ✅ build multiple phone candidates to match DB formats
- * Now supports multi-country:
- * - candidates include:
- *   "+<dial><national>", "<dial><national>", raw, and ZA legacy.
  */
 function buildPhoneCandidates(phone, dialingCode = null) {
   const p = normalizePhone(phone);
@@ -152,7 +161,6 @@ function buildPhoneCandidates(phone, dialingCode = null) {
 
   candidates.add(p);
 
-  // remove + variant
   if (p.startsWith("+")) candidates.add(p.slice(1));
 
   const digitsOnly = p.replace(/[^\d]/g, "");
@@ -161,31 +169,24 @@ function buildPhoneCandidates(phone, dialingCode = null) {
     candidates.add("+" + digitsOnly);
   }
 
-  // If dialing code known, generate normalized storage candidates
   if (dialingCode) {
     const dialDigits = String(dialingCode).replace("+", "");
 
-    // already has dial digits without +
     if (/^\d{7,15}$/.test(digitsOnly) && digitsOnly.startsWith(dialDigits)) {
       candidates.add("+" + digitsOnly);
     }
 
-    // local 0xxxxx => dial + rest
     if (/^0\d{6,14}$/.test(digitsOnly)) {
-      candidates.add(`${dialingCode}${digitsOnly.slice(1)}`); // +2547...
-      candidates.add(`${dialDigits}${digitsOnly.slice(1)}`); // 2547...
+      candidates.add(`${dialingCode}${digitsOnly.slice(1)}`);
+      candidates.add(`${dialDigits}${digitsOnly.slice(1)}`);
     }
 
-    // short national digits => prefix dialing code
     if (/^\d{7,12}$/.test(digitsOnly) && !digitsOnly.startsWith(dialDigits)) {
       candidates.add(`${dialingCode}${digitsOnly}`);
       candidates.add(`${dialDigits}${digitsOnly}`);
     }
   }
 
-  /**
-   * ✅ Keep your original ZA legacy compatibility (unchanged)
-   */
   if (/^0\d{9}$/.test(p)) {
     candidates.add("+27" + p.slice(1));
     candidates.add("27" + p.slice(1));
@@ -209,9 +210,6 @@ const STATIC_TEST_PHONES_LOCAL = new Set([
   "0731110005",
 ]);
 
-/**
- * Convert any accepted SA format to local 0XXXXXXXXX for matching.
- */
 function toLocalZaPhone(phone) {
   const p = normalizePhone(phone);
   if (!p) return "";
@@ -236,15 +234,16 @@ function isStaticOtpTestPhone(phone) {
 
 /**
  * ✅ Send OTP via SMS (Twilio)
- * ✅ OTP DEBUG: logs OTP to Render logs when ENABLE_OTP_DEBUG=true
+ * ✅ NOW LANGUAGE-AWARE (langTag optional)
  */
-async function sendOtpSms(phone, otpCode, purpose = "OTP", dialingCode = null) {
+async function sendOtpSms(phone, otpCode, purpose = "OTP", dialingCode = null, langTag = "en") {
   const debugEnabled = String(process.env.ENABLE_OTP_DEBUG).toLowerCase() === "true";
   if (debugEnabled) {
-    console.log(`🟧 OTP_DEBUG (${purpose}) → phone=${normalizePhone(phone)} | otp=${otpCode}`);
+    console.log(
+      `🟧 OTP_DEBUG (${purpose}) → phone=${normalizePhone(phone)} | otp=${otpCode} | lang=${langTag}`
+    );
   }
 
-  // ✅ Static OTP numbers: do NOT send SMS
   if (isStaticOtpTestPhone(phone)) {
     console.log(
       `🧪 STATIC OTP MODE (${purpose}) → SMS SKIPPED for`,
@@ -274,14 +273,26 @@ async function sendOtpSms(phone, otpCode, purpose = "OTP", dialingCode = null) {
 
   const client = twilio(sid, token);
 
-  const message =
-    purpose === "RESET"
-      ? `TowMech password reset code: ${otpCode}. Expires in 10 minutes.`
-      : purpose === "COUNTRY"
-      ? `TowMech country confirmation code: ${otpCode}. Expires in 10 minutes.`
-      : `Your TowMech OTP is: ${otpCode}. It expires in 10 minutes.`;
+  // ✅ very simple SMS language (uses only en/pt/sw for now)
+  const lang = String(langTag || "en").toLowerCase();
+  const sms = (() => {
+    if (lang.startsWith("pt")) {
+      if (purpose === "RESET") return `Código de redefinição TowMech: ${otpCode}. Expira em 10 minutos.`;
+      if (purpose === "COUNTRY") return `Código de confirmação do país TowMech: ${otpCode}. Expira em 10 minutos.`;
+      return `Seu OTP TowMech é: ${otpCode}. Expira em 10 minutos.`;
+    }
+    if (lang.startsWith("sw")) {
+      if (purpose === "RESET") return `Nambari ya kurejesha nenosiri TowMech: ${otpCode}. Inaisha baada ya dakika 10.`;
+      if (purpose === "COUNTRY") return `Nambari ya kuthibitisha nchi TowMech: ${otpCode}. Inaisha baada ya dakika 10.`;
+      return `OTP yako ya TowMech ni: ${otpCode}. Inaisha baada ya dakika 10.`;
+    }
+    // default English
+    if (purpose === "RESET") return `TowMech password reset code: ${otpCode}. Expires in 10 minutes.`;
+    if (purpose === "COUNTRY") return `TowMech country confirmation code: ${otpCode}. Expires in 10 minutes.`;
+    return `Your TowMech OTP is: ${otpCode}. It expires in 10 minutes.`;
+  })();
 
-  await client.messages.create({ body: message, from, to });
+  await client.messages.create({ body: sms, from, to });
 
   return { ok: true, provider: "twilio" };
 }
@@ -351,7 +362,6 @@ function normalizeTowTruckTypes(input) {
       if (lower.includes("rotator") || lower.includes("heavy-duty") || lower === "recovery")
         return "Heavy-Duty Rotator(Recovery)";
 
-      // Legacy compatibility
       if (lower === "towtruck") return "TowTruck";
       if (lower === "towtruck-xl" || lower === "towtruck xl") return "TowTruck-XL";
       if (lower === "towtruck-xxl" || lower === "towtruck xxl") return "TowTruck-XXL";
@@ -399,7 +409,6 @@ async function getAllowedProviderTypesFromPricingConfig(countryCode) {
 
 /**
  * ✅ Helper: Generate OTP + save
- * ✅ static OTP for selected test numbers
  */
 async function generateAndSaveOtp(user, { minutes = 10 } = {}) {
   const useStatic = isStaticOtpTestPhone(user?.phone);
@@ -412,27 +421,18 @@ async function generateAndSaveOtp(user, { minutes = 10 } = {}) {
   return otpCode;
 }
 
-/**
- * ✅ Only providers get single-device session enforcement
- */
 function isProviderRole(role) {
   return role === USER_ROLES.TOW_TRUCK || role === USER_ROLES.MECHANIC;
 }
 
 /**
- * ✅ =========================================
- * ✅ COUNTRY OTP (PERSISTED IN MONGO) ✅
- * ✅ =========================================
- * Fixes Render restarts / multi-instance issues (no more in-memory Map loss).
- *
- * Stored by "key" (COUNTRY::phoneCandidate)
- * TTL auto-removes expired docs via expiresAt index.
+ * ✅ COUNTRY OTP (PERSISTED IN MONGO)
  */
 const COUNTRY_OTP_TTL_MINUTES = 10;
 
 const CountryOtpSchema = new mongoose.Schema(
   {
-    key: { type: String, required: true, index: true, unique: true }, // e.g. "ZA::+2776..."
+    key: { type: String, required: true, index: true, unique: true },
     countryCode: { type: String, required: true, index: true },
     phoneNormalized: { type: String, required: true },
     otp: { type: String, required: true },
@@ -441,7 +441,6 @@ const CountryOtpSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-// TTL index (Mongo will delete after expiresAt passes)
 CountryOtpSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 
 const CountryOtp = mongoose.models.CountryOtp || mongoose.model("CountryOtp", CountryOtpSchema);
@@ -456,13 +455,7 @@ function generateCountryOtpCode(phone) {
 }
 
 /**
- * ✅ =========================================
- * ✅ FIX: CHECK IF PHONE EXISTS (PUBLIC) ✅
- * ✅ =========================================
- *
- * ✅ PARALLEL LOGIC:
- * - A phone can exist in another country; we should only block duplicates WITHIN SAME COUNTRY.
- * - Return existsInThisCountry + existsAnywhere
+ * ✅ CHECK PHONE EXISTS
  */
 router.post("/check-phone", async (req, res) => {
   try {
@@ -470,7 +463,10 @@ router.post("/check-phone", async (req, res) => {
     const normalizedPhone = normalizePhone(phone);
 
     if (!normalizedPhone) {
-      return res.status(400).json({ message: "phone is required", exists: false });
+      return res.status(400).json({
+        message: t(req, "errors.phone_required", { fallback: "phone is required" }),
+        exists: false,
+      });
     }
 
     const requestCountryCode = (countryCode || resolveReqCountryCode(req))
@@ -500,14 +496,16 @@ router.post("/check-phone", async (req, res) => {
     });
   } catch (err) {
     console.error("❌ CHECK PHONE ERROR:", err.message);
-    return res.status(500).json({ message: "Check phone failed", error: err.message, exists: false });
+    return res.status(500).json({
+      message: t(req, "errors.check_phone_failed", { fallback: "Check phone failed" }),
+      error: err.message,
+      exists: false,
+    });
   }
 });
 
 /**
- * ✅ (Optional) Backward compatibility:
- * Keep old endpoint name if any older apps call it.
- * POST /api/auth/phone-exists
+ * ✅ Backward compatibility: POST /api/auth/phone-exists
  */
 router.post("/phone-exists", async (req, res) => {
   try {
@@ -515,7 +513,10 @@ router.post("/phone-exists", async (req, res) => {
     const normalizedPhone = normalizePhone(phone);
 
     if (!normalizedPhone) {
-      return res.status(400).json({ message: "phone is required", exists: false });
+      return res.status(400).json({
+        message: t(req, "errors.phone_required", { fallback: "phone is required" }),
+        exists: false,
+      });
     }
 
     const requestCountryCode = (countryCode || resolveReqCountryCode(req))
@@ -545,17 +546,16 @@ router.post("/phone-exists", async (req, res) => {
     });
   } catch (err) {
     console.error("❌ PHONE EXISTS ERROR:", err.message);
-    return res.status(500).json({ message: "Phone check failed", error: err.message, exists: false });
+    return res.status(500).json({
+      message: t(req, "errors.phone_check_failed", { fallback: "Phone check failed" }),
+      error: err.message,
+      exists: false,
+    });
   }
 });
 
 /**
  * ✅ Register user
- * POST /api/auth/register
- *
- * ✅ PARALLEL LOGIC:
- * - uniqueness must be enforced PER COUNTRY (countryCode + phone/email)
- * - towTruckTypes/mechanicCategories must be read from PricingConfig PER COUNTRY
  */
 router.post("/register", async (req, res) => {
   try {
@@ -579,16 +579,16 @@ router.post("/register", async (req, res) => {
     } = req.body;
 
     if (!Object.values(USER_ROLES).includes(role)) {
-      return res.status(400).json({ message: "Invalid role provided" });
+      return res.status(400).json({
+        message: t(req, "errors.invalid_role", { fallback: "Invalid role provided" }),
+      });
     }
 
     const requestCountryCode = resolveReqCountryCode(req);
     const dialingCode = await getDialingCodeForCountry(requestCountryCode);
     const normalizedPhone = normalizePhone(phone);
 
-    // ✅ Skip strict validation for SuperAdmin/Admin
     if (role === USER_ROLES.SUPER_ADMIN || role === USER_ROLES.ADMIN) {
-      // ✅ Admins should still be country-scoped for dashboards
       const emailClean = (email || "").trim().toLowerCase();
 
       const existing = await User.findOne({
@@ -596,7 +596,7 @@ router.post("/register", async (req, res) => {
         email: emailClean,
       });
 
-      if (existing) return res.status(409).json({ message: "User already exists" });
+      if (existing) return res.status(409).json({ message: t(req, "errors.user_exists", { fallback: "User already exists" }) });
 
       const user = await User.create({
         name: `${firstName || "Admin"} ${lastName || ""}`.trim(),
@@ -611,42 +611,43 @@ router.post("/register", async (req, res) => {
       });
 
       return res.status(201).json({
-        message: "User registered successfully ✅",
+        message: t(req, "auth.register_success", { fallback: "User registered successfully ✅" }),
         user: { id: user._id, name: user.name, email: user.email, role: user.role },
       });
     }
 
     if (!firstName || !lastName || !normalizedPhone || !email || !password || !birthday) {
       return res.status(400).json({
-        message: "firstName, lastName, phone, email, password, birthday are required",
+        message: t(req, "errors.register_required_fields", {
+          fallback: "firstName, lastName, phone, email, password, birthday are required",
+        }),
       });
     }
 
-    // ✅ NOTE: You requested "nationalityType abandoned" on customer,
-    // but backend currently requires it for ALL roles.
-    // We keep logic intact here to avoid breaking existing calls.
     if (!nationalityType || !["SouthAfrican", "ForeignNational"].includes(nationalityType)) {
       return res.status(400).json({
-        message: "nationalityType must be SouthAfrican or ForeignNational",
+        message: t(req, "errors.invalid_nationality_type", {
+          fallback: "nationalityType must be SouthAfrican or ForeignNational",
+        }),
       });
     }
 
     if (nationalityType === "SouthAfrican") {
       if (!saIdNumber)
-        return res.status(400).json({ message: "saIdNumber is required for SouthAfrican" });
+        return res.status(400).json({ message: t(req, "errors.sa_id_required", { fallback: "saIdNumber is required for SouthAfrican" }) });
       if (!isValidSouthAfricanID(saIdNumber))
-        return res.status(400).json({ message: "Invalid South African ID number" });
+        return res.status(400).json({ message: t(req, "errors.invalid_sa_id", { fallback: "Invalid South African ID number" }) });
     }
 
     if (nationalityType === "ForeignNational") {
       if (!passportNumber || !country) {
         return res.status(400).json({
-          message: "passportNumber and country are required for ForeignNational",
+          message: t(req, "errors.foreign_required", { fallback: "passportNumber and country are required for ForeignNational" }),
         });
       }
       if (!isValidPassport(passportNumber)) {
         return res.status(400).json({
-          message: "passportNumber must be 8 to 11 alphanumeric characters",
+          message: t(req, "errors.invalid_passport", { fallback: "passportNumber must be 8 to 11 alphanumeric characters" }),
         });
       }
     }
@@ -660,14 +661,16 @@ router.post("/register", async (req, res) => {
 
       if (!normalizedTowTypes.length) {
         return res.status(400).json({
-          message: "TowTruck providers must select at least 1 towTruckType",
+          message: t(req, "errors.towtruck_type_required", {
+            fallback: "TowTruck providers must select at least 1 towTruckType",
+          }),
         });
       }
 
-      const invalid = normalizedTowTypes.filter((t) => !allowedTowTruckTypes.includes(t));
+      const invalid = normalizedTowTypes.filter((tt) => !allowedTowTruckTypes.includes(tt));
       if (invalid.length > 0) {
         return res.status(400).json({
-          message: `Invalid towTruckTypes: ${invalid.join(", ")}`,
+          message: t(req, "errors.invalid_towtruck_types", { fallback: `Invalid towTruckTypes: ${invalid.join(", ")}` }),
           allowed: allowedTowTruckTypes,
         });
       }
@@ -679,36 +682,35 @@ router.post("/register", async (req, res) => {
 
       if (!normalizedMechCats.length) {
         return res.status(400).json({
-          message: "Mechanics must select at least 1 mechanic category",
+          message: t(req, "errors.mechanic_category_required", {
+            fallback: "Mechanics must select at least 1 mechanic category",
+          }),
         });
       }
 
       const invalid = normalizedMechCats.filter((c) => !allowedMechanicCategories.includes(c));
       if (invalid.length > 0) {
         return res.status(400).json({
-          message: `Invalid mechanicCategories: ${invalid.join(", ")}`,
+          message: t(req, "errors.invalid_mechanic_categories", { fallback: `Invalid mechanicCategories: ${invalid.join(", ")}` }),
           allowed: allowedMechanicCategories,
         });
       }
     }
 
     const phoneCandidates = buildPhoneCandidates(normalizedPhone, dialingCode);
-
     const emailClean = String(email).trim().toLowerCase();
 
-    // ✅ PARALLEL: enforce email uniqueness per country
     const existingEmail = await User.findOne({
       countryCode: requestCountryCode,
       email: emailClean,
     });
-    if (existingEmail) return res.status(409).json({ message: "Email already registered" });
+    if (existingEmail) return res.status(409).json({ message: t(req, "errors.email_exists", { fallback: "Email already registered" }) });
 
-    // ✅ PARALLEL: enforce phone uniqueness per country
     const existingPhone = await User.findOne({
       countryCode: requestCountryCode,
       phone: { $in: phoneCandidates },
     });
-    if (existingPhone) return res.status(409).json({ message: "Phone number already registered" });
+    if (existingPhone) return res.status(409).json({ message: t(req, "errors.phone_exists", { fallback: "Phone number already registered" }) });
 
     const name = `${firstName.trim()} ${lastName.trim()}`;
 
@@ -740,22 +742,20 @@ router.post("/register", async (req, res) => {
     });
 
     return res.status(201).json({
-      message: "User registered successfully ✅",
+      message: t(req, "auth.register_success", { fallback: "User registered successfully ✅" }),
       user: { id: user._id, name: user.name, email: user.email, role: user.role },
     });
   } catch (err) {
     console.error("❌ REGISTER ERROR:", err.message);
-    return res.status(500).json({ message: "Registration failed", error: err.message });
+    return res.status(500).json({
+      message: t(req, "errors.registration_failed", { fallback: "Registration failed" }),
+      error: err.message,
+    });
   }
 });
 
 /**
- * ✅ Login user (PHONE + PASSWORD) → ALWAYS OTP
- * POST /api/auth/login
- *
- * ✅ PARALLEL LOGIC:
- * - login must resolve the user within the selected countryCode
- * - prevents cross-country phone collisions returning wrong tenant user
+ * ✅ Login → ALWAYS OTP
  */
 router.post("/login", async (req, res) => {
   try {
@@ -765,7 +765,9 @@ router.post("/login", async (req, res) => {
     const normalizedPhone = normalizePhone(phone);
 
     if (!normalizedPhone || !password) {
-      return res.status(400).json({ message: "phone and password are required" });
+      return res.status(400).json({
+        message: t(req, "errors.phone_password_required", { fallback: "phone and password are required" }),
+      });
     }
 
     const requestCountryCode = resolveReqCountryCode(req);
@@ -773,25 +775,25 @@ router.post("/login", async (req, res) => {
 
     const phoneCandidates = buildPhoneCandidates(normalizedPhone, dialingCode);
 
-    // ✅ Prefer tenant match first
     let user = await User.findOne({
       countryCode: requestCountryCode,
       phone: { $in: phoneCandidates },
     });
 
-    // ✅ fallback to legacy user without countryCode (old data), but DO NOT cross into other country
     if (!user) {
       user = await User.findOne({
-        $and: [{ phone: { $in: phoneCandidates } }, { $or: [{ countryCode: { $exists: false } }, { countryCode: null }] }],
+        $and: [
+          { phone: { $in: phoneCandidates } },
+          { $or: [{ countryCode: { $exists: false } }, { countryCode: null }] },
+        ],
       });
     }
 
-    if (!user) return res.status(401).json({ message: "Invalid credentials" });
+    if (!user) return res.status(401).json({ message: t(req, "errors.invalid_credentials", { fallback: "Invalid credentials" }) });
 
     const isMatch = await user.matchPassword(password);
-    if (!isMatch) return res.status(401).json({ message: "Invalid credentials" });
+    if (!isMatch) return res.status(401).json({ message: t(req, "errors.invalid_credentials", { fallback: "Invalid credentials" }) });
 
-    // ✅ If user has no countryCode yet, bind it now (one-time migration)
     if (!user.countryCode) {
       user.countryCode = requestCountryCode;
       await user.save();
@@ -805,13 +807,13 @@ router.post("/login", async (req, res) => {
     const userDialingCode = await getDialingCodeForCountry(user.countryCode || requestCountryCode);
 
     try {
-      await sendOtpSms(user.phone, otpCode, "OTP", userDialingCode);
+      await sendOtpSms(user.phone, otpCode, "OTP", userDialingCode, getReqLang(req));
     } catch (smsErr) {
       console.error("❌ SMS OTP SEND FAILED:", smsErr.message);
     }
 
     return res.status(200).json({
-      message: "OTP sent via SMS ✅",
+      message: t(req, "auth.otp_sent", { fallback: "OTP sent via SMS ✅" }),
       otp: debugEnabled ? otpCode : undefined,
       requiresOtp: true,
       isStaticOtpAccount: isStaticOtpTestPhone(user.phone),
@@ -819,16 +821,15 @@ router.post("/login", async (req, res) => {
     });
   } catch (err) {
     console.error("❌ LOGIN ERROR:", err.message);
-    return res.status(500).json({ message: "Login failed", error: err.message });
+    return res.status(500).json({
+      message: t(req, "errors.login_failed", { fallback: "Login failed" }),
+      error: err.message,
+    });
   }
 });
 
 /**
- * ✅ VERIFY OTP (PHONE + OTP) → returns token
- * POST /api/auth/verify-otp
- *
- * ✅ PARALLEL LOGIC:
- * - verify otp must match the same tenant countryCode
+ * ✅ VERIFY OTP
  */
 router.post("/verify-otp", async (req, res) => {
   try {
@@ -838,7 +839,9 @@ router.post("/verify-otp", async (req, res) => {
     const normalizedPhone = normalizePhone(phone);
 
     if (!normalizedPhone || !otp) {
-      return res.status(400).json({ message: "phone and otp are required" });
+      return res.status(400).json({
+        message: t(req, "errors.phone_otp_required", { fallback: "phone and otp are required" }),
+      });
     }
 
     const requestCountryCode = resolveReqCountryCode(req);
@@ -846,27 +849,28 @@ router.post("/verify-otp", async (req, res) => {
 
     const phoneCandidates = buildPhoneCandidates(normalizedPhone, dialingCode);
 
-    // ✅ Prefer tenant match first
     let user = await User.findOne({
       countryCode: requestCountryCode,
       phone: { $in: phoneCandidates },
     });
 
-    // ✅ fallback to legacy user without countryCode (old data)
     if (!user) {
       user = await User.findOne({
-        $and: [{ phone: { $in: phoneCandidates } }, { $or: [{ countryCode: { $exists: false } }, { countryCode: null }] }],
+        $and: [
+          { phone: { $in: phoneCandidates } },
+          { $or: [{ countryCode: { $exists: false } }, { countryCode: null }] },
+        ],
       });
     }
 
-    if (!user) return res.status(404).json({ message: "User not found" });
+    if (!user) return res.status(404).json({ message: t(req, "errors.user_not_found", { fallback: "User not found" }) });
 
     if (!user.otpCode || user.otpCode !== otp) {
-      return res.status(401).json({ message: "Invalid OTP" });
+      return res.status(401).json({ message: t(req, "errors.invalid_otp", { fallback: "Invalid OTP" }) });
     }
 
     if (!user.otpExpiresAt || user.otpExpiresAt < new Date()) {
-      return res.status(401).json({ message: "OTP expired" });
+      return res.status(401).json({ message: t(req, "errors.otp_expired", { fallback: "OTP expired" }) });
     }
 
     user.otpCode = null;
@@ -891,7 +895,6 @@ router.post("/verify-otp", async (req, res) => {
       user.providerProfile.isOnline = false;
     }
 
-    // ✅ If user has no countryCode yet, bind it now (one-time migration)
     if (!user.countryCode) user.countryCode = requestCountryCode;
 
     await user.save();
@@ -899,7 +902,7 @@ router.post("/verify-otp", async (req, res) => {
     const token = generateToken(user._id, user.role, sessionId);
 
     return res.status(200).json({
-      message: "OTP verified ✅",
+      message: t(req, "auth.otp_verified", { fallback: "OTP verified ✅" }),
       token,
       user:
         typeof user.toSafeJSON === "function"
@@ -917,7 +920,10 @@ router.post("/verify-otp", async (req, res) => {
     });
   } catch (err) {
     console.error("❌ VERIFY OTP ERROR:", err.message);
-    return res.status(500).json({ message: "OTP verification failed", error: err.message });
+    return res.status(500).json({
+      message: t(req, "errors.otp_verification_failed", { fallback: "OTP verification failed" }),
+      error: err.message,
+    });
   }
 });
 
@@ -931,7 +937,7 @@ router.post("/country/send-otp", async (req, res) => {
     const normalizedPhone = normalizePhone(phone);
 
     if (!normalizedPhone) {
-      return res.status(400).json({ message: "phone is required" });
+      return res.status(400).json({ message: t(req, "errors.phone_required", { fallback: "phone is required" }) });
     }
 
     const requestCountryCode = resolveReqCountryCode(req);
@@ -943,7 +949,6 @@ router.post("/country/send-otp", async (req, res) => {
     const phoneCandidates = buildPhoneCandidates(normalizedPhone, dialingCode);
     const keys = phoneCandidates.map((cand) => buildCountryOtpKey(String(cand), requestCountryCode));
 
-    // Upsert all candidate keys so verify can match any format
     await Promise.all(
       keys.map((key) =>
         CountryOtp.updateOne(
@@ -971,13 +976,13 @@ router.post("/country/send-otp", async (req, res) => {
 
     const smsDialingCode = dialingCode || DIALING_CODE_FALLBACK[requestCountryCode] || null;
     try {
-      await sendOtpSms(normalizedPhone, otpCode, "COUNTRY", smsDialingCode);
+      await sendOtpSms(normalizedPhone, otpCode, "COUNTRY", smsDialingCode, getReqLang(req));
     } catch (smsErr) {
       console.error("❌ COUNTRY SMS SEND FAILED:", smsErr.message);
     }
 
     return res.status(200).json({
-      message: "Country OTP sent via SMS ✅",
+      message: t(req, "auth.country_otp_sent", { fallback: "Country OTP sent via SMS ✅" }),
       otp: debugEnabled ? otpCode : undefined,
       requiresOtp: true,
       isStaticOtpAccount: isStaticOtpTestPhone(normalizedPhone),
@@ -987,7 +992,7 @@ router.post("/country/send-otp", async (req, res) => {
   } catch (err) {
     console.error("❌ COUNTRY SEND OTP ERROR:", err.message);
     return res.status(500).json({
-      message: "Country OTP send failed",
+      message: t(req, "errors.country_otp_send_failed", { fallback: "Country OTP send failed" }),
       error: err.message,
     });
   }
@@ -1003,7 +1008,9 @@ router.post("/country/verify-otp", async (req, res) => {
     const normalizedPhone = normalizePhone(phone);
 
     if (!normalizedPhone || !otp) {
-      return res.status(400).json({ message: "phone and otp are required" });
+      return res.status(400).json({
+        message: t(req, "errors.phone_otp_required", { fallback: "phone and otp are required" }),
+      });
     }
 
     const requestCountryCode = resolveReqCountryCode(req);
@@ -1015,30 +1022,31 @@ router.post("/country/verify-otp", async (req, res) => {
     const rec = await CountryOtp.findOne({ key: { $in: keys } }).select("otp expiresAt key");
     if (!rec) {
       return res.status(404).json({
-        message: "No OTP request found for this phone. Please request OTP again.",
+        message: t(req, "errors.no_otp_request", {
+          fallback: "No OTP request found for this phone. Please request OTP again.",
+        }),
       });
     }
 
     if (!rec.expiresAt || rec.expiresAt < new Date()) {
       await CountryOtp.deleteMany({ key: { $in: keys } });
-      return res.status(401).json({ message: "OTP expired" });
+      return res.status(401).json({ message: t(req, "errors.otp_expired", { fallback: "OTP expired" }) });
     }
 
     if (String(rec.otp) !== String(otp).trim()) {
-      return res.status(401).json({ message: "Invalid OTP" });
+      return res.status(401).json({ message: t(req, "errors.invalid_otp", { fallback: "Invalid OTP" }) });
     }
 
-    // ✅ success: delete all variants for this phone+country (clean)
     await CountryOtp.deleteMany({ key: { $in: keys } });
 
     return res.status(200).json({
-      message: "Country confirmed ✅",
+      message: t(req, "auth.country_confirmed", { fallback: "Country confirmed ✅" }),
       countryCode: requestCountryCode,
     });
   } catch (err) {
     console.error("❌ COUNTRY VERIFY OTP ERROR:", err.message);
     return res.status(500).json({
-      message: "Country OTP verification failed",
+      message: t(req, "errors.country_otp_verify_failed", { fallback: "Country OTP verification failed" }),
       error: err.message,
     });
   }
@@ -1046,10 +1054,6 @@ router.post("/country/verify-otp", async (req, res) => {
 
 /**
  * ✅ Forgot Password → sends OTP via SMS
- * POST /api/auth/forgot-password
- *
- * ✅ PARALLEL LOGIC:
- * - target user must be resolved inside selected countryCode
  */
 router.post("/forgot-password", async (req, res) => {
   try {
@@ -1057,7 +1061,7 @@ router.post("/forgot-password", async (req, res) => {
     const normalizedPhone = normalizePhone(phone);
 
     if (!normalizedPhone) {
-      return res.status(400).json({ message: "phone is required" });
+      return res.status(400).json({ message: t(req, "errors.phone_required", { fallback: "phone is required" }) });
     }
 
     const requestCountryCode = resolveReqCountryCode(req);
@@ -1065,21 +1069,25 @@ router.post("/forgot-password", async (req, res) => {
 
     const phoneCandidates = buildPhoneCandidates(normalizedPhone, dialingCode);
 
-    // ✅ Prefer tenant match first
     let user = await User.findOne({
       countryCode: requestCountryCode,
       phone: { $in: phoneCandidates },
     });
 
-    // ✅ fallback to legacy user without countryCode (old data)
     if (!user) {
       user = await User.findOne({
-        $and: [{ phone: { $in: phoneCandidates } }, { $or: [{ countryCode: { $exists: false } }, { countryCode: null }] }],
+        $and: [
+          { phone: { $in: phoneCandidates } },
+          { $or: [{ countryCode: { $exists: false } }, { countryCode: null }] },
+        ],
       });
     }
 
+    // ✅ keep same behavior: don’t leak whether phone exists
     if (!user) {
-      return res.status(200).json({ message: "If your phone exists, an SMS code has been sent ✅" });
+      return res.status(200).json({
+        message: t(req, "auth.forgot_generic", { fallback: "If your phone exists, an SMS code has been sent ✅" }),
+      });
     }
 
     const otpCode = await generateAndSaveOtp(user, { minutes: 10 });
@@ -1090,13 +1098,13 @@ router.post("/forgot-password", async (req, res) => {
     const userDialingCode = await getDialingCodeForCountry(user.countryCode || requestCountryCode);
 
     try {
-      await sendOtpSms(user.phone, otpCode, "RESET", userDialingCode);
+      await sendOtpSms(user.phone, otpCode, "RESET", userDialingCode, getReqLang(req));
     } catch (smsErr) {
       console.error("❌ RESET SMS SEND FAILED:", smsErr.message);
     }
 
     return res.status(200).json({
-      message: "If your phone exists, an SMS code has been sent ✅",
+      message: t(req, "auth.forgot_generic", { fallback: "If your phone exists, an SMS code has been sent ✅" }),
       otp: debugEnabled ? otpCode : undefined,
       requiresOtp: true,
       isStaticOtpAccount: isStaticOtpTestPhone(user.phone),
@@ -1104,16 +1112,15 @@ router.post("/forgot-password", async (req, res) => {
     });
   } catch (err) {
     console.error("❌ FORGOT PASSWORD ERROR:", err.message);
-    return res.status(500).json({ message: "Forgot password failed", error: err.message });
+    return res.status(500).json({
+      message: t(req, "errors.forgot_failed", { fallback: "Forgot password failed" }),
+      error: err.message,
+    });
   }
 });
 
 /**
- * ✅ Reset Password (PHONE + OTP + newPassword)
- * POST /api/auth/reset-password
- *
- * ✅ PARALLEL LOGIC:
- * - user must resolve inside selected countryCode
+ * ✅ Reset Password
  */
 router.post("/reset-password", async (req, res) => {
   try {
@@ -1121,7 +1128,9 @@ router.post("/reset-password", async (req, res) => {
     const normalizedPhone = normalizePhone(phone);
 
     if (!normalizedPhone || !otp || !newPassword) {
-      return res.status(400).json({ message: "phone, otp, newPassword are required" });
+      return res.status(400).json({
+        message: t(req, "errors.reset_required", { fallback: "phone, otp, newPassword are required" }),
+      });
     }
 
     const requestCountryCode = resolveReqCountryCode(req);
@@ -1129,48 +1138,52 @@ router.post("/reset-password", async (req, res) => {
 
     const phoneCandidates = buildPhoneCandidates(normalizedPhone, dialingCode);
 
-    // ✅ Prefer tenant match first
     let user = await User.findOne({
       countryCode: requestCountryCode,
       phone: { $in: phoneCandidates },
     });
 
-    // ✅ fallback to legacy user without countryCode (old data)
     if (!user) {
       user = await User.findOne({
-        $and: [{ phone: { $in: phoneCandidates } }, { $or: [{ countryCode: { $exists: false } }, { countryCode: null }] }],
+        $and: [
+          { phone: { $in: phoneCandidates } },
+          { $or: [{ countryCode: { $exists: false } }, { countryCode: null }] },
+        ],
       });
     }
 
-    if (!user) return res.status(404).json({ message: "User not found" });
+    if (!user) return res.status(404).json({ message: t(req, "errors.user_not_found", { fallback: "User not found" }) });
 
     if (!user.otpCode || user.otpCode !== otp) {
-      return res.status(401).json({ message: "Invalid OTP" });
+      return res.status(401).json({ message: t(req, "errors.invalid_otp", { fallback: "Invalid OTP" }) });
     }
 
     if (!user.otpExpiresAt || user.otpExpiresAt < new Date()) {
-      return res.status(401).json({ message: "OTP expired" });
+      return res.status(401).json({ message: t(req, "errors.otp_expired", { fallback: "OTP expired" }) });
     }
 
     user.password = newPassword;
     user.otpCode = null;
     user.otpExpiresAt = null;
 
-    // ✅ If user has no countryCode yet, bind it now (one-time migration)
     if (!user.countryCode) user.countryCode = requestCountryCode;
 
     await user.save();
 
-    return res.status(200).json({ message: "Password reset successful ✅" });
+    return res.status(200).json({
+      message: t(req, "auth.reset_success", { fallback: "Password reset successful ✅" }),
+    });
   } catch (err) {
     console.error("❌ RESET PASSWORD ERROR:", err.message);
-    return res.status(500).json({ message: "Reset password failed", error: err.message });
+    return res.status(500).json({
+      message: t(req, "errors.reset_failed", { fallback: "Reset password failed" }),
+      error: err.message,
+    });
   }
 });
 
 /**
  * ✅ Get logged-in user profile
- * GET /api/auth/me
  */
 router.get("/me", auth, async (req, res) => {
   try {
@@ -1178,7 +1191,7 @@ router.get("/me", auth, async (req, res) => {
       "name firstName lastName email phone birthday nationalityType saIdNumber passportNumber country role providerProfile countryCode permissions createdAt updatedAt"
     );
 
-    if (!user) return res.status(404).json({ message: "User not found" });
+    if (!user) return res.status(404).json({ message: t(req, "errors.user_not_found", { fallback: "User not found" }) });
 
     const safe = typeof user.toSafeJSON === "function" ? user.toSafeJSON(user.role) : user;
 
@@ -1187,13 +1200,12 @@ router.get("/me", auth, async (req, res) => {
 
     return res.status(200).json({ user: safe });
   } catch (err) {
-    return res.status(500).json({ message: "Could not fetch profile", error: err.message });
+    return res.status(500).json({ message: t(req, "errors.fetch_profile_failed", { fallback: "Could not fetch profile" }), error: err.message });
   }
 });
 
 /**
  * ✅ Update logged-in user profile (phone/email/password only)
- * PATCH /api/auth/me
  */
 router.patch("/me", auth, async (req, res) => {
   try {
@@ -1205,11 +1217,11 @@ router.patch("/me", auth, async (req, res) => {
     if (typeof email === "string" && email.trim()) updates.email = email.trim().toLowerCase();
     if (typeof password === "string" && password.trim()) updates.password = password.trim();
 
-    if (Object.keys(updates).length === 0) return res.status(400).json({ message: "Nothing to update" });
+    if (Object.keys(updates).length === 0)
+      return res.status(400).json({ message: t(req, "errors.nothing_to_update", { fallback: "Nothing to update" }) });
 
-    // ✅ determine current tenant country for uniqueness checks
     const currentUser = await User.findById(userId).select("countryCode");
-    if (!currentUser) return res.status(404).json({ message: "User not found" });
+    if (!currentUser) return res.status(404).json({ message: t(req, "errors.user_not_found", { fallback: "User not found" }) });
 
     const tenantCountryCode = String(currentUser.countryCode || resolveReqCountryCode(req))
       .trim()
@@ -1221,7 +1233,7 @@ router.patch("/me", auth, async (req, res) => {
         email: updates.email,
         _id: { $ne: userId },
       });
-      if (existingEmail) return res.status(409).json({ message: "Email already registered" });
+      if (existingEmail) return res.status(409).json({ message: t(req, "errors.email_exists", { fallback: "Email already registered" }) });
     }
 
     if (updates.phone) {
@@ -1233,11 +1245,11 @@ router.patch("/me", auth, async (req, res) => {
         phone: { $in: candidates },
         _id: { $ne: userId },
       });
-      if (existingPhone) return res.status(409).json({ message: "Phone number already registered" });
+      if (existingPhone) return res.status(409).json({ message: t(req, "errors.phone_exists", { fallback: "Phone number already registered" }) });
     }
 
     const user = await User.findById(userId);
-    if (!user) return res.status(404).json({ message: "User not found" });
+    if (!user) return res.status(404).json({ message: t(req, "errors.user_not_found", { fallback: "User not found" }) });
 
     if (updates.phone) user.phone = updates.phone;
     if (updates.email) user.email = updates.email;
@@ -1253,22 +1265,24 @@ router.patch("/me", auth, async (req, res) => {
     if (safe && !safe.permissions) safe.permissions = {};
     if (safe && safe.countryCode == null && safe.country) safe.countryCode = safe.country;
 
-    return res.status(200).json({ message: "Profile updated ✅", user: safe });
+    return res.status(200).json({
+      message: t(req, "auth.profile_updated", { fallback: "Profile updated ✅" }),
+      user: safe,
+    });
   } catch (err) {
-    return res.status(500).json({ message: "Update failed", error: err.message });
+    return res.status(500).json({ message: t(req, "errors.update_failed", { fallback: "Update failed" }), error: err.message });
   }
 });
 
 /**
- * ✅ Logout (clears FCM token + invalidates provider session)
- * POST /api/auth/logout
+ * ✅ Logout
  */
 router.post("/logout", auth, async (req, res) => {
   try {
     const userId = req.user?._id;
 
     const user = await User.findById(userId).select("role fcmToken providerProfile");
-    if (!user) return res.status(404).json({ message: "User not found" });
+    if (!user) return res.status(404).json({ message: t(req, "errors.user_not_found", { fallback: "User not found" }) });
 
     const isProvider = isProviderRole(user.role);
 
@@ -1285,7 +1299,7 @@ router.post("/logout", auth, async (req, res) => {
     await user.save();
 
     return res.status(200).json({
-      message: "Logged out ✅",
+      message: t(req, "auth.logged_out", { fallback: "Logged out ✅" }),
       cleared: {
         rootFcmToken: true,
         providerFcmToken: isProvider,
@@ -1294,7 +1308,7 @@ router.post("/logout", auth, async (req, res) => {
     });
   } catch (err) {
     console.error("❌ LOGOUT ERROR:", err);
-    return res.status(500).json({ message: "Logout failed", error: err.message });
+    return res.status(500).json({ message: t(req, "errors.logout_failed", { fallback: "Logout failed" }), error: err.message });
   }
 });
 
