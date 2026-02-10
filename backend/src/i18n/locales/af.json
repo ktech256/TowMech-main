@@ -1,0 +1,19 @@
+{
+  "otp.message": "Jou TowMech OTP is {code}",
+  "otp.sent_short": "OTP gestuur",
+  "otp.sent": "OTP via SMS gestuur",
+  "otp.verified": "OTP bevestig",
+  "otp.invalid": "Ongeldige OTP",
+  "otp.expired": "OTP het verval",
+  "otp.required": "OTP word vereis",
+
+  "country.confirmed": "Land bevestig",
+  "auth.login_failed": "Aanmelding misluk",
+  "auth.register_success": "Gebruiker suksesvol geregistreer",
+  "auth.logout_success": "Afgemeld",
+
+  "error.unauthorized": "Ongemagtig",
+  "error.forbidden": "Verbode",
+  "error.not_found": "Nie gevind nie",
+  "error.server": "Interne bedienerfout"
+}

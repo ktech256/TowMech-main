@@ -1,0 +1,19 @@
+{
+  "otp.message": "OTP ya TowMech ndi {code}",
+  "otp.sent_short": "OTP yo rumelwa",
+  "otp.sent": "OTP yo rumelwa nga SMS",
+  "otp.verified": "OTP yo khwathisedzwa",
+  "otp.invalid": "OTP a i khou shuma",
+  "otp.expired": "OTP yo fhelelwa nga tshifhinga",
+  "otp.required": "OTP i a ṱoḓea",
+
+  "country.confirmed": "Shango lo khwathisedzwa",
+  "auth.login_failed": "U dzhena ho kundelwa",
+  "auth.register_success": "Mushumisi o ṅwaliswa zwavhuḓi",
+  "auth.logout_success": "Wa bva",
+
+  "error.unauthorized": "A u tendelwi",
+  "error.forbidden": "Zwi thivhelwa",
+  "error.not_found": "A zwi wanali",
+  "error.server": "Vhukhakhi ha seva ha ngomu"
+}

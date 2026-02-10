@@ -1,0 +1,19 @@
+{
+  "otp.message": "I-OTP yakho ye-TowMech ngu {code}",
+  "otp.sent_short": "I-OTP itfunyelwe",
+  "otp.sent": "I-OTP itfunyelwe nge-SMS",
+  "otp.verified": "I-OTP icinisekisiwe",
+  "otp.invalid": "I-OTP ayikalungi",
+  "otp.expired": "I-OTP seyiphelelwe sikhatsi",
+  "otp.required": "I-OTP iyadzingeka",
+
+  "country.confirmed": "Live licinisekisiwe",
+  "auth.login_failed": "Kungena kwehlulekile",
+  "auth.register_success": "Umsebentisi ubhaliswe kahle",
+  "auth.logout_success": "Uphumile",
+
+  "error.unauthorized": "Awugunyaziwe",
+  "error.forbidden": "Kuvinjelwe",
+  "error.not_found": "Akutfolakali",
+  "error.server": "Liphutsa leseva langaphakathi"
+}

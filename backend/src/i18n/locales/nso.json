@@ -1,0 +1,19 @@
+{
+  "otp.message": "OTP ya TowMech ke {code}",
+  "otp.sent_short": "OTP e rometšwe",
+  "otp.sent": "OTP e rometšwe ka SMS",
+  "otp.verified": "OTP e netefaditšwe",
+  "otp.invalid": "OTP ye e sego ya nnete",
+  "otp.expired": "OTP e feletšwe ke nako",
+  "otp.required": "OTP e a nyakega",
+
+  "country.confirmed": "Naga e netefaditšwe",
+  "auth.login_failed": "Go tsena go paletšwe",
+  "auth.register_success": "Modiriši o ngwadišitšwe ka katlego",
+  "auth.logout_success": "O tšwile",
+
+  "error.unauthorized": "Ga o dumelelwa",
+  "error.forbidden": "E thibetšwe",
+  "error.not_found": "Ga e hwetšwe",
+  "error.server": "Phošo ya sebara ya ka gare"
+}

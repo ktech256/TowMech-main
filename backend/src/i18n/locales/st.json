@@ -1,0 +1,19 @@
+{
+  "otp.message": "OTP ea TowMech ke {code}",
+  "otp.sent_short": "OTP e rometsoe",
+  "otp.sent": "OTP e rometsoe ka SMS",
+  "otp.verified": "OTP e netefalitsoe",
+  "otp.invalid": "OTP e fosahetseng",
+  "otp.expired": "OTP e felile nako",
+  "otp.required": "OTP ea hlokahala",
+
+  "country.confirmed": "Naha e netefalitsoe",
+  "auth.login_failed": "Ho kena ho hlotsoe",
+  "auth.register_success": "Mosebedisi o ngodisitsoe ka katleho",
+  "auth.logout_success": "O tsoa",
+
+  "error.unauthorized": "Ha o a dumelloa",
+  "error.forbidden": "Ha e dumellwe",
+  "error.not_found": "Ha e fumanehe",
+  "error.server": "Phoso ya seva ya ka hare"
+}
