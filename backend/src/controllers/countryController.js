@@ -19,6 +19,71 @@ function pickString(v, fallback = null) {
   return s ? s : fallback;
 }
 
+// ✅ Language normalization (controller safety net)
+const LANGUAGE_NAME_TO_TAG = {
+  english: "en",
+  afrikaans: "af",
+  swahili: "sw",
+  kiswahili: "sw",
+  isizulu: "zu",
+  isixhosa: "xh",
+  sesotho: "st",
+  "sesotho sa leboa": "nso",
+  setswana: "tn",
+  xitsonga: "ts",
+  siswati: "ss",
+  swati: "ss",
+  venda: "ve",
+  tshivenda: "ve",
+};
+
+function looksLikeLangTag(v) {
+  return /^[A-Za-z]{2,3}([_-][A-Za-z]{4})?([_-][A-Za-z]{2}|\d{3})?([_-][A-Za-z0-9]{5,8})*$/.test(
+    String(v || "").trim()
+  );
+}
+
+function normLangTag(v) {
+  const raw = String(v || "").trim();
+  if (!raw) return "en";
+
+  const byName = LANGUAGE_NAME_TO_TAG[raw.toLowerCase()];
+  if (byName) return byName;
+
+  if (looksLikeLangTag(raw)) {
+    const cleaned = raw.replace(/_/g, "-").replace(/\s+/g, "");
+    const parts = cleaned.split("-");
+    if (parts.length) {
+      parts[0] = parts[0].toLowerCase();
+      for (let i = 1; i < parts.length; i++) {
+        if (parts[i].length === 2) parts[i] = parts[i].toUpperCase();
+      }
+    }
+    return parts.join("-");
+  }
+
+  const simplified = raw
+    .toLowerCase()
+    .replace(/\(.*?\)/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return LANGUAGE_NAME_TO_TAG[simplified] || "en";
+}
+
+function normLangList(list) {
+  if (!Array.isArray(list)) return undefined;
+  const out = [];
+  const seen = new Set();
+  for (const x of list) {
+    const t = normLangTag(x);
+    if (!t) continue;
+    if (seen.has(t)) continue;
+    seen.add(t);
+    out.push(t);
+  }
+  return out.length ? out : ["en"];
+}
+
 /**
  * ✅ Public: list active public countries (for app Country picker)
  * GET /api/config/countries
@@ -190,6 +255,16 @@ export async function upsertCountry(req, res) {
 
     const body = req.body || {};
 
+    // ✅ LANGUAGE FIX: accept either `supportedLanguages` or `languages`, normalize to tags
+    const incomingLangs =
+      Array.isArray(body.supportedLanguages) && body.supportedLanguages.length
+        ? body.supportedLanguages
+        : Array.isArray(body.languages) && body.languages.length
+          ? body.languages
+          : undefined;
+
+    const normalizedLangs = incomingLangs ? normLangList(incomingLangs) : undefined;
+
     const update = {
       code,
       name: pickString(body.name),
@@ -197,11 +272,13 @@ export async function upsertCountry(req, res) {
       currencyCode: pickString(body.currencyCode, "USD")?.toUpperCase(),
       currencySymbol: pickString(body.currencySymbol),
       timezone: pickString(body.timezone, "UTC"),
-      languages:
-        Array.isArray(body.languages) && body.languages.length
-          ? body.languages.map((x) => String(x).trim()).filter(Boolean)
-          : undefined,
-      defaultLanguage: pickString(body.defaultLanguage, "en"),
+
+      // Keep older field used by app responses
+      languages: normalizedLangs,
+
+      // Store defaultLanguage as tag even if sent as a name (Afrikaans -> af)
+      defaultLanguage: normLangTag(pickString(body.defaultLanguage, "en")),
+
       region: pickString(body.region, "GLOBAL"),
       phoneRules: typeof body.phoneRules === "object" && body.phoneRules ? body.phoneRules : undefined,
 

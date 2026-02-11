@@ -44,6 +44,129 @@ const CountrySchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+/**
+ * ✅ Language name -> tag
+ * Safety net: if dashboard ever sends "Afrikaans" instead of "af",
+ * the DB still stores "af" (and app locale switching works).
+ */
+const LANGUAGE_NAME_TO_TAG = {
+  english: "en",
+  afrikaans: "af",
+  arabic: "ar",
+  bengali: "bn",
+  bulgarian: "bg",
+  catalan: "ca",
+  "chinese (simplified)": "zh-Hans",
+  "chinese (traditional)": "zh-Hant",
+  chinese: "zh",
+  croatian: "hr",
+  czech: "cs",
+  danish: "da",
+  dutch: "nl",
+  estonian: "et",
+  finnish: "fi",
+  french: "fr",
+  german: "de",
+  greek: "el",
+  hebrew: "he",
+  hindi: "hi",
+  hungarian: "hu",
+  indonesian: "id",
+  italian: "it",
+  japanese: "ja",
+  korean: "ko",
+  latvian: "lv",
+  lithuanian: "lt",
+  malay: "ms",
+  norwegian: "no",
+  persian: "fa",
+  farsi: "fa",
+  polish: "pl",
+  portuguese: "pt",
+  "portuguese (brazil)": "pt-BR",
+  "portuguese (brasil)": "pt-BR",
+  "brazilian portuguese": "pt-BR",
+  romanian: "ro",
+  russian: "ru",
+  serbian: "sr",
+  slovak: "sk",
+  slovenian: "sl",
+  spanish: "es",
+  swedish: "sv",
+  thai: "th",
+  turkish: "tr",
+  ukrainian: "uk",
+  urdu: "ur",
+  vietnamese: "vi",
+
+  // Africa + SA focus
+  swahili: "sw",
+  kiswahili: "sw",
+  amharic: "am",
+  hausa: "ha",
+  igbo: "ig",
+  yoruba: "yo",
+  somali: "so",
+  shona: "sn",
+  chichewa: "ny",
+  kinyarwanda: "rw",
+  kirundi: "rn",
+  lingala: "ln",
+  luganda: "lg",
+  oromo: "om",
+  tigrinya: "ti",
+  isizulu: "zu",
+  isixhosa: "xh",
+  sesotho: "st",
+  "sesotho sa leboa": "nso",
+  setswana: "tn",
+  xitsonga: "ts",
+  tsonga: "ts",
+  siswati: "ss",
+  swati: "ss",
+  venda: "ve",
+  tshivenda: "ve",
+  ndebele: "nr",
+};
+
+function looksLikeLangTag(v) {
+  return /^[A-Za-z]{2,3}([_-][A-Za-z]{4})?([_-][A-Za-z]{2}|\d{3})?([_-][A-Za-z0-9]{5,8})*$/.test(
+    String(v || "").trim()
+  );
+}
+
+function normalizeLangTag(v) {
+  const raw = String(v || "").trim();
+  if (!raw) return "en";
+
+  const byName = LANGUAGE_NAME_TO_TAG[raw.toLowerCase()];
+  if (byName) return byName;
+
+  if (looksLikeLangTag(raw)) {
+    const cleaned = raw.replace(/_/g, "-").replace(/\s+/g, "");
+    // best effort canonicalization
+    const parts = cleaned.split("-");
+    if (parts.length) {
+      parts[0] = parts[0].toLowerCase();
+      for (let i = 1; i < parts.length; i++) {
+        if (parts[i].length === 2) parts[i] = parts[i].toUpperCase();
+      }
+    }
+    return parts.join("-");
+  }
+
+  // remove parentheses and retry mapping
+  const simplified = raw
+    .toLowerCase()
+    .replace(/\(.*?\)/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  const bySimple = LANGUAGE_NAME_TO_TAG[simplified];
+  if (bySimple) return bySimple;
+
+  return "en";
+}
+
 // ✅ Normalization (safe)
 CountrySchema.pre("validate", function (next) {
   if (this.code) this.code = String(this.code).trim().toUpperCase();
@@ -54,11 +177,12 @@ CountrySchema.pre("validate", function (next) {
     this.currencyDisplay = x ? x : null;
   }
 
-  if (this.defaultLanguage) this.defaultLanguage = String(this.defaultLanguage).trim().toLowerCase();
+  // ✅ LANGUAGE FIX: force tags
+  if (this.defaultLanguage) this.defaultLanguage = normalizeLangTag(this.defaultLanguage);
 
   if (Array.isArray(this.supportedLanguages)) {
     this.supportedLanguages = this.supportedLanguages
-      .map((x) => String(x).trim().toLowerCase())
+      .map((x) => normalizeLangTag(x))
       .filter(Boolean);
     if (this.supportedLanguages.length === 0) this.supportedLanguages = ["en"];
   }
