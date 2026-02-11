@@ -30,13 +30,18 @@ const CountrySchema = new mongoose.Schema(
      */
     dialingCode: { type: String, default: null, trim: true, index: true },
 
+    // ✅ Language tags
     defaultLanguage: { type: String, default: "en", lowercase: true, trim: true },
-
     supportedLanguages: { type: [String], default: ["en"] },
 
     timezone: { type: String, default: "Africa/Johannesburg", trim: true },
 
     isActive: { type: Boolean, default: true },
+
+    // ✅ IMPORTANT for /api/config/countries public list:
+    // Older controller filters by isPublic; if missing, countries won't return.
+    // This does not change any non-language logic; it prevents public list from breaking.
+    isPublic: { type: Boolean, default: true, index: true },
 
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
     updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
@@ -144,27 +149,25 @@ function normalizeLangTag(v) {
 
   if (looksLikeLangTag(raw)) {
     const cleaned = raw.replace(/_/g, "-").replace(/\s+/g, "");
-    // best effort canonicalization
-    const parts = cleaned.split("-");
+    const parts = cleaned.split("-").filter(Boolean);
     if (parts.length) {
       parts[0] = parts[0].toLowerCase();
       for (let i = 1; i < parts.length; i++) {
         if (parts[i].length === 2) parts[i] = parts[i].toUpperCase();
+        else if (parts[i].length === 4)
+          parts[i] = parts[i].charAt(0).toUpperCase() + parts[i].slice(1).toLowerCase();
       }
     }
     return parts.join("-");
   }
 
-  // remove parentheses and retry mapping
   const simplified = raw
     .toLowerCase()
     .replace(/\(.*?\)/g, "")
     .replace(/\s+/g, " ")
     .trim();
-  const bySimple = LANGUAGE_NAME_TO_TAG[simplified];
-  if (bySimple) return bySimple;
 
-  return "en";
+  return LANGUAGE_NAME_TO_TAG[simplified] || "en";
 }
 
 // ✅ Normalization (safe)
@@ -177,7 +180,7 @@ CountrySchema.pre("validate", function (next) {
     this.currencyDisplay = x ? x : null;
   }
 
-  // ✅ LANGUAGE FIX: force tags
+  // ✅ LANGUAGE FIX: force tags (Afrikaans -> af, Kiswahili -> sw, etc.)
   if (this.defaultLanguage) this.defaultLanguage = normalizeLangTag(this.defaultLanguage);
 
   if (Array.isArray(this.supportedLanguages)) {

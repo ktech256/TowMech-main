@@ -8,9 +8,7 @@ import { ALL_COUNTRIES } from "../constants/countries.js";
  * Helpers
  */
 function normCode(code) {
-  return String(code || "")
-    .trim()
-    .toUpperCase();
+  return String(code || "").trim().toUpperCase();
 }
 
 function pickString(v, fallback = null) {
@@ -52,11 +50,13 @@ function normLangTag(v) {
 
   if (looksLikeLangTag(raw)) {
     const cleaned = raw.replace(/_/g, "-").replace(/\s+/g, "");
-    const parts = cleaned.split("-");
+    const parts = cleaned.split("-").filter(Boolean);
     if (parts.length) {
       parts[0] = parts[0].toLowerCase();
       for (let i = 1; i < parts.length; i++) {
         if (parts[i].length === 2) parts[i] = parts[i].toUpperCase();
+        else if (parts[i].length === 4)
+          parts[i] = parts[i].charAt(0).toUpperCase() + parts[i].slice(1).toLowerCase();
       }
     }
     return parts.join("-");
@@ -84,19 +84,56 @@ function normLangList(list) {
   return out.length ? out : ["en"];
 }
 
+// ✅ Ensure the app always receives BOTH supportedLanguages + languages in a consistent way
+function normalizeCountryForApp(doc) {
+  if (!doc) return doc;
+  const obj = typeof doc.toObject === "function" ? doc.toObject() : { ...doc };
+
+  // Prefer supportedLanguages as canonical
+  const sl =
+    Array.isArray(obj.supportedLanguages) && obj.supportedLanguages.length
+      ? obj.supportedLanguages
+      : Array.isArray(obj.languages) && obj.languages.length
+        ? obj.languages
+        : ["en"];
+
+  const normalizedSupported = normLangList(sl) || ["en"];
+
+  obj.supportedLanguages = normalizedSupported;
+  obj.languages = normalizedSupported;
+
+  obj.defaultLanguage = normLangTag(obj.defaultLanguage || "en");
+
+  return obj;
+}
+
 /**
  * ✅ Public: list active public countries (for app Country picker)
  * GET /api/config/countries
+ *
+ * LANGUAGE FIX:
+ * - Some DBs previously used `languages`; new model uses `supportedLanguages`.
+ * - We always return both fields to the app (and normalized tags).
+ * - We DO NOT hard-require `isPublic:true` because older schemas/records may not have it.
  */
 export async function listPublicCountries(req, res) {
   try {
-    const countries = await Country.find({ isActive: true, isPublic: true })
+    // ✅ Keep public filtering flexible to avoid breaking old records:
+    // - Must be active
+    // - If isPublic exists, allow true; if missing, still allow (legacy docs)
+    const countries = await Country.find({
+      isActive: true,
+      $or: [{ isPublic: true }, { isPublic: { $exists: false } }],
+    })
       .sort({ name: 1 })
       .select(
-        "code name flagEmoji currencyCode currencySymbol timezone languages defaultLanguage phoneRules dialingCode isActive isPublic region"
+        // ✅ include both supportedLanguages + languages, and defaultLanguage
+        "code name flagEmoji currencyCode currencySymbol timezone supportedLanguages languages defaultLanguage phoneRules dialingCode isActive isPublic region"
       );
 
-    return res.status(200).json({ countries });
+    const normalized = (countries || []).map(normalizeCountryForApp);
+
+    return res.status(200).json({ countries: normalized });
   } catch (err) {
     return res.status(500).json({
       message: "Failed to fetch countries",
@@ -108,16 +145,21 @@ export async function listPublicCountries(req, res) {
 /**
  * ✅ Admin: list all countries (including inactive/private)
  * GET /api/admin/countries
+ *
+ * LANGUAGE FIX:
+ * - Always return normalized supportedLanguages + languages + defaultLanguage.
  */
 export async function listAllCountries(req, res) {
   try {
     const countries = await Country.find({})
       .sort({ name: 1 })
       .select(
-        "code name flagEmoji currencyCode currencySymbol timezone languages defaultLanguage phoneRules dialingCode isActive isPublic region tax createdAt updatedAt"
+        "code name flagEmoji currencyCode currencySymbol timezone supportedLanguages languages defaultLanguage phoneRules dialingCode isActive isPublic region tax createdAt updatedAt"
       );
 
-    return res.status(200).json({ countries });
+    const normalized = (countries || []).map(normalizeCountryForApp);
+
+    return res.status(200).json({ countries: normalized });
   } catch (err) {
     return res.status(500).json({
       message: "Failed to fetch countries",
@@ -131,6 +173,10 @@ export async function listAllCountries(req, res) {
  * POST /api/admin/countries/seed
  * - Will create missing countries
  * - Will NOT overwrite existing records unless fields are missing
+ *
+ * LANGUAGE FIX:
+ * - Writes supportedLanguages (and also writes languages for backward compatibility responses)
+ * - Normalizes to tags
  */
 export async function seedCountries(req, res) {
   try {
@@ -154,6 +200,15 @@ export async function seedCountries(req, res) {
         (c.phoneRules && (c.phoneRules.dialingCode || c.phoneRules.countryDialingCode)) ||
         null;
 
+      // ✅ normalize languages from constants
+      const seedLangsRaw =
+        (Array.isArray(c.supportedLanguages) && c.supportedLanguages.length && c.supportedLanguages) ||
+        (Array.isArray(c.languages) && c.languages.length && c.languages) ||
+        ["en"];
+      const seedLangs = normLangList(seedLangsRaw) || ["en"];
+
+      const seedDefaultLang = normLangTag(c.defaultLanguage || "en");
+
       if (!existing) {
         await Country.create({
           code,
@@ -162,8 +217,13 @@ export async function seedCountries(req, res) {
           currencyCode: c.currencyCode || "USD",
           currencySymbol: c.currencySymbol || null,
           timezone: c.timezone || "UTC",
-          languages: Array.isArray(c.languages) && c.languages.length ? c.languages : ["en"],
-          defaultLanguage: c.defaultLanguage || "en",
+
+          // ✅ canonical
+          supportedLanguages: seedLangs,
+          // ✅ keep legacy field for old clients if schema allows it (if not in schema, it will be ignored safely)
+          languages: seedLangs,
+          defaultLanguage: seedDefaultLang,
+
           region: c.region || "GLOBAL",
           phoneRules: c.phoneRules || {},
           dialingCode: seedDialingCode,
@@ -190,14 +250,26 @@ export async function seedCountries(req, res) {
         existing.timezone = c.timezone;
         dirty = true;
       }
-      if ((!existing.languages || existing.languages.length === 0) && Array.isArray(c.languages)) {
-        existing.languages = c.languages;
+
+      // ✅ LANGUAGE FIX: fill supportedLanguages if missing
+      if (
+        ((!existing.supportedLanguages || existing.supportedLanguages.length === 0) &&
+          Array.isArray(seedLangs) &&
+          seedLangs.length) ||
+        ((!existing.languages || existing.languages.length === 0) &&
+          Array.isArray(seedLangs) &&
+          seedLangs.length)
+      ) {
+        existing.supportedLanguages = seedLangs;
+        existing.languages = seedLangs;
         dirty = true;
       }
-      if (!existing.defaultLanguage && c.defaultLanguage) {
-        existing.defaultLanguage = c.defaultLanguage;
+
+      if (!existing.defaultLanguage && seedDefaultLang) {
+        existing.defaultLanguage = seedDefaultLang;
         dirty = true;
       }
+
       if (!existing.region && c.region) {
         existing.region = c.region;
         dirty = true;
@@ -210,10 +282,7 @@ export async function seedCountries(req, res) {
         existing.currencySymbol = c.currencySymbol;
         dirty = true;
       }
-      if (
-        (!existing.phoneRules || Object.keys(existing.phoneRules || {}).length === 0) &&
-        c.phoneRules
-      ) {
+      if ((!existing.phoneRules || Object.keys(existing.phoneRules || {}).length === 0) && c.phoneRules) {
         existing.phoneRules = c.phoneRules;
         dirty = true;
       }
@@ -247,6 +316,11 @@ export async function seedCountries(req, res) {
 /**
  * ✅ Admin: create/update a country
  * PUT /api/admin/countries/:code
+ *
+ * LANGUAGE FIX:
+ * - Accept either supportedLanguages or languages
+ * - Normalize to tags
+ * - Persist supportedLanguages (canonical) and also set languages for legacy responses
  */
 export async function upsertCountry(req, res) {
   try {
@@ -255,7 +329,6 @@ export async function upsertCountry(req, res) {
 
     const body = req.body || {};
 
-    // ✅ LANGUAGE FIX: accept either `supportedLanguages` or `languages`, normalize to tags
     const incomingLangs =
       Array.isArray(body.supportedLanguages) && body.supportedLanguages.length
         ? body.supportedLanguages
@@ -273,16 +346,15 @@ export async function upsertCountry(req, res) {
       currencySymbol: pickString(body.currencySymbol),
       timezone: pickString(body.timezone, "UTC"),
 
-      // Keep older field used by app responses
+      // ✅ canonical storage
+      supportedLanguages: normalizedLangs,
+      // ✅ legacy response field (if schema allows it)
       languages: normalizedLangs,
 
-      // Store defaultLanguage as tag even if sent as a name (Afrikaans -> af)
       defaultLanguage: normLangTag(pickString(body.defaultLanguage, "en")),
 
       region: pickString(body.region, "GLOBAL"),
       phoneRules: typeof body.phoneRules === "object" && body.phoneRules ? body.phoneRules : undefined,
-
-      // ✅ new (optional): dialingCode
       dialingCode: pickString(body.dialingCode),
 
       isActive: typeof body.isActive === "boolean" ? body.isActive : undefined,
@@ -290,7 +362,6 @@ export async function upsertCountry(req, res) {
       tax: typeof body.tax === "object" && body.tax ? body.tax : undefined,
     };
 
-    // remove undefined keys
     Object.keys(update).forEach((k) => update[k] === undefined && delete update[k]);
 
     const country = await Country.findOneAndUpdate(
@@ -299,7 +370,6 @@ export async function upsertCountry(req, res) {
       { new: true, upsert: true }
     );
 
-    // Ensure configs exist for this country (service/ui)
     await CountryServiceConfig.findOneAndUpdate(
       { countryCode: code },
       { $setOnInsert: { countryCode: code } },
@@ -312,7 +382,7 @@ export async function upsertCountry(req, res) {
       { upsert: true }
     );
 
-    return res.status(200).json({ message: "Country saved ✅", country });
+    return res.status(200).json({ message: "Country saved ✅", country: normalizeCountryForApp(country) });
   } catch (err) {
     return res.status(500).json({
       message: "Failed to save country",
@@ -343,7 +413,7 @@ export async function updateCountryStatus(req, res) {
     const country = await Country.findOneAndUpdate({ code }, { $set: update }, { new: true });
     if (!country) return res.status(404).json({ message: "Country not found" });
 
-    return res.status(200).json({ message: "Country status updated ✅", country });
+    return res.status(200).json({ message: "Country status updated ✅", country: normalizeCountryForApp(country) });
   } catch (err) {
     return res.status(500).json({
       message: "Failed to update country status",
@@ -370,7 +440,7 @@ export async function getCountryDetails(req, res) {
     if (!country) return res.status(404).json({ message: "Country not found" });
 
     return res.status(200).json({
-      country,
+      country: normalizeCountryForApp(country),
       serviceConfig: services || null,
       uiConfig: ui || null,
     });
