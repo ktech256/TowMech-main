@@ -32,13 +32,13 @@ function getUserFcmToken(user) {
 }
 
 /**
- * ✅ Must match Android NotificationChannels.PROVIDER_JOBS_CHANNEL_ID
- * Your Android is: provider_jobs_channel_v2
+ * ✅ MUST match Android NotificationChannels.PROVIDER_JOBS_CHANNEL_ID
+ * Your Android is: provider_jobs_channel_v3
  */
-const ANDROID_CHANNEL_ID = "provider_jobs_channel_v2";
+const ANDROID_CHANNEL_ID = "provider_jobs_channel_v3";
 
 /**
- * ✅ Send push notification to a single user (NOTIFICATION + DATA)
+ * ✅ Send push notification to a single user (DATA-ONLY for Banners)
  */
 export const sendPushToUser = async ({ userId, title, body, data = {} }) => {
   initFirebase();
@@ -50,6 +50,7 @@ export const sendPushToUser = async ({ userId, title, body, data = {} }) => {
   if (!token) return null;
 
   // ✅ Supports sending mechanicCategoryNeeded, customerProblemDescription, etc.
+  // We include title and body here because we are removing the notification block.
   const safeData = normalizeFcmData({
     ...data,
     title,
@@ -59,18 +60,17 @@ export const sendPushToUser = async ({ userId, title, body, data = {} }) => {
   const message = {
     token,
 
-    notification: {
-      title: String(title || ""),
-      body: String(body || ""),
-    },
-
+    /* 
+     * ❌ REMOVED the 'notification' block.
+     * By only sending 'data', we force the Android system to trigger 
+     * onMessageReceived in the background, allowing the app to launch the Banner.
+     */
+    
     data: safeData,
 
     android: {
-      priority: "high",
-      notification: {
-        channelId: ANDROID_CHANNEL_ID,
-      },
+      priority: "high", // ✅ Mandatory for heads-up behavior
+      ttl: 3600 * 1000, // 1 hour
     },
   };
 
@@ -78,7 +78,7 @@ export const sendPushToUser = async ({ userId, title, body, data = {} }) => {
 };
 
 /**
- * ✅ Send push to multiple users (NOTIFICATION + DATA)
+ * ✅ Send push to multiple users (DATA-ONLY for Banners)
  */
 export const sendPushToManyUsers = async ({ userIds, title, body, data = {} }) => {
   initFirebase();
@@ -100,18 +100,15 @@ export const sendPushToManyUsers = async ({ userIds, title, body, data = {} }) =
   const message = {
     tokens,
 
-    notification: {
-      title: String(title || ""),
-      body: String(body || ""),
-    },
+    /* 
+     * ❌ REMOVED the 'notification' block.
+     * This ensures the app process is woken up to handle the banner logic.
+     */
 
     data: safeData,
 
     android: {
       priority: "high",
-      notification: {
-        channelId: ANDROID_CHANNEL_ID,
-      },
     },
   };
 
