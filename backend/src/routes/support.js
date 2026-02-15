@@ -1,7 +1,10 @@
 // backend/src/routes/support.js
 import express from "express";
 import auth from "../middleware/auth.js";
-import SupportTicket, { TICKET_TYPES, TICKET_STATUSES } from "../models/SupportTicket.js";
+import SupportTicket, {
+  TICKET_TYPES,
+  TICKET_STATUSES,
+} from "../models/SupportTicket.js";
 import { USER_ROLES } from "../models/User.js";
 import CountryServiceConfig from "../models/CountryServiceConfig.js";
 
@@ -44,9 +47,14 @@ async function supportEnabledOr403(req, res, next) {
       });
     }
 
+    // ✅ Make it available downstream consistently
+    req.countryCode = cc;
+
     return next();
   } catch (err) {
-    return res.status(500).json({ message: "Service check failed", error: err.message });
+    return res
+      .status(500)
+      .json({ message: "Service check failed", error: err.message });
   }
 }
 
@@ -70,7 +78,12 @@ router.post("/tickets", auth, supportEnabledOr403, async (req, res) => {
       });
     }
 
+    const cc = resolveReqCountryCode(req);
+
     const ticket = await SupportTicket.create({
+      // ✅ KEY FIX: store country workspace
+      countryCode: cc,
+
       createdBy: req.user._id,
       job: jobId || null,
       provider: providerId || null,
@@ -83,7 +96,7 @@ router.post("/tickets", auth, supportEnabledOr403, async (req, res) => {
         {
           action: "TICKET_CREATED",
           by: req.user._id,
-          meta: { subject, type },
+          meta: { subject, type, countryCode: cc },
         },
       ],
     });
@@ -101,12 +114,17 @@ router.post("/tickets", auth, supportEnabledOr403, async (req, res) => {
 });
 
 /**
- * ✅ Customer fetches own tickets
+ * ✅ Customer fetches own tickets (scoped per country)
  * GET /api/support/tickets
  */
 router.get("/tickets", auth, supportEnabledOr403, async (req, res) => {
   try {
-    const tickets = await SupportTicket.find({ createdBy: req.user._id })
+    const cc = resolveReqCountryCode(req);
+
+    const tickets = await SupportTicket.find({
+      createdBy: req.user._id,
+      countryCode: cc, // ✅ KEY FIX: prevent mixed tickets across workspaces
+    })
       .sort({ createdAt: -1 })
       .populate("job")
       .populate("provider", "name email role");
@@ -121,11 +139,13 @@ router.get("/tickets", auth, supportEnabledOr403, async (req, res) => {
 });
 
 /**
- * ✅ Customer fetches single ticket (includes thread)
+ * ✅ Customer fetches single ticket (includes thread) scoped per country
  * GET /api/support/tickets/:id
  */
 router.get("/tickets/:id", auth, supportEnabledOr403, async (req, res) => {
   try {
+    const cc = resolveReqCountryCode(req);
+
     const ticket = await SupportTicket.findById(req.params.id)
       .populate("job")
       .populate("provider", "name email role")
@@ -133,6 +153,11 @@ router.get("/tickets/:id", auth, supportEnabledOr403, async (req, res) => {
       .populate("messages.senderId", "name email role");
 
     if (!ticket) return res.status(404).json({ message: "Ticket not found ❌" });
+
+    // ✅ KEY FIX: ensure workspace matches
+    if ((ticket.countryCode || "").toString().toUpperCase() !== cc) {
+      return res.status(404).json({ message: "Ticket not found ❌" });
+    }
 
     if (ticket.createdBy.toString() !== req.user._id.toString()) {
       return res.status(403).json({ message: "Not authorized ❌" });
@@ -148,7 +173,7 @@ router.get("/tickets/:id", auth, supportEnabledOr403, async (req, res) => {
 });
 
 /**
- * ✅ Customer replies to ticket (THREAD)
+ * ✅ Customer replies to ticket (THREAD) scoped per country
  * POST /api/support/tickets/:id/reply
  */
 router.post("/tickets/:id/reply", auth, supportEnabledOr403, async (req, res) => {
@@ -165,8 +190,15 @@ router.post("/tickets/:id/reply", auth, supportEnabledOr403, async (req, res) =>
       return res.status(400).json({ message: "message is required ❌" });
     }
 
+    const cc = resolveReqCountryCode(req);
+
     const ticket = await SupportTicket.findById(req.params.id);
     if (!ticket) return res.status(404).json({ message: "Ticket not found ❌" });
+
+    // ✅ KEY FIX: ensure workspace matches
+    if ((ticket.countryCode || "").toString().toUpperCase() !== cc) {
+      return res.status(404).json({ message: "Ticket not found ❌" });
+    }
 
     if (ticket.createdBy.toString() !== req.user._id.toString()) {
       return res.status(403).json({ message: "Not authorized ❌" });
@@ -194,7 +226,7 @@ router.post("/tickets/:id/reply", auth, supportEnabledOr403, async (req, res) =>
     ticket.auditLogs.push({
       action: "CUSTOMER_REPLIED",
       by: req.user._id,
-      meta: { length: message.trim().length },
+      meta: { length: message.trim().length, countryCode: cc },
     });
 
     await ticket.save();

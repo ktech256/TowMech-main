@@ -1,3 +1,4 @@
+// backend/src/models/SupportTicket.js
 import mongoose from "mongoose";
 
 export const TICKET_STATUSES = {
@@ -17,7 +18,7 @@ export const TICKET_TYPES = {
   OTHER: "OTHER",
 };
 
-// ✅ NEW: message thread schema
+// ✅ message thread schema
 const supportMessageSchema = new mongoose.Schema(
   {
     senderId: {
@@ -42,6 +43,18 @@ const supportMessageSchema = new mongoose.Schema(
 
 const supportTicketSchema = new mongoose.Schema(
   {
+    /**
+     * ✅ NEW: country workspace scope
+     * This is the key fix so admin inbox filters (countryCode) can find tickets.
+     */
+    countryCode: {
+      type: String,
+      required: true,
+      trim: true,
+      uppercase: true,
+      index: true,
+    },
+
     // ✅ Who created ticket
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,
@@ -98,7 +111,7 @@ const supportTicketSchema = new mongoose.Schema(
       trim: true,
     },
 
-    // ✅ NEW: conversation replies
+    // ✅ conversation replies
     // - Safe for old tickets (default empty array)
     messages: {
       type: [supportMessageSchema],
