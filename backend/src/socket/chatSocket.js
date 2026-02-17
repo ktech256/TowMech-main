@@ -1,4 +1,3 @@
-// /backend/src/socket/chatSocket.js
 import jwt from "jsonwebtoken";
 import mongoose from "mongoose";
 
@@ -9,9 +8,7 @@ import ChatMessage from "../models/ChatMessage.js";
 import { maskDigits } from "../utils/maskDigits.js";
 
 /**
- * ✅ Socket auth:
- * client connects with:
- *  - auth: { token: "Bearer xxx" } OR { token: "xxx" }
+ * ✅ Socket auth middleware
  */
 async function socketAuthMiddleware(socket, next) {
   try {
@@ -54,15 +51,18 @@ function normalizeStatus(raw) {
     .replace("-", "_");
 }
 
+/**
+ * ✅ Check if chat should be open based on job status
+ */
 function isChatActive(st) {
-  return st === JOB_STATUSES.ASSIGNED || st === JOB_STATUSES.IN_PROGRESS;
-}
-
-function minutesSince(date) {
-  if (!date) return null;
-  const ms = Date.now() - new Date(date).getTime();
-  if (!Number.isFinite(ms)) return null;
-  return ms / 60000;
+  const activeStatuses = [
+    JOB_STATUSES.ASSIGNED, 
+    JOB_STATUSES.IN_PROGRESS, 
+    "ACCEPTED", 
+    "ARRIVED", 
+    "ON_THE_WAY"
+  ];
+  return activeStatuses.includes(st);
 }
 
 async function ensureThread(job) {
@@ -99,39 +99,32 @@ async function validateChatAccess({ user, jobId }) {
 
   const st = normalizeStatus(job.status);
 
-  // ✅ block completed/cancelled/created/broadcasted
+  // ✅ Check if status allows chat
   if (!isChatActive(st)) {
-    return { ok: false, status: 403, message: "Chat not available for this job status" };
+    return { ok: false, status: 403, message: `Chat unavailable for status: ${st}` };
   }
 
-  // ✅ must be unlocked after 3 minutes from lockedAt
-  const mins = minutesSince(job.lockedAt);
-  if (mins == null || mins < 3) {
-    return { ok: false, status: 403, message: "Chat unlocks 3 minutes after assignment" };
-  }
+  // ✅ REMOVED: The 3-minute lockout (Chat now works immediately upon assignment)
 
   const isAdmin = [USER_ROLES.ADMIN, USER_ROLES.SUPER_ADMIN].includes(user.role);
   const isCustomer = job.customer?.toString() === user._id.toString();
   const isProvider = job.assignedTo?.toString() === user._id.toString();
 
   if (!isAdmin && !isCustomer && !isProvider) {
-    return { ok: false, status: 403, message: "Not allowed" };
+    return { ok: false, status: 403, message: "You are not a participant in this job" };
   }
 
   return { ok: true, job, isAdmin, isCustomer, isProvider };
 }
 
 export function registerChatSocket(io) {
-  // ✅ auth middleware
   io.use(socketAuthMiddleware);
 
   io.on("connection", (socket) => {
-    // eslint-disable-next-line no-console
-    console.log("✅ chat socket connected:", socket.user?._id);
+    console.log("✅ Chat socket connected:", socket.user?._id);
 
     /**
-     * Join a job chat room (job:<jobId>)
-     * client emits: chat:join { jobId }
+     * Join a job chat room
      */
     socket.on("chat:join", async (payload, cb) => {
       try {
@@ -139,6 +132,7 @@ export function registerChatSocket(io) {
         const access = await validateChatAccess({ user: socket.user, jobId });
 
         if (!access.ok) {
+          console.warn("❌ Join denied:", access.message);
           if (typeof cb === "function") cb({ ok: false, message: access.message });
           return;
         }
@@ -148,29 +142,26 @@ export function registerChatSocket(io) {
 
         const thread = await ensureThread(access.job);
 
+        console.log(`👤 User ${socket.user._id} joined room: ${room}`);
         if (typeof cb === "function") {
           cb({ ok: true, room, threadId: thread._id.toString() });
         }
       } catch (err) {
+        console.error("Join error:", err);
         if (typeof cb === "function") cb({ ok: false, message: "Join failed" });
       }
     });
 
     /**
-     * Send message
-     * client emits: chat:send { jobId, text }
+     * Send message and broadcast to room
      */
     socket.on("chat:send", async (payload, cb) => {
       try {
         const jobId = payload?.jobId;
-        const rawText = String(payload?.text || "").trim();
+        const rawText = String(payload?.text || payload?.message || "").trim();
 
         if (!rawText) {
           if (typeof cb === "function") cb({ ok: false, message: "Text is required" });
-          return;
-        }
-        if (rawText.length > 600) {
-          if (typeof cb === "function") cb({ ok: false, message: "Message too long" });
           return;
         }
 
@@ -196,28 +187,36 @@ export function registerChatSocket(io) {
           $inc: { messageCount: 1 },
         });
 
+        // ✅ Format object to match Android's ChatMessageDto & FlexibleUser models
         const out = {
           _id: msg._id.toString(),
-          thread: msg.thread.toString(),
-          job: msg.job.toString(),
-          sender: msg.sender.toString(),
-          senderRole: msg.senderRole,
+          threadId: msg.thread.toString(),
+          jobId: msg.job.toString(),
+          senderId: { 
+            _id: socket.user._id,
+            name: socket.user.name,
+            role: socket.user.role
+          },
+          senderRole: socket.user.role,
           text: msg.text,
+          message: msg.text, // Redundant field for compatibility
           createdAt: msg.createdAt,
         };
 
         const room = `job:${access.job._id.toString()}`;
         io.to(room).emit("chat:new_message", out);
+        
+        console.log(`✉️ Message from ${socket.user._id} broadcast to ${room}`);
 
         if (typeof cb === "function") cb({ ok: true, message: out });
       } catch (err) {
+        console.error("Send error:", err);
         if (typeof cb === "function") cb({ ok: false, message: "Send failed" });
       }
     });
 
     socket.on("disconnect", () => {
-      // eslint-disable-next-line no-console
-      console.log("🔌 chat socket disconnected:", socket.user?._id);
+      console.log("🔌 Chat socket disconnected:", socket.user?._id);
     });
   });
 }
