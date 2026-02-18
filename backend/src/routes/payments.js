@@ -153,13 +153,13 @@ router.post(
 
         const expectedMerchantId = (process.env.PAYFAST_MERCHANT_ID || "").trim();
         const merchantOk =
-          !expectedMerchantId || String(data.merchant_id || "").trim() === expectedMerchantId;
+          !expectedMerchantId ||
+          String(data.merchant_id || "").trim() === expectedMerchantId;
 
         const gross = Number(data.amount_gross || 0);
         const expectedAmount = Number(payment.amount || 0);
 
-        const amountOk =
-          Math.abs(gross - expectedAmount) < 0.01; // cents-safe
+        const amountOk = Math.abs(gross - expectedAmount) < 0.01; // cents-safe
 
         console.log("⚠️ FALLBACK CHECK merchantOk:", merchantOk);
         console.log("⚠️ FALLBACK CHECK amountOk  :", amountOk, {
@@ -237,11 +237,15 @@ router.post(
       if (!job) return res.status(404).json({ message: "Job not found" });
 
       if (job.customer.toString() !== req.user._id.toString()) {
-        return res.status(403).json({ message: "Not authorized to pay for this job" });
+        return res
+          .status(403)
+          .json({ message: "Not authorized to pay for this job" });
       }
 
       if ([JOB_STATUSES.CANCELLED, JOB_STATUSES.COMPLETED].includes(job.status)) {
-        return res.status(400).json({ message: `Cannot pay for job in status ${job.status}` });
+        return res
+          .status(400)
+          .json({ message: `Cannot pay for job in status ${job.status}` });
       }
 
       const bookingFee = job.pricing?.bookingFee || 0;
@@ -279,8 +283,16 @@ router.post(
 
       const reference = `TM-${payment._id}`;
 
-      const successUrl = `${process.env.FRONTEND_URL || "https://towmech.com"}/payment-success`;
-      const cancelUrl = `${process.env.FRONTEND_URL || "https://towmech.com"}/payment-cancel`;
+      const frontendBase = (process.env.FRONTEND_URL || "https://towmech.com").replace(
+        /\/+$/,
+        ""
+      );
+      const backendBase = (
+        process.env.BACKEND_URL || "https://towmech-main.onrender.com"
+      ).replace(/\/+$/, "");
+
+      const successUrl = `${frontendBase}/payment-success`;
+      const cancelUrl = `${frontendBase}/payment-cancel`;
 
       const initResponse = await gatewayAdapter.createPayment({
         amount: bookingFee,
@@ -288,7 +300,7 @@ router.post(
         reference,
         successUrl,
         cancelUrl,
-        notifyUrl: `${process.env.BACKEND_URL || "https://towmech-main.onrender.com"}/api/payments/notify/payfast`,
+        notifyUrl: `${backendBase}/api/payments/notify/payfast`,
         customerEmail: req.user.email,
       });
 
@@ -296,8 +308,17 @@ router.post(
       payment.providerPayload = initResponse;
       await payment.save();
 
+      // ✅ FIX: support iKhokha response { paylinkUrl }, PayFast { paymentUrl/url }, and wrapped responses
       const paymentUrl =
-        initResponse.paymentUrl || initResponse.url || initResponse.payment_url || null;
+        initResponse?.paylinkUrl ||
+        initResponse?.paylinkURL ||
+        initResponse?.paymentUrl ||
+        initResponse?.url ||
+        initResponse?.payment_url ||
+        initResponse?.data?.paylinkUrl ||
+        initResponse?.data?.paymentUrl ||
+        initResponse?.data?.url ||
+        null;
 
       console.log("✅ PAYMENT URL GENERATED:", paymentUrl);
 
@@ -306,7 +327,7 @@ router.post(
         gateway: activeGateway,
         payment,
         paymentUrl,
-        url: paymentUrl,
+        url: paymentUrl, // keep backward compatibility for your app
         initResponse,
       });
     } catch (err) {
@@ -331,7 +352,13 @@ router.patch("/job/:jobId/mark-paid", auth, async (req, res) => {
       return res.status(404).json({ message: "Payment not found for job" });
     }
 
-    if (![USER_ROLES.ADMIN, USER_ROLES.SUPER_ADMIN, USER_ROLES.CUSTOMER].includes(req.user.role)) {
+    if (
+      ![
+        USER_ROLES.ADMIN,
+        USER_ROLES.SUPER_ADMIN,
+        USER_ROLES.CUSTOMER,
+      ].includes(req.user.role)
+    ) {
       return res.status(403).json({
         message: "Only Admin, SuperAdmin or Customer can mark payment as paid",
       });
