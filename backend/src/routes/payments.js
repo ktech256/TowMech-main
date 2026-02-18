@@ -322,12 +322,19 @@ router.post(
 
       console.log("✅ PAYMENT URL GENERATED:", paymentUrl);
 
+      // ✅ COMPATIBILITY: return multiple common keys so mobile cannot miss it
       return res.status(201).json({
+        success: true,
         message: `${activeGateway} payment initialized ✅`,
         gateway: activeGateway,
-        payment,
+
         paymentUrl,
-        url: paymentUrl, // keep backward compatibility for your app
+        url: paymentUrl,
+        paylinkUrl: paymentUrl,
+        link: paymentUrl,
+        redirectUrl: paymentUrl,
+
+        payment,
         initResponse,
       });
     } catch (err) {
