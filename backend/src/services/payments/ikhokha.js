@@ -1,30 +1,17 @@
-// src/backend/src/services/payments/ikhokha.js
 import axios from "axios";
 import crypto from "crypto";
 import SystemSettings from "../../models/SystemSettings.js";
-
-/**
- * iKhokha (Public API) Paylink / Payment create helper
- *
- * Key fixes vs your current version:
- * - ENTITY_ID is OPTIONAL (iKhokha support says they don't have "entity id")
- * - If ENTITY_ID exists in your DB/env, we still include it (backward compatible)
- * - Signature is computed as HMAC-SHA256 over the EXACT JSON string we send (hex digest)
- * - Better logging for debugging without leaking secrets
- * - More robust validation + URL defaults
- */
 
 // ✅ Base URL (no trailing slash)
 const IKHOKHA_BASE_URL = (
   process.env.IKHOKHA_BASE_URL || "https://api.ikhokha.com/public-api/v1"
 ).replace(/\/+$/, "");
 
-// ✅ Endpoint (paylink create)
+// ✅ Endpoint
 const CREATE_PAYLINK_ENDPOINT = `${IKHOKHA_BASE_URL}/api/payment`;
 
 /**
- * ✅ Generate signature (HEX)
- * HMAC-SHA256(payloadString, secret) -> hex (64 chars)
+ * ✅ HMAC-SHA256(payloadString, secret) -> HEX
  */
 function generateSignatureFromString(payloadString, secret) {
   return crypto
@@ -34,8 +21,7 @@ function generateSignatureFromString(payloadString, secret) {
 }
 
 /**
- * ✅ Load iKhokha keys from DB first, fallback to ENV
- * NOTE: ENTITY_ID is optional; we keep it only for backward compatibility.
+ * ✅ Load iKhokha keys from DB first, fallback ENV
  */
 async function loadIKhokhaKeys() {
   const settings = await SystemSettings.findOne();
@@ -50,9 +36,7 @@ async function loadIKhokhaKeys() {
 
   const APP_KEY = dbKey || envKey;
   const APP_SECRET = dbSecret || envSecret;
-
-  // Optional
-  const ENTITY_ID = dbEntityId || envEntityId || "";
+  const ENTITY_ID = dbEntityId || envEntityId;
 
   return { APP_KEY, APP_SECRET, ENTITY_ID };
 }
@@ -63,16 +47,16 @@ async function loadIKhokhaKeys() {
 async function createPayment({ amount, currency, reference }) {
   const { APP_KEY, APP_SECRET, ENTITY_ID } = await loadIKhokhaKeys();
 
-  // ✅ Only require key + secret
-  if (!APP_KEY || !APP_SECRET) {
+  // ✅ Ensure all exist (entityID is REQUIRED by the API per Render logs)
+  if (!APP_KEY || !APP_SECRET || !ENTITY_ID) {
     console.log("❌ iKhokha Missing:", {
       IKHOKHA_APP_KEY: APP_KEY ? "✅ present" : "❌ missing",
       IKHOKHA_APP_SECRET: APP_SECRET ? "✅ present" : "❌ missing",
-      IKHOKHA_ENTITY_ID: ENTITY_ID ? "✅ present (optional)" : "⚪ not set (optional)",
+      IKHOKHA_ENTITY_ID: ENTITY_ID ? "✅ present" : "❌ missing (REQUIRED by /api/payment)",
     });
 
     throw new Error(
-      "iKhokha API keys missing ❌ Please update dashboard integrations"
+      "iKhokha config missing ❌ Please update dashboard integrations (APP_KEY, APP_SECRET, ENTITY_ID)"
     );
   }
 
@@ -84,15 +68,12 @@ async function createPayment({ amount, currency, reference }) {
   const amountInCents = Math.round(numericAmount * 100);
 
   const BACKEND_URL =
-    (process.env.BACKEND_URL || "https://towmech-main.onrender.com").replace(
-      /\/+$/,
-      ""
-    );
+    (process.env.BACKEND_URL || "https://towmech-main.onrender.com").replace(/\/+$/, "");
   const FRONTEND_URL =
     (process.env.FRONTEND_URL || "https://towmech.com").replace(/\/+$/, "");
 
-  // Build payload
   const payload = {
+    entityID: ENTITY_ID, // ✅ REQUIRED by API
     amount: amountInCents,
     currency: currency || "ZAR",
     requesterUrl: BACKEND_URL,
@@ -107,12 +88,7 @@ async function createPayment({ amount, currency, reference }) {
     },
   };
 
-  // Backward compatible: only include entityID if you set it in DB/ENV
-  if (ENTITY_ID) {
-    payload.entityID = ENTITY_ID;
-  }
-
-  // IMPORTANT: sign EXACT string we send
+  // Sign EXACT string we send
   const payloadString = JSON.stringify(payload);
   const signature = generateSignatureFromString(payloadString, APP_SECRET);
 
@@ -120,7 +96,7 @@ async function createPayment({ amount, currency, reference }) {
   console.log("✅ iKhokha SIGNATURE (hex length):", signature.length);
 
   try {
-    // Send the exact JSON string to avoid any serialization differences
+    // Send exact string to avoid serialization differences
     const response = await axios.post(CREATE_PAYLINK_ENDPOINT, payloadString, {
       headers: {
         Accept: "application/json",
@@ -143,7 +119,6 @@ async function createPayment({ amount, currency, reference }) {
       endpoint: CREATE_PAYLINK_ENDPOINT,
     });
 
-    // Re-throw a cleaner error while preserving original
     const message =
       (data && (data.message || data.error || JSON.stringify(data))) ||
       err.message ||
