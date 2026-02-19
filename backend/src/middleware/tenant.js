@@ -7,7 +7,7 @@
  *
  * Priority:
  * 1) Header: X-COUNTRY-CODE
- * 2) Query: ?country=ZA
+ * 2) Query: ?country=ZA or ?countryCode=ZA
  * 3) Body: { countryCode: "ZA" }
  * 4) Default: DEFAULT_COUNTRY (env) or "ZA"
  */
@@ -22,7 +22,7 @@ const normalizeCountryCode = (value) => {
 
   const code = String(value).trim().toUpperCase();
 
-  // ISO 3166-1 alpha-2 (ZA, KE, UG, US, GB, etc)
+  // ISO 3166-1 alpha-2
   if (!/^[A-Z]{2}$/.test(code)) return null;
 
   return code;
@@ -31,7 +31,7 @@ const normalizeCountryCode = (value) => {
 export const tenantMiddleware = (req, res, next) => {
   try {
     const headerCountry = req.headers["x-country-code"];
-    const queryCountry = req.query?.country;
+    const queryCountry = req.query?.country || req.query?.countryCode;
     const bodyCountry = req.body?.countryCode;
 
     const countryCode =

@@ -1,3 +1,4 @@
+// backend/src/routes/payments.js
 import express from "express";
 import crypto from "crypto";
 
@@ -12,30 +13,28 @@ import { broadcastJobToProviders } from "../utils/broadcastJob.js";
 import {
   getGatewayAdapter,
   getActivePaymentGateway,
+  normalizeGatewayKeyToEnum,
+  resolvePaymentRoutingForCountry,
 } from "../services/payments/index.js";
 
 const router = express.Router();
 
 console.log("✅ payments.js loaded ✅");
 
-/**
- * PayFast encoding: urlencode + spaces as "+"
- */
+/* ============================================================
+   HELPERS
+============================================================ */
+
 function encodePayfast(value) {
   return encodeURIComponent(String(value)).replace(/%20/g, "+");
 }
 
-/**
- * Strategy A: Use RAW body string (best when PayFast order matters)
- */
 function md5(str) {
   return crypto.createHash("md5").update(str).digest("hex");
 }
 
 function buildSignatureFromRaw(rawBody, passphrase) {
-  // rawBody is like: a=1&b=2&signature=xxxx
   const pairs = (rawBody || "").split("&").filter(Boolean);
-
   const withoutSig = pairs.filter((p) => !p.startsWith("signature=")).join("&");
 
   const finalString =
@@ -46,10 +45,6 @@ function buildSignatureFromRaw(rawBody, passphrase) {
   return md5(finalString).toLowerCase();
 }
 
-/**
- * Strategy B: Build from req.body sorted keys (some libs do this)
- * NOTE: includes empty strings (important for PayFast ITN)
- */
 function buildSignatureSorted(body, passphrase) {
   const data = { ...(body || {}) };
   delete data.signature;
@@ -71,10 +66,84 @@ function buildSignatureSorted(body, passphrase) {
   return md5(finalString).toLowerCase();
 }
 
+function normalizeFlowType(v) {
+  const t = String(v || "REDIRECT").trim().toUpperCase();
+  return t === "SDK" ? "SDK" : "REDIRECT";
+}
+
 /**
- * ✅ PayFast ITN Webhook
- * POST /api/payments/notify/payfast
+ * ✅ Strict unified PaymentInstruction builder (ALWAYS returned)
  */
+function buildPaymentInstruction({
+  flowType,
+  gateway,
+  countryCode,
+  currency,
+  amount,
+  reference,
+  redirectUrl = null,
+  sdkParams = null,
+}) {
+  return {
+    paymentFlowType: flowType, // "REDIRECT" | "SDK"
+    gateway,
+    countryCode,
+    currency,
+    amount,
+    reference,
+    redirectUrl,
+    sdkParams,
+    successSignal: "PAYMENT_SUCCESS",
+    cancelSignal: "PAYMENT_CANCELLED",
+    verifyAction: {
+      type: "POLL",
+      endpoint: `/api/payments/reference/${reference}/status`,
+      method: "GET",
+    },
+  };
+}
+
+/* ============================================================
+   STATUS ENDPOINT (verifyAction target)
+============================================================ */
+
+router.get("/reference/:reference/status", auth, async (req, res) => {
+  try {
+    const reference = String(req.params.reference || "").trim();
+    if (!reference) return res.status(400).json({ message: "reference is required" });
+
+    const payment = await Payment.findOne({ providerReference: reference });
+    if (!payment) return res.status(404).json({ message: "Payment not found" });
+
+    // optional tenant/country guard
+    const reqCountry = String(req.countryCode || "").trim().toUpperCase();
+    if (
+      reqCountry &&
+      payment.countryCode &&
+      reqCountry !== String(payment.countryCode).trim().toUpperCase()
+    ) {
+      return res.status(403).json({ message: "Country mismatch" });
+    }
+
+    return res.status(200).json({
+      success: true,
+      reference,
+      status: payment.status,
+      paid: payment.status === PAYMENT_STATUSES.PAID,
+      amount: payment.amount,
+      currency: payment.currency,
+      gateway: payment.provider,
+      paidAt: payment.paidAt || null,
+    });
+  } catch (err) {
+    return res.status(500).json({ message: "Failed to load status", error: err.message });
+  }
+});
+
+/* ============================================================
+   PAYFAST ITN
+============================================================ */
+
 router.post(
   "/notify/payfast",
   express.urlencoded({
@@ -89,36 +158,22 @@ router.post(
       const raw = req.rawBody || "";
 
       console.log("✅ PAYFAST ITN RECEIVED ✅", data);
-      console.log("✅ ITN RAW BODY:", raw);
 
-      const reference = data.m_payment_id; // TM-<paymentId>
+      const reference = data.m_payment_id;
       const paymentStatus = (data.payment_status || "").toUpperCase();
       const receivedSignature = (data.signature || "").toLowerCase();
 
-      if (!reference) {
-        console.log("❌ ITN missing m_payment_id");
-        return res.status(200).send("Missing reference");
-      }
-
-      if (!receivedSignature) {
-        console.log("❌ ITN missing signature");
-        return res.status(200).send("Missing signature");
+      if (!reference || !receivedSignature) {
+        return res.status(200).send("Missing reference or signature");
       }
 
       const passphrase = (process.env.PAYFAST_PASSPHRASE || "").trim();
 
-      // ✅ Generate multiple possible signatures
+      // verify signature multiple ways (raw vs sorted, with pass vs no pass)
       const sigRawWithPass = buildSignatureFromRaw(raw, passphrase);
       const sigRawNoPass = buildSignatureFromRaw(raw, "");
-
       const sigSortedWithPass = buildSignatureSorted(data, passphrase);
       const sigSortedNoPass = buildSignatureSorted(data, "");
-
-      console.log("✅ ITN receivedSignature :", receivedSignature);
-      console.log("✅ ITN sigRawWithPass   :", sigRawWithPass);
-      console.log("✅ ITN sigRawNoPass     :", sigRawNoPass);
-      console.log("✅ ITN sigSortedWithPass:", sigSortedWithPass);
-      console.log("✅ ITN sigSortedNoPass  :", sigSortedNoPass);
 
       const signatureMatches =
         receivedSignature === sigRawWithPass ||
@@ -126,89 +181,37 @@ router.post(
         receivedSignature === sigSortedWithPass ||
         receivedSignature === sigSortedNoPass;
 
-      // ✅ Only mark PAID if COMPLETE
       if (paymentStatus !== "COMPLETE") {
         console.log("⚠️ PayFast payment not COMPLETE:", paymentStatus);
         return res.status(200).send("Payment not complete");
       }
 
-      // ✅ Find payment by providerReference (TM-<paymentId>)
       const payment = await Payment.findOne({ providerReference: reference });
+      if (!payment) return res.status(200).send("Payment not found");
 
-      if (!payment) {
-        console.log("❌ Payment not found for providerReference:", reference);
-        return res.status(200).send("Payment not found");
-      }
-
-      // ✅ If already paid
       if (payment.status === PAYMENT_STATUSES.PAID) {
-        console.log("✅ Payment already marked PAID ✅", payment._id.toString());
         return res.status(200).send("Already paid");
       }
 
-      // ✅ If signature mismatch, do SAFE fallback checks to unblock you
-      // (This prevents “successful payment but stuck pending”)
       if (!signatureMatches) {
         console.log("❌ PAYFAST ITN SIGNATURE MISMATCH ❌");
-
-        const expectedMerchantId = (process.env.PAYFAST_MERCHANT_ID || "").trim();
-        const merchantOk =
-          !expectedMerchantId ||
-          String(data.merchant_id || "").trim() === expectedMerchantId;
-
-        const gross = Number(data.amount_gross || 0);
-        const expectedAmount = Number(payment.amount || 0);
-
-        const amountOk = Math.abs(gross - expectedAmount) < 0.01; // cents-safe
-
-        console.log("⚠️ FALLBACK CHECK merchantOk:", merchantOk);
-        console.log("⚠️ FALLBACK CHECK amountOk  :", amountOk, {
-          gross,
-          expectedAmount,
-        });
-
-        if (!merchantOk || !amountOk) {
-          console.log("❌ Fallback checks failed → NOT marking paid");
-          return res.status(200).send("Signature mismatch + fallback failed");
-        }
-
-        console.log(
-          "✅ Fallback passed (merchant + amount ok) → proceeding to mark paid (temporary safety net)"
-        );
-      } else {
-        console.log("✅ PAYFAST ITN SIGNATURE VERIFIED ✅");
+        return res.status(200).send("Signature mismatch");
       }
 
-      // ✅ Mark Payment as PAID
       payment.status = PAYMENT_STATUSES.PAID;
       payment.paidAt = new Date();
       payment.providerPayload = data;
       await payment.save();
 
-      console.log("✅ Payment marked PAID ✅", payment._id.toString());
-
-      // ✅ Update Job booking fee status
       const job = await Job.findById(payment.job);
-
-      if (!job) {
-        console.log("⚠️ Job not found for payment.job:", payment.job?.toString());
-        return res.status(200).send("Job not found");
-      }
+      if (!job) return res.status(200).send("Job not found");
 
       if (!job.pricing) job.pricing = {};
       job.pricing.bookingFeeStatus = "PAID";
       job.pricing.bookingFeePaidAt = new Date();
       await job.save();
 
-      console.log("✅ Job bookingFee marked PAID ✅", job._id.toString());
-
-      // ✅ Broadcast job now that booking fee is PAID
-      const broadcastResult = await broadcastJobToProviders(job._id);
-
-      console.log("✅ Job broadcast result ✅", {
-        message: broadcastResult?.message,
-        providers: broadcastResult?.providers?.length || 0,
-      });
+      await broadcastJobToProviders(job._id);
 
       return res.status(200).send("ITN Processed ✅");
     } catch (err) {
@@ -218,10 +221,12 @@ router.post(
   }
 );
 
-/**
- * ✅ Customer creates booking fee payment for a Job
- * POST /api/payments/create
- */
+/* ============================================================
+   CREATE PAYMENT
+   - CountryServiceConfig routing decides gateway + flowType
+   - ALWAYS returns: { instruction: PaymentInstruction }
+============================================================ */
+
 router.post(
   "/create",
   auth,
@@ -230,44 +235,76 @@ router.post(
     console.log("✅ /api/payments/create HIT ✅", req.body);
 
     try {
-      const { jobId } = req.body;
+      const { jobId } = req.body || {};
       if (!jobId) return res.status(400).json({ message: "jobId is required" });
 
       const job = await Job.findById(jobId);
       if (!job) return res.status(404).json({ message: "Job not found" });
 
-      if (job.customer.toString() !== req.user._id.toString()) {
-        return res
-          .status(403)
-          .json({ message: "Not authorized to pay for this job" });
+      if (String(job.customer) !== String(req.user._id)) {
+        return res.status(403).json({ message: "Not authorized to pay for this job" });
       }
 
       if ([JOB_STATUSES.CANCELLED, JOB_STATUSES.COMPLETED].includes(job.status)) {
-        return res
-          .status(400)
-          .json({ message: `Cannot pay for job in status ${job.status}` });
+        return res.status(400).json({ message: `Cannot pay for job in status ${job.status}` });
       }
 
-      const bookingFee = job.pricing?.bookingFee || 0;
-      if (bookingFee <= 0) {
-        return res.status(400).json({
-          message: "Booking fee is not set for this job. Cannot create payment.",
+      const bookingFee = Number(job.pricing?.bookingFee || 0);
+      if (!Number.isFinite(bookingFee) || bookingFee <= 0) {
+        return res.status(400).json({ message: "Booking fee not set" });
+      }
+
+      /* ======================
+         COUNTRY ISOLATION
+      ====================== */
+      const reqCountry = String(req.countryCode || "ZA").trim().toUpperCase();
+      const jobCountry = String(job.countryCode || reqCountry || "ZA").trim().toUpperCase();
+
+      if (reqCountry && job.countryCode && reqCountry !== jobCountry) {
+        return res.status(403).json({
+          message: `Country mismatch. Job belongs to ${jobCountry}`,
+          countryCode: reqCountry,
+          jobCountryCode: jobCountry,
         });
       }
 
-      // ✅ COUNTRY: bind gateway choice to the job’s countryCode
-      const countryCode = (job.countryCode || "").toUpperCase().trim();
+      /* ======================
+         ROUTING
+      ====================== */
+      const routing = await resolvePaymentRoutingForCountry(jobCountry);
 
-      // ✅ Dashboard per-country setting decides gateway
-      const activeGateway = await getActivePaymentGateway(countryCode);
-      const gatewayAdapter = await getGatewayAdapter(countryCode);
+      // getActivePaymentGateway already returns enum, but normalize anyway
+      const activeGatewayEnum = await getActivePaymentGateway(jobCountry);
+      const gatewayEnum = normalizeGatewayKeyToEnum(activeGatewayEnum);
 
-      // ✅ Find existing payment for THIS job (safe; prevents duplicates)
-      let payment = await Payment.findOne({ job: job._id });
+      const gatewayAdapter = await getGatewayAdapter(jobCountry);
+
+      /* ======================
+         PAYMENT RECORD
+      ====================== */
+      let payment = await Payment.findOne({
+        job: job._id,
+        countryCode: jobCountry,
+      });
 
       if (payment && payment.status === PAYMENT_STATUSES.PAID) {
+        const referencePaid = payment.providerReference || `TM-${payment._id}`;
+
+        const instructionPaid = buildPaymentInstruction({
+          flowType: "REDIRECT",
+          gateway: payment.provider || gatewayEnum,
+          countryCode: jobCountry,
+          currency: payment.currency || job.pricing?.currency || "ZAR",
+          amount: payment.amount || bookingFee,
+          reference: referencePaid,
+          redirectUrl: null,
+          sdkParams: null,
+        });
+
         return res.status(200).json({
+          success: true,
           message: "Payment already PAID ✅",
+          instruction: instructionPaid,
           payment,
         });
       }
@@ -279,148 +316,108 @@ router.post(
           amount: bookingFee,
           currency: job.pricing?.currency || "ZAR",
           status: PAYMENT_STATUSES.PENDING,
-          provider: activeGateway,
-
-          // ✅ store country on payment (important for audits / future routing)
-          countryCode: countryCode || "ZA",
+          provider: gatewayEnum,
+          countryCode: jobCountry,
         });
       } else {
-        payment.provider = activeGateway;
-        if (!payment.countryCode) payment.countryCode = countryCode || "ZA";
+        payment.provider = gatewayEnum;
+        if (!payment.countryCode) payment.countryCode = jobCountry;
         await payment.save();
       }
 
       const reference = `TM-${payment._id}`;
 
-      const frontendBase = (process.env.FRONTEND_URL || "https://towmech.com").replace(/\/+$/, "");
-      const backendBase = (process.env.BACKEND_URL || "https://api.towmech.com").replace(/\/+$/, "");
+      const frontendBase = String(process.env.FRONTEND_URL || "https://towmech.com").replace(/\/+$/, "");
+      const backendBase = String(process.env.BACKEND_URL || "https://api.towmech.com").replace(/\/+$/, "");
 
       const successUrl = `${frontendBase}/payment-success`;
       const cancelUrl = `${frontendBase}/payment-cancel`;
 
-      // ✅ Only PayFast needs notifyUrl currently (you only have /notify/payfast route)
       const notifyUrl =
-        activeGateway === "PAYFAST"
-          ? `${backendBase}/api/payments/notify/payfast`
-          : undefined;
+        gatewayEnum === "PAYFAST" ? `${backendBase}/api/payments/notify/payfast` : null;
 
-      const initResponse = await gatewayAdapter.createPayment({
-        amount: bookingFee,
-        currency: payment.currency,
-        reference,
-        successUrl,
-        cancelUrl,
-        notifyUrl,
-        customerEmail: req.user.email,
-      });
+      /* ======================
+         CALL ADAPTER
+      ====================== */
+      let initResponse;
+      try {
+        initResponse = await gatewayAdapter.createPayment({
+          amount: bookingFee,
+          currency: payment.currency,
+          reference,
+          successUrl,
+          cancelUrl,
+          notifyUrl,
+          customerEmail: req.user.email,
+          customerPhone: req.user.phoneNumber || req.user.phone || null,
+          customerName: req.user.name || req.user.fullName || "TowMech User",
+          countryCode: jobCountry,
+          routing,
+        });
+      } catch (e) {
+        console.error("❌ Adapter createPayment failed:", e?.message || e);
+        return res.status(400).json({
+          success: false,
+          message: `Payment gateway (${gatewayEnum}) not configured or not supported.`,
+          gateway: gatewayEnum,
+          countryCode: jobCountry,
+          error: e?.message || String(e),
+        });
+      }
 
       payment.providerReference = reference;
       payment.providerPayload = initResponse;
       await payment.save();
 
-      // ✅ URL extraction (supports different gateway payload shapes)
-      const paymentUrl =
-        initResponse?.paylinkUrl ||
-        initResponse?.paylinkURL ||
+      /* ======================
+         FLOW TYPE (from routing)
+      ====================== */
+      const providerDef = (routing.providers || []).find(
+        (p) => String(p.gateway || "").toUpperCase() === String(gatewayEnum).toUpperCase()
+      );
+
+      const flowType = normalizeFlowType(providerDef?.flowType);
+
+      const redirectUrl =
+        initResponse?.redirectUrl ||
         initResponse?.paymentUrl ||
-        initResponse?.url ||
-        initResponse?.payment_url ||
-        initResponse?.data?.paylinkUrl ||
+        initResponse?.authorizationUrl ||
+        initResponse?.data?.redirectUrl ||
         initResponse?.data?.paymentUrl ||
-        initResponse?.data?.url ||
+        initResponse?.data?.authorizationUrl ||
         null;
 
-      console.log("✅ PAYMENT URL GENERATED:", paymentUrl);
+      const sdkParams =
+        flowType === "SDK"
+          ? (initResponse?.sdkParams || initResponse?.data?.sdkParams || null)
+          : null;
 
-      // ✅ COMPATIBILITY: return multiple common keys so mobile cannot miss it
+      const instruction = buildPaymentInstruction({
+        flowType,
+        gateway: gatewayEnum,
+        countryCode: jobCountry,
+        currency: payment.currency,
+        amount: bookingFee,
+        reference,
+        redirectUrl: flowType === "REDIRECT" ? redirectUrl : null,
+        sdkParams: flowType === "SDK" ? sdkParams : null,
+      });
+
       return res.status(201).json({
         success: true,
-        message: `${activeGateway} payment initialized ✅`,
-        gateway: activeGateway,
-        countryCode: countryCode || "ZA",
-
-        paymentUrl,
-        url: paymentUrl,
-        paylinkUrl: paymentUrl,
-        link: paymentUrl,
-        redirectUrl: paymentUrl,
-
+        message: `${gatewayEnum} initialized ✅`,
+        instruction,
         payment,
-        initResponse,
       });
     } catch (err) {
       console.error("❌ PAYMENT CREATE ERROR:", err);
       return res.status(500).json({
+        success: false,
         message: "Could not create payment",
         error: err.message,
       });
     }
   }
 );
-
-/**
- * ✅ MANUAL FALLBACK
- * PATCH /api/payments/job/:jobId/mark-paid
- */
-router.patch("/job/:jobId/mark-paid", auth, async (req, res) => {
-  try {
-    const payment = await Payment.findOne({ job: req.params.jobId });
-
-    if (!payment) {
-      return res.status(404).json({ message: "Payment not found for job" });
-    }
-
-    if (
-      ![
-        USER_ROLES.ADMIN,
-        USER_ROLES.SUPER_ADMIN,
-        USER_ROLES.CUSTOMER,
-      ].includes(req.user.role)
-    ) {
-      return res.status(403).json({
-        message: "Only Admin, SuperAdmin or Customer can mark payment as paid",
-      });
-    }
-
-    if (
-      req.user.role === USER_ROLES.CUSTOMER &&
-      payment.customer.toString() !== req.user._id.toString()
-    ) {
-      return res.status(403).json({ message: "Not authorized to mark this payment" });
-    }
-
-    if (payment.status === PAYMENT_STATUSES.PAID) {
-      return res.status(200).json({ message: "Payment already PAID ✅", payment });
-    }
-
-    payment.status = PAYMENT_STATUSES.PAID;
-    payment.paidAt = new Date();
-    payment.providerReference = `MANUAL-${Date.now()}`;
-
-    payment.manualMarkedBy = req.user._id;
-    payment.manualMarkedAt = new Date();
-
-    await payment.save();
-
-    const job = await Job.findById(payment.job);
-    if (!job) return res.status(404).json({ message: "Job not found" });
-
-    if (!job.pricing) job.pricing = {};
-    job.pricing.bookingFeeStatus = "PAID";
-    job.pricing.bookingFeePaidAt = new Date();
-    await job.save();
-
-    const broadcastResult = await broadcastJobToProviders(job._id);
-
-    return res.status(200).json({
-      message: "Payment manually marked PAID ✅ Job broadcasted ✅",
-      payment,
-      broadcastResult,
-    });
-  } catch (err) {
-    console.error("❌ MANUAL MARK-PAID ERROR:", err);
-    return res.status(500).json({ message: "Could not mark payment", error: err.message });
-  }
-});
 
 export default router;

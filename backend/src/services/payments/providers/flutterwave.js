@@ -1,38 +1,45 @@
-// src/services/payments/providers/flutterwave.js
-/**
- * Flutterwave Provider (multi-country fallback)
- *
- * Supports:
- * - Create payment (hosted checkout link)
- * - Verify payment by transaction id OR tx_ref
- *
- * ENV REQUIRED:
- *   FLUTTERWAVE_SECRET_KEY
- *
- * ENV OPTIONAL:
- *   FLUTTERWAVE_BASE_URL (default: https://api.flutterwave.com)
- *   FLW_REDIRECT_URL     (default: process.env.APP_URL or "")
- *
- * NOTES:
- * - Flutterwave typically returns a hosted payment link.
- * - You should store tx_ref on your Payment model and verify after redirect/webhook.
- */
-
+// backend/src/services/payments/providers/flutterwave.js
 import axios from "axios";
 import crypto from "crypto";
 
-function requireEnv(name) {
-  const v = process.env[name];
-  if (!v) throw new Error(`Missing required env var: ${name}`);
+function safeObj(v) {
+  return v && typeof v === "object" ? v : {};
+}
+
+function getProviderConfig(payload) {
+  const routing = payload?.routing;
+  const providers = Array.isArray(routing?.providers) ? routing.providers : [];
+  const def = providers.find((p) => String(p?.gateway || "").toUpperCase() === "FLUTTERWAVE");
+  return safeObj(def?.config);
+}
+
+function pickFirst(...vals) {
+  for (const v of vals) {
+    if (v === undefined || v === null) continue;
+    const s = String(v).trim();
+    if (s) return s;
+  }
+  return "";
+}
+
+function requireValue(name, v) {
+  if (!v) throw new Error(`Missing required value: ${name}`);
   return v;
 }
 
-function baseUrl() {
-  return String(process.env.FLUTTERWAVE_BASE_URL || "https://api.flutterwave.com").replace(/\/$/, "");
+function baseUrl(payload) {
+  const cfg = getProviderConfig(payload);
+  return pickFirst(cfg.baseUrl, process.env.FLUTTERWAVE_BASE_URL, "https://api.flutterwave.com").replace(
+    /\/$/,
+    ""
+  );
 }
 
-function authHeaders() {
-  const secret = requireEnv("FLUTTERWAVE_SECRET_KEY");
+function authHeaders(payload) {
+  const cfg = getProviderConfig(payload);
+  const secret = pickFirst(cfg.secretKey, process.env.FLUTTERWAVE_SECRET_KEY);
+  requireValue("FLUTTERWAVE_SECRET_KEY", secret);
+
   return {
     Authorization: `Bearer ${secret}`,
     "Content-Type": "application/json",
@@ -40,36 +47,9 @@ function authHeaders() {
 }
 
 function buildTxRef(prefix = "towmech") {
-  // Unique reference for your system
   return `${prefix}_${Date.now()}_${crypto.randomBytes(6).toString("hex")}`;
 }
 
-/**
- * ✅ Create Flutterwave payment
- *
- * payload:
- * {
- *   amount: number|string,
- *   currency: "ZAR"|"KES"|"UGX"|...,
- *   email: string,
- *   phone?: string,
- *   name?: string,
- *   tx_ref?: string,
- *   redirect_url?: string,
- *   meta?: object,
- *   title?: string,
- *   description?: string
- * }
- *
- * returns:
- * {
- *   provider: "flutterwave",
- *   method: "flutterwave",
- *   tx_ref,
- *   link,
- *   raw
- * }
- */
 export async function flutterwaveCreatePayment(payload = {}) {
   const amount = Number(payload.amount);
   if (!Number.isFinite(amount) || amount <= 0) throw new Error("Invalid amount");
@@ -85,14 +65,13 @@ export async function flutterwaveCreatePayment(payload = {}) {
 
   const tx_ref = String(payload.tx_ref || buildTxRef("towmech")).trim();
 
-  const redirect_url =
-    String(payload.redirect_url || process.env.FLW_REDIRECT_URL || process.env.APP_URL || "").trim();
+  const redirect_url = String(
+    payload.redirect_url || process.env.FLW_REDIRECT_URL || process.env.APP_URL || ""
+  ).trim();
 
-  // Flutterwave still allows redirect_url to be blank in some flows,
-  // but it's best to always provide it if you can.
   const body = {
     tx_ref,
-    amount: amount.toFixed(2), // Flutterwave accepts decimals
+    amount: amount.toFixed(2),
     currency,
     redirect_url: redirect_url || undefined,
     payment_options: "card,banktransfer,ussd,mobilemoney",
@@ -109,8 +88,8 @@ export async function flutterwaveCreatePayment(payload = {}) {
   };
 
   try {
-    const res = await axios.post(`${baseUrl()}/v3/payments`, body, {
-      headers: authHeaders(),
+    const res = await axios.post(`${baseUrl(payload)}/v3/payments`, body, {
+      headers: authHeaders(payload),
       timeout: 30000,
     });
 
@@ -126,6 +105,7 @@ export async function flutterwaveCreatePayment(payload = {}) {
       method: "flutterwave",
       tx_ref,
       link,
+      redirectUrl: link,
       raw: data,
     };
   } catch (err) {
@@ -138,31 +118,6 @@ export async function flutterwaveCreatePayment(payload = {}) {
   }
 }
 
-/**
- * ✅ Verify Flutterwave payment
- *
- * You can verify via:
- * - transactionId (preferred after redirect/webhook)
- * - tx_ref (fallback: list/verify by reference)
- *
- * payload:
- * {
- *   transactionId?: string|number,
- *   tx_ref?: string
- * }
- *
- * returns:
- * {
- *   provider: "flutterwave",
- *   method: "flutterwave",
- *   status: "success"|"failed"|"pending",
- *   transactionId,
- *   tx_ref,
- *   amount,
- *   currency,
- *   raw
- * }
- */
 export async function flutterwaveVerifyPayment(payload = {}) {
   const transactionId = payload.transactionId ? String(payload.transactionId).trim() : "";
   const tx_ref = payload.tx_ref ? String(payload.tx_ref).trim() : "";
@@ -171,11 +126,10 @@ export async function flutterwaveVerifyPayment(payload = {}) {
     throw new Error("transactionId or tx_ref is required");
   }
 
-  // If we have transactionId, use the direct verify endpoint
   if (transactionId) {
     try {
-      const res = await axios.get(`${baseUrl()}/v3/transactions/${transactionId}/verify`, {
-        headers: authHeaders(),
+      const res = await axios.get(`${baseUrl(payload)}/v3/transactions/${transactionId}/verify`, {
+        headers: authHeaders(payload),
         timeout: 30000,
       });
 
@@ -211,10 +165,9 @@ export async function flutterwaveVerifyPayment(payload = {}) {
     }
   }
 
-  // Fallback: if only tx_ref is provided, query transactions by tx_ref
   try {
-    const res = await axios.get(`${baseUrl()}/v3/transactions`, {
-      headers: authHeaders(),
+    const res = await axios.get(`${baseUrl(payload)}/v3/transactions`, {
+      headers: authHeaders(payload),
       params: { tx_ref },
       timeout: 30000,
     });
@@ -226,7 +179,6 @@ export async function flutterwaveVerifyPayment(payload = {}) {
       throw new Error(data?.message || "Flutterwave verify by tx_ref failed");
     }
 
-    // Choose the newest matching transaction (if multiple)
     const matches = list
       .filter((t) => String(t?.tx_ref || "") === tx_ref)
       .sort((a, b) => Number(b?.id || 0) - Number(a?.id || 0));
