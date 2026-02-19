@@ -624,32 +624,69 @@ router.post("/register", async (req, res) => {
       });
     }
 
-    if (!nationalityType || !["SouthAfrican", "ForeignNational"].includes(nationalityType)) {
-      return res.status(400).json({
-        message: t(req, "errors.invalid_nationality_type", {
-          fallback: "nationalityType must be SouthAfrican or ForeignNational",
-        }),
-      });
-    }
-
-    if (nationalityType === "SouthAfrican") {
-      if (!saIdNumber)
-        return res.status(400).json({ message: t(req, "errors.sa_id_required", { fallback: "saIdNumber is required for SouthAfrican" }) });
-      if (!isValidSouthAfricanID(saIdNumber))
-        return res.status(400).json({ message: t(req, "errors.invalid_sa_id", { fallback: "Invalid South African ID number" }) });
-    }
-
-    if (nationalityType === "ForeignNational") {
-      if (!passportNumber || !country) {
+    /**
+     * ✅ CHANGE: Customer ID/Passport is OPTIONAL
+     * - Customers may still send nationalityType, saIdNumber, passportNumber, country
+     * - If provided, we validate; if missing, we allow registration
+     * - Providers/admin remain unchanged (providers still require documents as before via their own flows)
+     */
+    if (role !== USER_ROLES.CUSTOMER) {
+      if (!nationalityType || !["SouthAfrican", "ForeignNational"].includes(nationalityType)) {
         return res.status(400).json({
-          message: t(req, "errors.foreign_required", { fallback: "passportNumber and country are required for ForeignNational" }),
+          message: t(req, "errors.invalid_nationality_type", {
+            fallback: "nationalityType must be SouthAfrican or ForeignNational",
+          }),
         });
       }
-      if (!isValidPassport(passportNumber)) {
+
+      if (nationalityType === "SouthAfrican") {
+        if (!saIdNumber)
+          return res.status(400).json({ message: t(req, "errors.sa_id_required", { fallback: "saIdNumber is required for SouthAfrican" }) });
+        if (!isValidSouthAfricanID(saIdNumber))
+          return res.status(400).json({ message: t(req, "errors.invalid_sa_id", { fallback: "Invalid South African ID number" }) });
+      }
+
+      if (nationalityType === "ForeignNational") {
+        if (!passportNumber || !country) {
+          return res.status(400).json({
+            message: t(req, "errors.foreign_required", { fallback: "passportNumber and country are required for ForeignNational" }),
+          });
+        }
+        if (!isValidPassport(passportNumber)) {
+          return res.status(400).json({
+            message: t(req, "errors.invalid_passport", { fallback: "passportNumber must be 8 to 11 alphanumeric characters" }),
+          });
+        }
+      }
+    } else {
+      // CUSTOMER: nationalityType can be present (or not); ID/Passport is optional
+      if (nationalityType && !["SouthAfrican", "ForeignNational"].includes(nationalityType)) {
         return res.status(400).json({
-          message: t(req, "errors.invalid_passport", { fallback: "passportNumber must be 8 to 11 alphanumeric characters" }),
+          message: t(req, "errors.invalid_nationality_type", {
+            fallback: "nationalityType must be SouthAfrican or ForeignNational",
+          }),
         });
       }
+
+      // Validate only if provided
+      if (nationalityType === "SouthAfrican" && saIdNumber) {
+        if (!isValidSouthAfricanID(saIdNumber)) {
+          return res.status(400).json({
+            message: t(req, "errors.invalid_sa_id", { fallback: "Invalid South African ID number" }),
+          });
+        }
+      }
+
+      if (nationalityType === "ForeignNational" && passportNumber) {
+        if (!isValidPassport(passportNumber)) {
+          return res.status(400).json({
+            message: t(req, "errors.invalid_passport", {
+              fallback: "passportNumber must be 8 to 11 alphanumeric characters",
+            }),
+          });
+        }
+      }
+      // country is optional for customer (even if ForeignNational)
     }
 
     const { allowedTowTruckTypes, allowedMechanicCategories } =
@@ -723,10 +760,13 @@ router.post("/register", async (req, res) => {
       password,
       birthday,
       countryCode: requestCountryCode,
-      nationalityType,
-      saIdNumber: nationalityType === "SouthAfrican" ? saIdNumber : null,
-      passportNumber: nationalityType === "ForeignNational" ? passportNumber : null,
-      country: nationalityType === "ForeignNational" ? country : null,
+
+      // ✅ keep storing if provided; for customers these may be null/empty and that's OK
+      nationalityType: nationalityType || null,
+      saIdNumber: nationalityType === "SouthAfrican" ? (saIdNumber || null) : null,
+      passportNumber: nationalityType === "ForeignNational" ? (passportNumber || null) : null,
+      country: nationalityType === "ForeignNational" ? (country || null) : null,
+
       role,
       providerProfile:
         role !== USER_ROLES.CUSTOMER
