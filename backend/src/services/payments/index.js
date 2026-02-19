@@ -5,20 +5,43 @@ import payfastGateway from "./payfast.js";
 import peachGateway from "./peachPayments.js";
 
 /**
- * ✅ Get active gateway from DB settings
+ * ✅ Get settings doc for a specific countryCode (dashboard decides per country)
+ * Fallback order:
+ *  1) exact countryCode
+ *  2) ZA (common default if you use ZA as “base”)
+ *  3) any settings doc (last resort)
  */
-export async function getActivePaymentGateway() {
-  const settings = await SystemSettings.findOne();
-  const gateway = settings?.integrations?.paymentGateway || "IKHOKHA";
+async function getSettingsForCountry(countryCode) {
+  const cc = (countryCode || "").toUpperCase().trim();
 
-  return gateway.toUpperCase();
+  if (cc) {
+    const byCountry = await SystemSettings.findOne({ countryCode: cc });
+    if (byCountry) return byCountry;
+  }
+
+  const za = await SystemSettings.findOne({ countryCode: "ZA" });
+  if (za) return za;
+
+  return await SystemSettings.findOne();
 }
 
 /**
- * ✅ Return gateway adapter (Ikhokha, PayFast, Peach)
+ * ✅ Get active gateway from DB settings (country-aware)
  */
-export async function getGatewayAdapter() {
-  const activeGateway = await getActivePaymentGateway();
+export async function getActivePaymentGateway(countryCode) {
+  const settings = await getSettingsForCountry(countryCode);
+
+  const gateway = settings?.integrations?.paymentGateway || "IKHOKHA";
+  return String(gateway).toUpperCase();
+}
+
+/**
+ * ✅ Return gateway adapter (Ikhokha, PayFast, Peach) (country-aware selection)
+ * NOTE: The adapter modules remain unchanged; this just ensures the selected gateway
+ * comes from the dashboard settings for the same country.
+ */
+export async function getGatewayAdapter(countryCode) {
+  const activeGateway = await getActivePaymentGateway(countryCode);
 
   switch (activeGateway) {
     case "PAYFAST":

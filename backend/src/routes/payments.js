@@ -255,9 +255,14 @@ router.post(
         });
       }
 
-      const activeGateway = await getActivePaymentGateway();
-      const gatewayAdapter = await getGatewayAdapter();
+      // ✅ COUNTRY: bind gateway choice to the job’s countryCode
+      const countryCode = (job.countryCode || "").toUpperCase().trim();
 
+      // ✅ Dashboard per-country setting decides gateway
+      const activeGateway = await getActivePaymentGateway(countryCode);
+      const gatewayAdapter = await getGatewayAdapter(countryCode);
+
+      // ✅ Find existing payment for THIS job (safe; prevents duplicates)
       let payment = await Payment.findOne({ job: job._id });
 
       if (payment && payment.status === PAYMENT_STATUSES.PAID) {
@@ -275,24 +280,29 @@ router.post(
           currency: job.pricing?.currency || "ZAR",
           status: PAYMENT_STATUSES.PENDING,
           provider: activeGateway,
+
+          // ✅ store country on payment (important for audits / future routing)
+          countryCode: countryCode || "ZA",
         });
       } else {
         payment.provider = activeGateway;
+        if (!payment.countryCode) payment.countryCode = countryCode || "ZA";
         await payment.save();
       }
 
       const reference = `TM-${payment._id}`;
 
-      const frontendBase = (process.env.FRONTEND_URL || "https://towmech.com").replace(
-        /\/+$/,
-        ""
-      );
-      const backendBase = (
-        process.env.BACKEND_URL || "https://towmech-main.onrender.com"
-      ).replace(/\/+$/, "");
+      const frontendBase = (process.env.FRONTEND_URL || "https://towmech.com").replace(/\/+$/, "");
+      const backendBase = (process.env.BACKEND_URL || "https://api.towmech.com").replace(/\/+$/, "");
 
       const successUrl = `${frontendBase}/payment-success`;
       const cancelUrl = `${frontendBase}/payment-cancel`;
+
+      // ✅ Only PayFast needs notifyUrl currently (you only have /notify/payfast route)
+      const notifyUrl =
+        activeGateway === "PAYFAST"
+          ? `${backendBase}/api/payments/notify/payfast`
+          : undefined;
 
       const initResponse = await gatewayAdapter.createPayment({
         amount: bookingFee,
@@ -300,7 +310,7 @@ router.post(
         reference,
         successUrl,
         cancelUrl,
-        notifyUrl: `${backendBase}/api/payments/notify/payfast`,
+        notifyUrl,
         customerEmail: req.user.email,
       });
 
@@ -308,7 +318,7 @@ router.post(
       payment.providerPayload = initResponse;
       await payment.save();
 
-      // ✅ FIX: support iKhokha response { paylinkUrl }, PayFast { paymentUrl/url }, and wrapped responses
+      // ✅ URL extraction (supports different gateway payload shapes)
       const paymentUrl =
         initResponse?.paylinkUrl ||
         initResponse?.paylinkURL ||
@@ -327,6 +337,7 @@ router.post(
         success: true,
         message: `${activeGateway} payment initialized ✅`,
         gateway: activeGateway,
+        countryCode: countryCode || "ZA",
 
         paymentUrl,
         url: paymentUrl,
