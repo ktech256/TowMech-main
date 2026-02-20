@@ -12,7 +12,7 @@ import {
   MECHANIC_CATEGORIES,
 } from "../models/User.js";
 
-// ✅ ADD: use payments routing normalizer (providers[] array)
+// ✅ Use payments routing normalizer (providers[] array)
 import { resolvePaymentRoutingForCountry } from "../services/payments/index.js";
 
 const router = express.Router();
@@ -21,7 +21,6 @@ const router = express.Router();
  * ✅ Helper: ensure PricingConfig always exists (global fallback)
  */
 async function getOrCreatePricingConfig(countryCode) {
-  // Prefer per-country record, fallback to any/global
   let pricing =
     (countryCode
       ? await PricingConfig.findOne({ countryCode }).lean()
@@ -169,8 +168,8 @@ router.get("/service-categories", async (req, res) => {
  * GET /api/config/all
  *
  * ✅ FIX:
- * - ALWAYS returns payments.providers as ARRAY (providers[])
- * - Uses resolvePaymentRoutingForCountry() so legacy DB shapes can't break Android
+ * - services.payments.providers is returned as ARRAY-OF-ARRAYS (Android expects this)
+ * - services.payments.providersV2 is returned as ARRAY-OF-OBJECTS (new format)
  */
 router.get("/all", async (req, res) => {
   try {
@@ -195,15 +194,26 @@ router.get("/all", async (req, res) => {
 
     const normalizedServices = normalizeServiceDefaults(serviceConfig?.services);
 
-    // ✅ IMPORTANT: normalize payments routing to providers[] array
+    // ✅ Payment routing normalized (providers[] always array internally)
     const routing = await resolvePaymentRoutingForCountry(countryCode);
+
+    // ✅ Android-safe legacy-ish shape: array of [key, object]
+    const providersEntries = (routing.providers || []).map((p) => [p.gateway, p]);
 
     const paymentsOut = {
       ...(serviceConfig?.payments || {}),
-      // standard fields Android should rely on
+
+      // helpful defaults
       defaultProvider: routing.defaultProvider, // enum
-      defaultProviderKey: routing.defaultProviderKey, // original string (optional)
-      providers: routing.providers, // ✅ ALWAYS ARRAY
+      defaultProviderKey: routing.defaultProviderKey, // original string
+
+      // ✅ IMPORTANT:
+      // Android crash shows it expects providers[0] to be an ARRAY.
+      // So we return entries format here:
+      providers: providersEntries,
+
+      // ✅ New format kept separately (dashboard / future app)
+      providersV2: routing.providers,
     };
 
     const resolvedServiceConfig = {
@@ -229,21 +239,19 @@ router.get("/all", async (req, res) => {
     // Pricing + legacy types
     const pricing = await getOrCreatePricingConfig(countryCode);
 
-    // Ensure currency injected (Android reads pricing.currency)
     const pricingOut = { ...(pricing || {}) };
     pricingOut.currency = country.currency || pricingOut.currency || "ZAR";
 
     const categories = await ServiceCategory.find({ active: true });
 
     return res.json({
-      // ✅ New shape (Android dashboard-first models)
       country,
       services: resolvedServiceConfig,
       ui: resolvedUiConfig,
       pricing: pricingOut,
       serverTime: new Date().toISOString(),
 
-      // ✅ Legacy fields (older app/dashboard code)
+      // legacy fields
       success: true,
       vehicleTypes: VEHICLE_TYPES || [],
       towTruckTypes:
