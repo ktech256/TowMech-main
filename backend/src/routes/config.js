@@ -12,6 +12,9 @@ import {
   MECHANIC_CATEGORIES,
 } from "../models/User.js";
 
+// ✅ ADD: use payments routing normalizer (providers[] array)
+import { resolvePaymentRoutingForCountry } from "../services/payments/index.js";
+
 const router = express.Router();
 
 /**
@@ -61,114 +64,13 @@ function normalizeServiceDefaults(services = {}) {
     chatEnabled: typeof s.chatEnabled === "boolean" ? s.chatEnabled : true,
     ratingsEnabled: typeof s.ratingsEnabled === "boolean" ? s.ratingsEnabled : true,
 
-    winchRecoveryEnabled:
-      typeof s.winchRecoveryEnabled === "boolean" ? s.winchRecoveryEnabled : false,
+    winchRecoveryEnabled: typeof s.winchRecoveryEnabled === "boolean" ? s.winchRecoveryEnabled : false,
     roadsideAssistanceEnabled:
       typeof s.roadsideAssistanceEnabled === "boolean" ? s.roadsideAssistanceEnabled : false,
     jumpStartEnabled: typeof s.jumpStartEnabled === "boolean" ? s.jumpStartEnabled : false,
     tyreChangeEnabled: typeof s.tyreChangeEnabled === "boolean" ? s.tyreChangeEnabled : false,
     fuelDeliveryEnabled: typeof s.fuelDeliveryEnabled === "boolean" ? s.fuelDeliveryEnabled : false,
     lockoutEnabled: typeof s.lockoutEnabled === "boolean" ? s.lockoutEnabled : false,
-  };
-}
-
-/* ============================================================
-   ✅ Payment Routing Normalizer (CRITICAL FIX)
-   Ensures services.payments.providers is ALWAYS an ARRAY
-============================================================ */
-
-function normalizeObj(v) {
-  return v && typeof v === "object" ? v : {};
-}
-
-function normalizePriority(v) {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : 0;
-}
-
-function normalizeFlowType(v) {
-  const t = String(v || "REDIRECT").trim().toUpperCase();
-  return t === "SDK" ? "SDK" : "REDIRECT";
-}
-
-function normalizeGatewayKeyToEnum(key) {
-  const k = String(key || "").trim().toLowerCase();
-  if (!k) return "PAYSTACK";
-
-  if (k === "payfast") return "PAYFAST";
-  if (k === "ikhokha" || k === "i-khokha" || k === "i_khokha") return "IKHOKHA";
-  if (k === "paystack") return "PAYSTACK";
-  if (k === "stripe") return "STRIPE";
-  if (k === "mpesa" || k === "m-pesa" || k === "m_pesa") return "MPESA";
-  if (k === "flutterwave") return "FLUTTERWAVE";
-  if (k === "mtn_momo" || k === "mtn" || k === "mtn_mobile_money") return "MTN_MOMO";
-  if (k === "adyen") return "ADYEN";
-  if (k === "paypal") return "PAYPAL";
-  if (k === "google_pay" || k === "googlepay") return "GOOGLE_PAY";
-  if (k === "apple_pay" || k === "applepay") return "APPLE_PAY";
-  if (k === "peach" || k === "peachpayments" || k === "peach_payments") return "PEACH_PAYMENTS";
-
-  return k.toUpperCase();
-}
-
-function normalizePaymentsConfig(payments = {}) {
-  const p = payments || {};
-  const defaultProviderKey = p.defaultProvider || p.defaultGateway || "paystack";
-  const defaultProvider = normalizeGatewayKeyToEnum(defaultProviderKey);
-
-  const src = p.providers;
-
-  // ✅ New shape: providers[] already
-  if (Array.isArray(src)) {
-    const arr = src
-      .filter(Boolean)
-      .map((x) => ({
-        gateway: normalizeGatewayKeyToEnum(x.gateway),
-        flowType: normalizeFlowType(x.flowType),
-        enabled: !!x.enabled,
-        priority: normalizePriority(x.priority),
-        sdkConfig: normalizeObj(x.sdkConfig),
-        redirectConfig: normalizeObj(x.redirectConfig),
-        // legacy/back-compat bucket
-        config: normalizeObj(x.config),
-      }))
-      .filter((x) => !!x.gateway);
-
-    return {
-      ...p,
-      defaultProvider: defaultProvider, // ✅ store as enum for client
-      providers: arr,
-    };
-  }
-
-  // ✅ Legacy shape: { PAYFAST: {enabled...}, IKHOKHA: {...} }
-  if (src && typeof src === "object") {
-    const arr = Object.entries(src).map(([k, v]) => ({
-      gateway: normalizeGatewayKeyToEnum(k),
-      flowType: normalizeFlowType(v?.flowType), // legacy might not have; defaults to REDIRECT
-      enabled: !!v?.enabled,
-      priority: normalizePriority(v?.priority),
-
-      // phase2
-      sdkConfig: normalizeObj(v?.sdkConfig),
-      redirectConfig: normalizeObj(v?.redirectConfig),
-
-      // legacy
-      config: normalizeObj(v?.config),
-    }));
-
-    return {
-      ...p,
-      defaultProvider: defaultProvider,
-      providers: arr,
-    };
-  }
-
-  // ✅ No providers yet
-  return {
-    ...p,
-    defaultProvider: defaultProvider,
-    providers: [],
   };
 }
 
@@ -187,9 +89,7 @@ router.get("/types", async (req, res) => {
       towTruckTypes:
         pricing?.towTruckTypes?.length > 0 ? pricing.towTruckTypes : TOW_TRUCK_TYPES || [],
       mechanicCategories:
-        pricing?.mechanicCategories?.length > 0
-          ? pricing.mechanicCategories
-          : MECHANIC_CATEGORIES || [],
+        pricing?.mechanicCategories?.length > 0 ? pricing.mechanicCategories : MECHANIC_CATEGORIES || [],
     });
   } catch (err) {
     return res.status(500).json({
@@ -268,8 +168,9 @@ router.get("/service-categories", async (req, res) => {
  * ✅ GET EVERYTHING AT ONCE
  * GET /api/config/all
  *
- * ✅ FIX INCLUDED:
- * - services.payments.providers is ALWAYS an ARRAY
+ * ✅ FIX:
+ * - ALWAYS returns payments.providers as ARRAY (providers[])
+ * - Uses resolvePaymentRoutingForCountry() so legacy DB shapes can't break Android
  */
 router.get("/all", async (req, res) => {
   try {
@@ -288,24 +189,28 @@ router.get("/all", async (req, res) => {
     // Services (dashboard source)
     let serviceConfig = await CountryServiceConfig.findOne({ countryCode }).lean();
     if (!serviceConfig) {
-      const created = await CountryServiceConfig.create({
-        countryCode,
-        services: {},
-        payments: {},
-      });
+      const created = await CountryServiceConfig.create({ countryCode, services: {}, payments: {} });
       serviceConfig = created.toObject();
     }
 
     const normalizedServices = normalizeServiceDefaults(serviceConfig?.services);
 
-    // ✅ Normalize payments providers[] for Android parsing safety
-    const normalizedPayments = normalizePaymentsConfig(serviceConfig?.payments || {});
+    // ✅ IMPORTANT: normalize payments routing to providers[] array
+    const routing = await resolvePaymentRoutingForCountry(countryCode);
+
+    const paymentsOut = {
+      ...(serviceConfig?.payments || {}),
+      // standard fields Android should rely on
+      defaultProvider: routing.defaultProvider, // enum
+      defaultProviderKey: routing.defaultProviderKey, // original string (optional)
+      providers: routing.providers, // ✅ ALWAYS ARRAY
+    };
 
     const resolvedServiceConfig = {
       ...(serviceConfig || {}),
       countryCode,
       services: normalizedServices,
-      payments: normalizedPayments,
+      payments: paymentsOut,
     };
 
     // UI
@@ -344,9 +249,7 @@ router.get("/all", async (req, res) => {
       towTruckTypes:
         pricingOut?.towTruckTypes?.length > 0 ? pricingOut.towTruckTypes : TOW_TRUCK_TYPES || [],
       mechanicCategories:
-        pricingOut?.mechanicCategories?.length > 0
-          ? pricingOut.mechanicCategories
-          : MECHANIC_CATEGORIES || [],
+        pricingOut?.mechanicCategories?.length > 0 ? pricingOut.mechanicCategories : MECHANIC_CATEGORIES || [],
       categories,
     });
   } catch (err) {
