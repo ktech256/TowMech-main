@@ -17,6 +17,9 @@ import {
   resolvePaymentRoutingForCountry,
 } from "../services/payments/index.js";
 
+// ✅ ADD: Paystack verify helper
+import { paystackVerifyPayment } from "../services/payments/providers/paystack.js";
+
 const router = express.Router();
 
 console.log("✅ payments.js loaded ✅");
@@ -102,6 +105,203 @@ function buildPaymentInstruction({
     },
   };
 }
+
+/**
+ * ✅ ADD: shared "mark paid + update job + broadcast" helper
+ */
+async function markPaymentPaidAndBroadcast(payment, payload = null) {
+  if (!payment) return null;
+
+  if (payment.status !== PAYMENT_STATUSES.PAID) {
+    payment.status = PAYMENT_STATUSES.PAID;
+    payment.paidAt = new Date();
+    if (payload) payment.providerPayload = payload;
+    await payment.save();
+  }
+
+  const job = await Job.findById(payment.job);
+  if (job) {
+    if (!job.pricing) job.pricing = {};
+    job.pricing.bookingFeeStatus = "PAID";
+    job.pricing.bookingFeePaidAt = new Date();
+    await job.save();
+
+    await broadcastJobToProviders(job._id);
+  }
+
+  return payment;
+}
+
+/* ============================================================
+   ✅ ADD: PAYSTACK WEBHOOK (auto-mark paid)
+   POST /api/payments/webhook/paystack
+   - validates signature when possible
+   - verifies with Paystack API (source of truth)
+   - marks PAID + broadcasts job
+============================================================ */
+
+// IMPORTANT: This route captures raw body for signature verify
+router.post(
+  "/webhook/paystack",
+  express.json({
+    verify: (req, res, buf) => {
+      req.rawBody = buf; // buffer
+    },
+  }),
+  async (req, res) => {
+    try {
+      const sig = req.headers["x-paystack-signature"];
+      const secret = (process.env.PAYSTACK_SECRET_KEY || "").trim();
+
+      // Signature verification (best-effort)
+      if (sig && secret && req.rawBody) {
+        const hash = crypto.createHmac("sha512", secret).update(req.rawBody).digest("hex");
+        if (hash !== sig) {
+          console.log("❌ Paystack webhook signature mismatch");
+          return res.status(401).send("Invalid signature");
+        }
+      } else {
+        // If raw body is not available, do not hard fail — still verify via API.
+        console.log("⚠️ Paystack webhook signature not verified (missing rawBody or secret)");
+      }
+
+      const event = req.body || {};
+      const data = event.data || {};
+      const reference = String(data.reference || "").trim();
+
+      if (!reference) return res.status(200).json({ received: true, note: "No reference" });
+
+      // find local payment
+      const payment = await Payment.findOne({ providerReference: reference });
+      if (!payment) return res.status(200).json({ received: true, note: "Payment not found (ignored)" });
+
+      // verify with Paystack API (source of truth)
+      let verify;
+      try {
+        verify = await paystackVerifyPayment({ reference });
+      } catch (e) {
+        console.log("❌ Paystack verify failed inside webhook:", e?.message || e);
+        // still respond 200 so Paystack doesn't retry forever
+        return res.status(200).json({ received: true, note: "Verify failed" });
+      }
+
+      const ok = String(verify?.data?.status || "").toLowerCase() === "success";
+      if (ok) {
+        await markPaymentPaidAndBroadcast(payment, verify);
+      } else {
+        // keep record of payload; do not mark paid
+        payment.providerPayload = verify;
+        await payment.save();
+      }
+
+      return res.status(200).json({ received: true });
+    } catch (err) {
+      console.log("❌ Paystack webhook error:", err?.message || err);
+      // Always return 200 so Paystack won't keep retrying
+      return res.status(200).json({ received: true, error: err.message });
+    }
+  }
+);
+
+/* ============================================================
+   ✅ ADD: PAYSTACK VERIFY (fallback)
+   GET /api/payments/verify/paystack/:reference
+   - verifies with Paystack
+   - marks PAID + broadcasts job
+============================================================ */
+
+router.get(
+  "/verify/paystack/:reference",
+  auth,
+  authorizeRoles(USER_ROLES.CUSTOMER, USER_ROLES.ADMIN, USER_ROLES.SUPER_ADMIN),
+  async (req, res) => {
+    try {
+      const reference = String(req.params.reference || "").trim();
+      if (!reference) return res.status(400).json({ success: false, message: "reference is required" });
+
+      const payment = await Payment.findOne({ providerReference: reference });
+      if (!payment) return res.status(404).json({ success: false, message: "Payment not found" });
+
+      // optional tenant/country guard
+      const reqCountry = String(req.countryCode || "").trim().toUpperCase();
+      if (
+        reqCountry &&
+        payment.countryCode &&
+        reqCountry !== String(payment.countryCode).trim().toUpperCase()
+      ) {
+        return res.status(403).json({ success: false, message: "Country mismatch" });
+      }
+
+      const verify = await paystackVerifyPayment({ reference });
+      const ok = String(verify?.data?.status || "").toLowerCase() === "success";
+
+      if (!ok) {
+        payment.providerPayload = verify;
+        await payment.save();
+        return res.status(400).json({ success: false, message: "Payment not successful", verify });
+      }
+
+      await markPaymentPaidAndBroadcast(payment, verify);
+
+      return res.status(200).json({
+        success: true,
+        message: "Payment verified + marked PAID ✅",
+        reference,
+        status: PAYMENT_STATUSES.PAID,
+      });
+    } catch (err) {
+      return res.status(500).json({
+        success: false,
+        message: "Failed to verify payment",
+        error: err.message,
+      });
+    }
+  }
+);
+
+/* ============================================================
+   ✅ ADD: MANUAL OVERRIDE (Dashboard button fix)
+   PATCH /api/payments/job/:jobId/mark-paid
+   - fixes: "Route not found"
+   - marks latest payment for job as PAID + broadcasts
+============================================================ */
+
+router.patch(
+  "/job/:jobId/mark-paid",
+  auth,
+  authorizeRoles(USER_ROLES.ADMIN, USER_ROLES.SUPER_ADMIN),
+  async (req, res) => {
+    try {
+      const jobId = String(req.params.jobId || "").trim();
+      if (!jobId) return res.status(400).json({ success: false, message: "jobId is required" });
+
+      const job = await Job.findById(jobId);
+      if (!job) return res.status(404).json({ success: false, message: "Job not found" });
+
+      // Find latest payment for this job (prefer pending)
+      let payment =
+        (await Payment.findOne({ job: job._id, status: PAYMENT_STATUSES.PENDING }).sort({ createdAt: -1 })) ||
+        (await Payment.findOne({ job: job._id }).sort({ createdAt: -1 }));
+
+      if (!payment) return res.status(404).json({ success: false, message: "Payment not found for job" });
+
+      await markPaymentPaidAndBroadcast(payment, { manual: true, by: String(req.user?._id || "") });
+
+      return res.status(200).json({
+        success: true,
+        message: "Marked paid + broadcasted ✅",
+        jobId: String(job._id),
+        paymentId: String(payment._id),
+      });
+    } catch (err) {
+      return res.status(500).json({
+        success: false,
+        message: "Failed to mark paid",
+        error: err.message,
+      });
+    }
+  }
+);
 
 /* ============================================================
    STATUS ENDPOINT (verifyAction target)
