@@ -17,7 +17,7 @@ import {
   resolvePaymentRoutingForCountry,
 } from "../services/payments/index.js";
 
-// ✅ ADD: Paystack verify helper
+// ✅ Paystack verify helper (exists in your backend.zip)
 import { paystackVerifyPayment } from "../services/payments/providers/paystack.js";
 
 const router = express.Router();
@@ -107,7 +107,7 @@ function buildPaymentInstruction({
 }
 
 /**
- * ✅ ADD: shared "mark paid + update job + broadcast" helper
+ * ✅ Shared: mark PAID + update job + broadcast
  */
 async function markPaymentPaidAndBroadcast(payment, payload = null) {
   if (!payment) return null;
@@ -115,15 +115,7 @@ async function markPaymentPaidAndBroadcast(payment, payload = null) {
   if (payment.status !== PAYMENT_STATUSES.PAID) {
     payment.status = PAYMENT_STATUSES.PAID;
     payment.paidAt = new Date();
-
-    // keep any previous payload; attach new
-    if (payload) {
-      payment.providerPayload = {
-        ...(payment.providerPayload || {}),
-        verified: payload,
-      };
-    }
-
+    if (payload) payment.providerPayload = payload;
     await payment.save();
   }
 
@@ -134,6 +126,7 @@ async function markPaymentPaidAndBroadcast(payment, payload = null) {
     job.pricing.bookingFeePaidAt = new Date();
     await job.save();
 
+    // ✅ broadcast after confirmed paid
     await broadcastJobToProviders(job._id);
   }
 
@@ -141,114 +134,84 @@ async function markPaymentPaidAndBroadcast(payment, payload = null) {
 }
 
 /* ============================================================
-   ✅ PAYSTACK WEBHOOK (auto-mark paid)
+   ✅ PAYSTACK WEBHOOK
    POST /api/payments/webhook/paystack
-   - verifies signature (best-effort)
-   - verifies with Paystack API (source of truth)
-   - marks PAID + broadcasts job
+   - verify signature (HMAC sha512)
+   - verify with Paystack API
+   - mark paid + broadcast
 ============================================================ */
 
-// IMPORTANT: capture raw body for signature verify
-router.post(
-  "/webhook/paystack",
-  express.json({
-    verify: (req, res, buf) => {
-      req.rawBody = buf; // Buffer
-    },
-  }),
-  async (req, res) => {
-    try {
-      const sig = String(req.headers["x-paystack-signature"] || "").trim();
-      const secret = String(process.env.PAYSTACK_SECRET_KEY || "").trim();
+router.post("/webhook/paystack", async (req, res) => {
+  try {
+    // Paystack signature header
+    const sig = String(req.headers["x-paystack-signature"] || "").trim();
+    const secret = String(process.env.PAYSTACK_SECRET_KEY || "").trim();
 
-      // 1) Signature verification (best effort)
-      if (sig && secret && req.rawBody) {
-        const hash = crypto.createHmac("sha512", secret).update(req.rawBody).digest("hex");
-        if (hash !== sig) {
-          console.log("❌ Paystack webhook signature mismatch");
-          return res.status(401).send("Invalid signature");
-        }
-      } else {
-        // Don't hard fail; we'll still verify via Paystack API.
-        console.log("⚠️ Paystack signature not verified (missing secret/sig/rawBody)");
+    // Raw body is set in your app.js (it stores req.rawBody as a UTF-8 string)
+    const rawString = req.rawBody || "";
+    const rawBuf = Buffer.from(rawString, "utf8");
+
+    // Parse body (if express.json already ran globally, req.body is available)
+    const event = req.body || {};
+    const data = event.data || {};
+    const reference = String(data.reference || "").trim();
+
+    if (!reference) {
+      return res.status(200).json({ received: true, note: "No reference" });
+    }
+
+    // ✅ Signature verify (strict if we have everything)
+    if (sig && secret && rawString) {
+      const hash = crypto.createHmac("sha512", secret).update(rawBuf).digest("hex");
+      if (hash !== sig) {
+        console.log("❌ Paystack webhook signature mismatch", { reference });
+        return res.status(401).send("Invalid signature");
       }
-
-      const event = req.body || {};
-      const data = event.data || {};
-
-      const reference = String(data.reference || "").trim();
-      const eventType = String(event.event || "").trim();
-      const paystackStatus = String(data.status || "").trim().toLowerCase();
-
-      console.log("✅ PAYSTACK WEBHOOK RECEIVED ✅", {
-        event: eventType,
-        status: paystackStatus,
+    } else {
+      console.log("⚠️ Paystack webhook signature not verified (missing header/secret/rawBody)", {
+        hasSig: !!sig,
+        hasSecret: !!secret,
+        hasRaw: !!rawString,
         reference,
       });
-
-      if (!reference) return res.status(200).json({ received: true, note: "No reference" });
-
-      // 2) Find local payment by reference
-      const payment = await Payment.findOne({ providerReference: reference });
-      if (!payment) {
-        // don't retry; but log
-        console.log("⚠️ Paystack webhook: payment not found for reference", reference);
-        return res.status(200).json({ received: true, note: "Payment not found" });
-      }
-
-      // If already paid, ack
-      if (payment.status === PAYMENT_STATUSES.PAID) {
-        return res.status(200).json({ received: true, note: "Already paid" });
-      }
-
-      // 3) Verify with Paystack (source of truth)
-      let verify;
-      try {
-        verify = await paystackVerifyPayment({ reference });
-      } catch (e) {
-        console.log("❌ Paystack verify failed inside webhook:", e?.message || e);
-
-        // Store payload for later debugging
-        payment.providerPayload = {
-          ...(payment.providerPayload || {}),
-          webhook: event,
-          verifyError: e?.message || String(e),
-        };
-        await payment.save();
-
-        // respond 200 to avoid endless retries
-        return res.status(200).json({ received: true, note: "Verify failed" });
-      }
-
-      const verifiedStatus = String(verify?.data?.status || "").trim().toLowerCase();
-      const ok = verifiedStatus === "success";
-
-      if (ok) {
-        await markPaymentPaidAndBroadcast(payment, verify);
-      } else {
-        // keep record for debugging (do not mark paid)
-        payment.providerPayload = {
-          ...(payment.providerPayload || {}),
-          webhook: event,
-          verified: verify,
-        };
-        await payment.save();
-      }
-
-      return res.status(200).json({ received: true });
-    } catch (err) {
-      console.log("❌ Paystack webhook error:", err?.message || err);
-      // Always 200 so Paystack doesn't keep retrying
-      return res.status(200).json({ received: true, error: err.message });
+      // We still verify via Paystack API below.
     }
+
+    const payment = await Payment.findOne({ providerReference: reference });
+    if (!payment) {
+      // Important: still 200 so Paystack doesn't retry forever
+      return res.status(200).json({ received: true, note: "Payment not found (ignored)" });
+    }
+
+    // ✅ Paystack API verify = source of truth
+    let verify;
+    try {
+      verify = await paystackVerifyPayment({ reference });
+    } catch (e) {
+      console.log("❌ Paystack verify failed inside webhook:", e?.message || e);
+      // respond 200 to avoid repeated retries storm
+      return res.status(200).json({ received: true, note: "Verify failed" });
+    }
+
+    if (verify?.paid === true) {
+      await markPaymentPaidAndBroadcast(payment, verify);
+    } else {
+      // Save payload for debugging; do not mark paid
+      payment.providerPayload = verify;
+      await payment.save();
+    }
+
+    return res.status(200).json({ received: true });
+  } catch (err) {
+    console.log("❌ Paystack webhook error:", err?.message || err);
+    // Always 200 so Paystack won't keep retrying (but we log it)
+    return res.status(200).json({ received: true, error: err.message });
   }
-);
+});
 
 /* ============================================================
-   ✅ OPTIONAL: PAYSTACK VERIFY (manual fallback)
+   ✅ PAYSTACK VERIFY (manual fallback)
    GET /api/payments/verify/paystack/:reference
-   - verifies with Paystack
-   - marks PAID + broadcasts job
 ============================================================ */
 
 router.get(
@@ -258,10 +221,14 @@ router.get(
   async (req, res) => {
     try {
       const reference = String(req.params.reference || "").trim();
-      if (!reference) return res.status(400).json({ success: false, message: "reference is required" });
+      if (!reference) {
+        return res.status(400).json({ success: false, message: "reference is required" });
+      }
 
       const payment = await Payment.findOne({ providerReference: reference });
-      if (!payment) return res.status(404).json({ success: false, message: "Payment not found" });
+      if (!payment) {
+        return res.status(404).json({ success: false, message: "Payment not found" });
+      }
 
       // optional tenant/country guard
       const reqCountry = String(req.countryCode || "").trim().toUpperCase();
@@ -274,16 +241,9 @@ router.get(
       }
 
       const verify = await paystackVerifyPayment({ reference });
-      const verifiedStatus = String(verify?.data?.status || "").trim().toLowerCase();
-      const ok = verifiedStatus === "success";
-
-      if (!ok) {
-        payment.providerPayload = {
-          ...(payment.providerPayload || {}),
-          verified: verify,
-        };
+      if (verify?.paid !== true) {
+        payment.providerPayload = verify;
         await payment.save();
-
         return res.status(400).json({ success: false, message: "Payment not successful", verify });
       }
 
@@ -299,6 +259,50 @@ router.get(
       return res.status(500).json({
         success: false,
         message: "Failed to verify payment",
+        error: err.message,
+      });
+    }
+  }
+);
+
+/* ============================================================
+   OPTIONAL: Manual override endpoint (if dashboard hits this route)
+   PATCH /api/payments/job/:jobId/mark-paid
+============================================================ */
+
+router.patch(
+  "/job/:jobId/mark-paid",
+  auth,
+  authorizeRoles(USER_ROLES.ADMIN, USER_ROLES.SUPER_ADMIN),
+  async (req, res) => {
+    try {
+      const jobId = String(req.params.jobId || "").trim();
+      if (!jobId) return res.status(400).json({ success: false, message: "jobId is required" });
+
+      const job = await Job.findById(jobId);
+      if (!job) return res.status(404).json({ success: false, message: "Job not found" });
+
+      let payment =
+        (await Payment.findOne({ job: job._id, status: PAYMENT_STATUSES.PENDING }).sort({
+          createdAt: -1,
+        })) || (await Payment.findOne({ job: job._id }).sort({ createdAt: -1 }));
+
+      if (!payment) {
+        return res.status(404).json({ success: false, message: "Payment not found for job" });
+      }
+
+      await markPaymentPaidAndBroadcast(payment, { manual: true, by: String(req.user?._id || "") });
+
+      return res.status(200).json({
+        success: true,
+        message: "Marked paid + broadcasted ✅",
+        jobId: String(job._id),
+        paymentId: String(payment._id),
+      });
+    } catch (err) {
+      return res.status(500).json({
+        success: false,
+        message: "Failed to mark paid",
         error: err.message,
       });
     }
@@ -529,8 +533,14 @@ router.post(
 
       const reference = `TM-${payment._id}`;
 
-      const frontendBase = String(process.env.FRONTEND_URL || "https://towmech.com").replace(/\/+$/, "");
-      const backendBase = String(process.env.BACKEND_URL || "https://api.towmech.com").replace(/\/+$/, "");
+      const frontendBase = String(process.env.FRONTEND_URL || "https://towmech.com").replace(
+        /\/+$/,
+        ""
+      );
+      const backendBase = String(process.env.BACKEND_URL || "https://api.towmech.com").replace(
+        /\/+$/,
+        ""
+      );
 
       const successUrl = `${frontendBase}/payment-success`;
       const cancelUrl = `${frontendBase}/payment-cancel`;
@@ -590,9 +600,7 @@ router.post(
         null;
 
       const sdkParams =
-        flowType === "SDK"
-          ? (initResponse?.sdkParams || initResponse?.data?.sdkParams || null)
-          : null;
+        flowType === "SDK" ? initResponse?.sdkParams || initResponse?.data?.sdkParams || null : null;
 
       const instruction = buildPaymentInstruction({
         flowType,
