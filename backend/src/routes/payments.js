@@ -17,7 +17,7 @@ import {
   resolvePaymentRoutingForCountry,
 } from "../services/payments/index.js";
 
-// ✅ Paystack verify helper (exists in your backend.zip)
+// ✅ ADD: Paystack verify helper
 import { paystackVerifyPayment } from "../services/payments/providers/paystack.js";
 
 const router = express.Router();
@@ -107,7 +107,7 @@ function buildPaymentInstruction({
 }
 
 /**
- * ✅ Shared: mark PAID + update job + broadcast
+ * ✅ shared "mark paid + update job + broadcast" helper
  */
 async function markPaymentPaidAndBroadcast(payment, payload = null) {
   if (!payment) return null;
@@ -126,7 +126,6 @@ async function markPaymentPaidAndBroadcast(payment, payload = null) {
     job.pricing.bookingFeePaidAt = new Date();
     await job.save();
 
-    // ✅ broadcast after confirmed paid
     await broadcastJobToProviders(job._id);
   }
 
@@ -134,83 +133,147 @@ async function markPaymentPaidAndBroadcast(payment, payload = null) {
 }
 
 /* ============================================================
-   ✅ PAYSTACK WEBHOOK
-   POST /api/payments/webhook/paystack
-   - verify signature (HMAC sha512)
-   - verify with Paystack API
-   - mark paid + broadcast
+   ✅ ADD: PAYMENT OPTIONS (Android calls this FIRST)
+   GET /api/payments/options?jobId=...
+   - returns enabled gateways + flow types from routing
 ============================================================ */
 
-router.post("/webhook/paystack", async (req, res) => {
-  try {
-    // Paystack signature header
-    const sig = String(req.headers["x-paystack-signature"] || "").trim();
-    const secret = String(process.env.PAYSTACK_SECRET_KEY || "").trim();
-
-    // Raw body is set in your app.js (it stores req.rawBody as a UTF-8 string)
-    const rawString = req.rawBody || "";
-    const rawBuf = Buffer.from(rawString, "utf8");
-
-    // Parse body (if express.json already ran globally, req.body is available)
-    const event = req.body || {};
-    const data = event.data || {};
-    const reference = String(data.reference || "").trim();
-
-    if (!reference) {
-      return res.status(200).json({ received: true, note: "No reference" });
-    }
-
-    // ✅ Signature verify (strict if we have everything)
-    if (sig && secret && rawString) {
-      const hash = crypto.createHmac("sha512", secret).update(rawBuf).digest("hex");
-      if (hash !== sig) {
-        console.log("❌ Paystack webhook signature mismatch", { reference });
-        return res.status(401).send("Invalid signature");
-      }
-    } else {
-      console.log("⚠️ Paystack webhook signature not verified (missing header/secret/rawBody)", {
-        hasSig: !!sig,
-        hasSecret: !!secret,
-        hasRaw: !!rawString,
-        reference,
-      });
-      // We still verify via Paystack API below.
-    }
-
-    const payment = await Payment.findOne({ providerReference: reference });
-    if (!payment) {
-      // Important: still 200 so Paystack doesn't retry forever
-      return res.status(200).json({ received: true, note: "Payment not found (ignored)" });
-    }
-
-    // ✅ Paystack API verify = source of truth
-    let verify;
+router.get(
+  "/options",
+  auth,
+  authorizeRoles(USER_ROLES.CUSTOMER, USER_ROLES.ADMIN, USER_ROLES.SUPER_ADMIN),
+  async (req, res) => {
     try {
-      verify = await paystackVerifyPayment({ reference });
-    } catch (e) {
-      console.log("❌ Paystack verify failed inside webhook:", e?.message || e);
-      // respond 200 to avoid repeated retries storm
-      return res.status(200).json({ received: true, note: "Verify failed" });
-    }
+      const jobId = String(req.query.jobId || "").trim();
+      if (!jobId) {
+        return res.status(400).json({ success: false, message: "jobId is required" });
+      }
 
-    if (verify?.paid === true) {
-      await markPaymentPaidAndBroadcast(payment, verify);
-    } else {
-      // Save payload for debugging; do not mark paid
-      payment.providerPayload = verify;
-      await payment.save();
-    }
+      const job = await Job.findById(jobId).lean();
+      if (!job) return res.status(404).json({ success: false, message: "Job not found" });
 
-    return res.status(200).json({ received: true });
-  } catch (err) {
-    console.log("❌ Paystack webhook error:", err?.message || err);
-    // Always 200 so Paystack won't keep retrying (but we log it)
-    return res.status(200).json({ received: true, error: err.message });
+      // Customers can only query their own job
+      if (req.user?.role === USER_ROLES.CUSTOMER) {
+        if (String(job.customer) !== String(req.user._id)) {
+          return res.status(403).json({ success: false, message: "Not authorized" });
+        }
+      }
+
+      const reqCountry = String(req.countryCode || "ZA").trim().toUpperCase();
+      const jobCountry = String(job.countryCode || reqCountry || "ZA").trim().toUpperCase();
+
+      // Guard mismatch
+      if (reqCountry && job.countryCode && reqCountry !== jobCountry) {
+        return res.status(403).json({
+          success: false,
+          message: `Country mismatch. Job belongs to ${jobCountry}`,
+          countryCode: reqCountry,
+          jobCountryCode: jobCountry,
+        });
+      }
+
+      const routing = await resolvePaymentRoutingForCountry(jobCountry);
+
+      const providers = Array.isArray(routing?.providers) ? routing.providers : [];
+
+      const enabledProviders = providers
+        .filter((p) => p && p.enabled !== false)
+        .sort((a, b) => Number(a?.priority ?? 999) - Number(b?.priority ?? 999))
+        .map((p) => {
+          const gateway = String(p.gateway || "").trim().toUpperCase();
+          const flow = normalizeFlowType(p.flowType);
+          return {
+            gateway,
+            paymentFlowType: flow,
+            label: p.label || gateway,
+            priority: Number(p.priority ?? 0),
+            isDefault: String(routing?.defaultProvider || "").toUpperCase() === gateway,
+          };
+        })
+        .filter((p) => p.gateway);
+
+      return res.status(200).json({
+        success: true,
+        countryCode: jobCountry,
+        defaultProvider: routing?.defaultProvider || null,
+        options: enabledProviders,
+      });
+    } catch (err) {
+      return res.status(500).json({
+        success: false,
+        message: "Failed to load payment options",
+        error: err.message,
+      });
+    }
   }
-});
+);
 
 /* ============================================================
-   ✅ PAYSTACK VERIFY (manual fallback)
+   ✅ PAYSTACK WEBHOOK (auto-mark paid)
+   POST /api/payments/webhook/paystack
+============================================================ */
+
+// IMPORTANT: This route captures raw body for signature verify
+router.post(
+  "/webhook/paystack",
+  express.json({
+    verify: (req, res, buf) => {
+      req.rawBody = buf; // buffer
+    },
+  }),
+  async (req, res) => {
+    try {
+      const sig = req.headers["x-paystack-signature"];
+      const secret = (process.env.PAYSTACK_SECRET_KEY || "").trim();
+
+      // Signature verification (best-effort)
+      if (sig && secret && req.rawBody) {
+        const hash = crypto.createHmac("sha512", secret).update(req.rawBody).digest("hex");
+        if (hash !== sig) {
+          console.log("❌ Paystack webhook signature mismatch");
+          return res.status(401).send("Invalid signature");
+        }
+      } else {
+        console.log("⚠️ Paystack webhook signature not verified (missing rawBody or secret)");
+      }
+
+      const event = req.body || {};
+      const data = event.data || {};
+      const reference = String(data.reference || "").trim();
+
+      if (!reference) return res.status(200).json({ received: true, note: "No reference" });
+
+      const payment = await Payment.findOne({ providerReference: reference });
+      if (!payment) {
+        return res.status(200).json({ received: true, note: "Payment not found (ignored)" });
+      }
+
+      let verify;
+      try {
+        verify = await paystackVerifyPayment({ reference });
+      } catch (e) {
+        console.log("❌ Paystack verify failed inside webhook:", e?.message || e);
+        return res.status(200).json({ received: true, note: "Verify failed" });
+      }
+
+      const ok = String(verify?.data?.status || "").toLowerCase() === "success";
+      if (ok) {
+        await markPaymentPaidAndBroadcast(payment, verify);
+      } else {
+        payment.providerPayload = verify;
+        await payment.save();
+      }
+
+      return res.status(200).json({ received: true });
+    } catch (err) {
+      console.log("❌ Paystack webhook error:", err?.message || err);
+      return res.status(200).json({ received: true, error: err.message });
+    }
+  }
+);
+
+/* ============================================================
+   ✅ PAYSTACK VERIFY (fallback)
    GET /api/payments/verify/paystack/:reference
 ============================================================ */
 
@@ -226,11 +289,8 @@ router.get(
       }
 
       const payment = await Payment.findOne({ providerReference: reference });
-      if (!payment) {
-        return res.status(404).json({ success: false, message: "Payment not found" });
-      }
+      if (!payment) return res.status(404).json({ success: false, message: "Payment not found" });
 
-      // optional tenant/country guard
       const reqCountry = String(req.countryCode || "").trim().toUpperCase();
       if (
         reqCountry &&
@@ -241,7 +301,9 @@ router.get(
       }
 
       const verify = await paystackVerifyPayment({ reference });
-      if (verify?.paid !== true) {
+      const ok = String(verify?.data?.status || "").toLowerCase() === "success";
+
+      if (!ok) {
         payment.providerPayload = verify;
         await payment.save();
         return res.status(400).json({ success: false, message: "Payment not successful", verify });
@@ -266,7 +328,7 @@ router.get(
 );
 
 /* ============================================================
-   OPTIONAL: Manual override endpoint (if dashboard hits this route)
+   ✅ MANUAL OVERRIDE (Dashboard button fix)
    PATCH /api/payments/job/:jobId/mark-paid
 ============================================================ */
 
@@ -321,7 +383,6 @@ router.get("/reference/:reference/status", auth, async (req, res) => {
     const payment = await Payment.findOne({ providerReference: reference });
     if (!payment) return res.status(404).json({ message: "Payment not found" });
 
-    // optional tenant/country guard
     const reqCountry = String(req.countryCode || "").trim().toUpperCase();
     if (
       reqCountry &&
@@ -375,7 +436,6 @@ router.post(
 
       const passphrase = (process.env.PAYFAST_PASSPHRASE || "").trim();
 
-      // verify signature multiple ways (raw vs sorted, with pass vs no pass)
       const sigRawWithPass = buildSignatureFromRaw(raw, passphrase);
       const sigRawNoPass = buildSignatureFromRaw(raw, "");
       const sigSortedWithPass = buildSignatureSorted(data, passphrase);
@@ -404,20 +464,7 @@ router.post(
         return res.status(200).send("Signature mismatch");
       }
 
-      payment.status = PAYMENT_STATUSES.PAID;
-      payment.paidAt = new Date();
-      payment.providerPayload = data;
-      await payment.save();
-
-      const job = await Job.findById(payment.job);
-      if (!job) return res.status(200).send("Job not found");
-
-      if (!job.pricing) job.pricing = {};
-      job.pricing.bookingFeeStatus = "PAID";
-      job.pricing.bookingFeePaidAt = new Date();
-      await job.save();
-
-      await broadcastJobToProviders(job._id);
+      await markPaymentPaidAndBroadcast(payment, data);
 
       return res.status(200).send("ITN Processed ✅");
     } catch (err) {
@@ -429,8 +476,6 @@ router.post(
 
 /* ============================================================
    CREATE PAYMENT
-   - CountryServiceConfig routing decides gateway + flowType
-   - ALWAYS returns: { instruction: PaymentInstruction }
 ============================================================ */
 
 router.post(
@@ -460,9 +505,6 @@ router.post(
         return res.status(400).json({ message: "Booking fee not set" });
       }
 
-      /* ======================
-         COUNTRY ISOLATION
-      ====================== */
       const reqCountry = String(req.countryCode || "ZA").trim().toUpperCase();
       const jobCountry = String(job.countryCode || reqCountry || "ZA").trim().toUpperCase();
 
@@ -474,20 +516,13 @@ router.post(
         });
       }
 
-      /* ======================
-         ROUTING
-      ====================== */
       const routing = await resolvePaymentRoutingForCountry(jobCountry);
 
-      // getActivePaymentGateway already returns enum, but normalize anyway
       const activeGatewayEnum = await getActivePaymentGateway(jobCountry);
       const gatewayEnum = normalizeGatewayKeyToEnum(activeGatewayEnum);
 
       const gatewayAdapter = await getGatewayAdapter(jobCountry);
 
-      /* ======================
-         PAYMENT RECORD
-      ====================== */
       let payment = await Payment.findOne({
         job: job._id,
         countryCode: jobCountry,
@@ -545,12 +580,8 @@ router.post(
       const successUrl = `${frontendBase}/payment-success`;
       const cancelUrl = `${frontendBase}/payment-cancel`;
 
-      const notifyUrl =
-        gatewayEnum === "PAYFAST" ? `${backendBase}/api/payments/notify/payfast` : null;
+      const notifyUrl = gatewayEnum === "PAYFAST" ? `${backendBase}/api/payments/notify/payfast` : null;
 
-      /* ======================
-         CALL ADAPTER
-      ====================== */
       let initResponse;
       try {
         initResponse = await gatewayAdapter.createPayment({
@@ -581,9 +612,6 @@ router.post(
       payment.providerPayload = initResponse;
       await payment.save();
 
-      /* ======================
-         FLOW TYPE (from routing)
-      ====================== */
       const providerDef = (routing.providers || []).find(
         (p) => String(p.gateway || "").toUpperCase() === String(gatewayEnum).toUpperCase()
       );
