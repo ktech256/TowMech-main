@@ -1,15 +1,16 @@
 // backend/src/routes/adminPayments.js
 import express from "express";
 import Payment, { PAYMENT_STATUSES } from "../models/Payment.js";
+import Job from "../models/Job.js";
 import auth from "../middleware/auth.js";
 import authorizeRoles from "../middleware/role.js";
 import { USER_ROLES } from "../models/User.js";
 
+// ✅ ADD: Paystack refund helper (real refund)
+import { paystackRefundPayment } from "../services/payments/providers/paystack.js";
+
 const router = express.Router();
 
-/**
- * ✅ Resolve active workspace country (Tenant)
- */
 const resolveCountryCode = (req) => {
   return (
     req.countryCode ||
@@ -23,11 +24,6 @@ const resolveCountryCode = (req) => {
     .toUpperCase();
 };
 
-/**
- * ✅ Enforce workspace lock:
- * - SuperAdmin can use requested workspace
- * - Admin without canSwitchCountryWorkspace => forced to user.countryCode
- */
 const enforceWorkspaceAccess = (req, res, workspaceCountryCode) => {
   const role = req.user?.role;
   const userCountry = String(req.user?.countryCode || "ZA").toUpperCase();
@@ -47,18 +43,6 @@ const enforceWorkspaceAccess = (req, res, workspaceCountryCode) => {
   return true;
 };
 
-/**
- * ✅ Permission enforcement helper
- *
- * NOTE:
- * Your User model has:
- * - canApprovePayments
- * - canRefundPayments
- *
- * So we map:
- * - View/list payments => canApprovePayments (or SuperAdmin)
- * - Refund payment => canRefundPayments (or SuperAdmin)
- */
 const requirePermission = (req, res, permissionKey) => {
   if (req.user.role === USER_ROLES.SUPER_ADMIN) return true;
 
@@ -76,9 +60,6 @@ const requirePermission = (req, res, permissionKey) => {
   return false;
 };
 
-/**
- * ✅ Block Suspended / Banned admins
- */
 const blockRestrictedAdmins = (req, res) => {
   if (req.user.accountStatus?.isSuspended) {
     res.status(403).json({ message: "Your admin account is suspended ❌" });
@@ -91,14 +72,6 @@ const blockRestrictedAdmins = (req, res) => {
   return false;
 };
 
-/**
- * ✅ Insurance check helper
- * Blocks refunds for insurance jobs
- *
- * We assume Job model stores insurance info on:
- * job.insurance?.enabled === true
- * If your job schema is different, adjust this checker only.
- */
 const isInsuranceJob = (jobDoc) => {
   try {
     return !!(jobDoc && jobDoc.insurance && jobDoc.insurance.enabled);
@@ -107,10 +80,16 @@ const isInsuranceJob = (jobDoc) => {
   }
 };
 
-/**
- * ✅ Get ALL payments (PER COUNTRY)
- * GET /api/admin/payments
- */
+function normalizeProviderKey(v) {
+  return String(v || "").trim().toUpperCase();
+}
+
+function resolveRefundRequestedStatus() {
+  const v = PAYMENT_STATUSES?.REFUND_REQUESTED;
+  if (v) return v;
+  return PAYMENT_STATUSES?.PAID || "PAID";
+}
+
 router.get(
   "/",
   auth,
@@ -146,10 +125,6 @@ router.get(
   }
 );
 
-/**
- * ✅ Get payment by ID (PER COUNTRY)
- * GET /api/admin/payments/:id
- */
 router.get(
   "/:id",
   auth,
@@ -185,16 +160,6 @@ router.get(
   }
 );
 
-/**
- * ✅ Admin manually marks payment as REFUNDED (PER COUNTRY)
- * PATCH /api/admin/payments/:id/refund
- *
- * NEW:
- * - Only PAID payments can be refunded
- * - Insurance payments cannot be refunded
- * - Accepts refund reason from body: { reason: "..." }
- * - Saves refundReason on Payment
- */
 router.patch(
   "/:id/refund",
   auth,
@@ -216,14 +181,12 @@ router.patch(
 
       if (!payment) return res.status(404).json({ message: "Payment not found" });
 
-      // ✅ Only PAID can be refunded
       if (payment.status !== PAYMENT_STATUSES.PAID) {
         return res.status(400).json({
           message: "Only PAID payments can be refunded ❌",
         });
       }
 
-      // ✅ Block insurance refunds
       if (isInsuranceJob(payment.job)) {
         return res.status(400).json({
           message: "Insurance payments cannot be refunded ❌",
@@ -232,13 +195,58 @@ router.patch(
 
       const reason = req.body?.reason ? String(req.body.reason).trim() : null;
 
-      payment.status = PAYMENT_STATUSES.REFUNDED;
-      payment.refundedAt = new Date();
-      payment.refundReference = `MANUAL_REFUND-${Date.now()}`;
+      // ✅ REAL gateway refund attempt (Paystack supported)
+      const provider = normalizeProviderKey(payment.provider);
+      let gatewayRefund = null;
+
+      if (provider === "PAYSTACK") {
+        const reference = String(payment.providerReference || "").trim();
+        if (!reference) {
+          return res.status(400).json({ message: "Missing providerReference for PAYSTACK refund" });
+        }
+
+        gatewayRefund = await paystackRefundPayment({
+          reference,
+          amount: payment.amount,
+          currency: payment.currency,
+          reason: reason || "admin_refund",
+        });
+
+        // accepted -> mark as refund requested (Paystack can be async)
+        payment.status = resolveRefundRequestedStatus();
+        payment.refundReference = gatewayRefund?.refundReference || `PAYSTACK_REFUND-${Date.now()}`;
+      } else {
+        // Other gateways not integrated yet (DB only)
+        payment.status = resolveRefundRequestedStatus();
+        payment.refundReference = `MANUAL_REFUND_REQ-${Date.now()}`;
+      }
+
+      payment.refundedAt = new Date(); // "requested at" timestamp
       payment.refundedBy = req.user._id;
       payment.refundReason = reason;
 
+      const existingPayload =
+        payment.providerPayload && typeof payment.providerPayload === "object"
+          ? payment.providerPayload
+          : {};
+      payment.providerPayload = {
+        ...existingPayload,
+        refund: gatewayRefund || { ok: true, mode: "DB_ONLY", provider },
+      };
+
       await payment.save();
+
+      // ✅ Update job pricing status too (if job exists)
+      const jobId = payment.job?._id || payment.job;
+      if (jobId) {
+        const job = await Job.findById(jobId);
+        if (job) {
+          if (!job.pricing) job.pricing = {};
+          job.pricing.bookingFeeStatus = "REFUND_REQUESTED";
+          job.pricing.bookingFeeRefundedAt = new Date();
+          await job.save();
+        }
+      }
 
       const populatedPayment = await Payment.findById(payment._id)
         .populate("customer", "name email role countryCode")
@@ -247,9 +255,13 @@ router.patch(
         .populate("refundedBy", "name email role");
 
       return res.status(200).json({
-        message: "Payment marked as refunded ✅",
+        message:
+          provider === "PAYSTACK"
+            ? "Refund requested on Paystack ✅ (may take time to complete)"
+            : "Refund marked as requested ✅ (gateway not integrated)",
         countryCode: workspaceCountryCode,
         payment: populatedPayment,
+        gatewayRefund,
       });
     } catch (err) {
       return res.status(500).json({

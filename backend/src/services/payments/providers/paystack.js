@@ -123,3 +123,61 @@ export async function paystackVerifyPayment(payload = {}) {
     raw: data,
   };
 }
+
+/**
+ * ✅ NEW: Paystack Refund
+ * Docs: POST /refund
+ * body: { transaction: <id|reference>, amount?: <kobo> }
+ *
+ * NOTE: Refund may be async on Paystack.
+ * We treat "status:true" response as accepted.
+ */
+export async function paystackRefundPayment(payload = {}) {
+  const baseUrl = getBaseUrl(payload);
+
+  const transaction = String(payload.transaction || payload.reference || "").trim();
+  if (!transaction) throw new Error("Paystack refund requires transaction (id or reference)");
+
+  const body = { transaction };
+
+  // Optional partial refund
+  if (payload.amount !== undefined && payload.amount !== null) {
+    const n = Number(payload.amount);
+    if (Number.isFinite(n) && n > 0) {
+      body.amount = toMinorUnits(n);
+    }
+  }
+
+  // Optional metadata / reason (Paystack ignores unknown fields, but safe)
+  const reason = payload.reason ? String(payload.reason).trim() : null;
+  if (reason) body.reason = reason;
+
+  const res = await axios.post(`${baseUrl}/refund`, body, {
+    headers: buildBearerHeaders(payload),
+    timeout: 30000,
+  });
+
+  const data = res?.data;
+  if (!data?.status) throw new Error(data?.message || "Paystack refund failed");
+
+  // Paystack response shape: { status:true, message:"", data:{ ... } }
+  const refundData = data?.data || null;
+
+  // Some accounts return: data.reference / data.transaction / data.status
+  const refundReference =
+    refundData?.reference ||
+    refundData?.refund_reference ||
+    refundData?.id ||
+    `PAYSTACK_REFUND-${Date.now()}`;
+
+  const refundStatus = refundData?.status || null;
+
+  return {
+    provider: "paystack",
+    method: "paystack",
+    transaction,
+    refundReference,
+    refundStatus,
+    raw: data,
+  };
+}

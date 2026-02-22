@@ -1,4 +1,3 @@
-// src/routes/jobs.js
 // backend/src/routes/jobs.js
 import express from "express";
 import mongoose from "mongoose";
@@ -22,6 +21,9 @@ import { calculateJobPricing } from "../utils/calculateJobPricing.js";
 
 // ✅ INSURANCE SERVICES
 import { validateInsuranceCode, markInsuranceCodeUsed } from "../services/insurance/codeService.js";
+
+// ✅ ADD: Paystack refund helper (real refund)
+import { paystackRefundPayment } from "../services/payments/providers/paystack.js";
 
 const router = express.Router();
 
@@ -185,12 +187,67 @@ function haversineDistanceMeters(lat1, lng1, lat2, lng2) {
   return Math.round(haversineDistanceKm(lat1, lng1, lat2, lng2) * 1000);
 }
 
+/* ============================================================
+   ✅ REFUND HELPERS (REAL gateway refund)
+============================================================ */
+
 /**
- * Helper: validate insurance payload (if present) and return waiver decision
+ * Some codebases don't include REFUND_REQUESTED in PAYMENT_STATUSES.
+ * This helper picks the best available status safely.
  */
+function resolveRefundRequestedStatus() {
+  const v = PAYMENT_STATUSES?.REFUND_REQUESTED;
+  if (v) return v;
+  // fallback: keep PAID until actually refunded (but we still store refundReference/refundReason)
+  return PAYMENT_STATUSES?.PAID || "PAID";
+}
+
+function normalizeProviderKey(v) {
+  return String(v || "").trim().toUpperCase();
+}
+
+/**
+ * ✅ Attempt refund via gateway (Paystack now).
+ * Designed to be expandable for other gateways later.
+ *
+ * Returns:
+ * { ok: boolean, mode: "GATEWAY"|"DB_ONLY", refundResponse?, message? }
+ */
+async function attemptGatewayRefund({ payment, reason }) {
+  const provider = normalizeProviderKey(payment?.provider);
+
+  // Only refund if it was actually paid
+  if (!payment || payment.status !== PAYMENT_STATUSES.PAID) {
+    return { ok: false, mode: "DB_ONLY", message: "Payment is not PAID" };
+  }
+
+  // Paystack real refund
+  if (provider === "PAYSTACK") {
+    const reference = String(payment.providerReference || "").trim();
+    if (!reference) return { ok: false, mode: "DB_ONLY", message: "Missing providerReference" };
+
+    const refundRes = await paystackRefundPayment({
+      reference,
+      amount: payment.amount,
+      currency: payment.currency,
+      reason,
+    });
+
+    return { ok: true, mode: "GATEWAY", refundResponse: refundRes };
+  }
+
+  // Other gateways: not implemented here yet
+  return {
+    ok: true,
+    mode: "DB_ONLY",
+    message: `Gateway refund not implemented for ${provider}. Marked REFUND_REQUESTED only.`,
+  };
+}
+
+/* ============================================================
+   Helper: validate insurance payload (if present) and return waiver decision
+============================================================ */
 async function resolveInsuranceWaiver({ req, requestCountryCode, services }) {
-  // ✅ Accept both the new nested payload (insurance: { enabled, code, partnerId })
-  // and legacy flat fields from older mobile builds.
   const insurance =
     req.body?.insurance && typeof req.body.insurance === "object"
       ? req.body.insurance
@@ -204,14 +261,12 @@ async function resolveInsuranceWaiver({ req, requestCountryCode, services }) {
         }
       : null;
 
-  // If app did not send insurance object -> no waiver
   if (!insurance || typeof insurance !== "object") {
     return { waived: false };
   }
 
   const enabledInCountry = Boolean(services?.insuranceEnabled);
 
-  // If country doesn't allow insurance but app sent it -> block
   if (!enabledInCountry) {
     return {
       waived: false,
@@ -242,7 +297,6 @@ async function resolveInsuranceWaiver({ req, requestCountryCode, services }) {
     };
   }
 
-  // Validate code using existing service
   const validation = await validateInsuranceCode({
     partnerId,
     code,
@@ -265,7 +319,6 @@ async function resolveInsuranceWaiver({ req, requestCountryCode, services }) {
     };
   }
 
-  // ✅ derive partnerId correctly from validateInsuranceCode response
   const derivedPartnerId =
     partnerId ||
     (validation?.code?.partnerId ? String(validation.code.partnerId).trim() : null) ||
@@ -318,7 +371,6 @@ router.post("/preview", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, r
       });
     }
 
-    // ✅ Enforce per-country service toggle
     const serviceGate = await enforceServiceEnabledOrThrow({
       countryCode: requestCountryCode,
       roleNeeded,
@@ -352,7 +404,6 @@ router.post("/preview", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, r
       ? normalizeTowTruckType(towTruckTypeNeeded)
       : null;
 
-    // ✅ PricingConfig is parallel per country (already)
     let config = await PricingConfig.findOne({ countryCode: requestCountryCode });
     if (!config) config = await PricingConfig.create({ countryCode: requestCountryCode });
 
@@ -379,9 +430,6 @@ router.post("/preview", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, r
 
     const countryCurrency = await getCountryCurrency(requestCountryCode);
 
-    // ===========================
-    // ✅ Insurance waiver (PREVIEW)
-    // ===========================
     const waiver = await resolveInsuranceWaiver({
       req,
       requestCountryCode,
@@ -394,7 +442,6 @@ router.post("/preview", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, r
 
     const forceBookingFeeZero = waiver.waived === true;
 
-    // ✅ MECHANIC PREVIEW
     if (roleNeeded === USER_ROLES.MECHANIC) {
       const pricing = await calculateJobPricing({
         roleNeeded,
@@ -411,7 +458,6 @@ router.post("/preview", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, r
 
       if (!pricing.currency) pricing.currency = countryCurrency;
 
-      // insurance override
       if (forceBookingFeeZero) pricing.bookingFee = 0;
 
       const providers = await findNearbyProviders({
@@ -457,7 +503,6 @@ router.post("/preview", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, r
       });
     }
 
-    // ✅ TOWTRUCK PREVIEW (single type)
     if (normalizedTowTruckTypeNeeded) {
       const pricing = await calculateJobPricing({
         roleNeeded,
@@ -506,7 +551,6 @@ router.post("/preview", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, r
       });
     }
 
-    // ✅ TOWTRUCK PREVIEW (list all types)
     const resultsByTowTruckType = {};
 
     for (const type of towTruckTypes) {
@@ -601,7 +645,6 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
 
     const requestCountryCode = resolveReqCountryCode(req);
 
-    // ✅ Enforce per-country service toggle
     const serviceGate = await enforceServiceEnabledOrThrow({
       countryCode: requestCountryCode,
       roleNeeded: req.body?.roleNeeded,
@@ -673,9 +716,6 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
       }
     }
 
-    // ===========================
-    // ✅ Insurance waiver (CREATE)
-    // ===========================
     const waiver = await resolveInsuranceWaiver({
       req,
       requestCountryCode,
@@ -730,10 +770,8 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
       countryCode: requestCountryCode,
     });
 
-    // currency safety
     if (!pricing.currency) pricing.currency = await getCountryCurrency(requestCountryCode);
 
-    // ✅ Insurance override booking fee
     if (insuranceWaived) pricing.bookingFee = 0;
 
     const hasDropoff =
@@ -747,7 +785,6 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
         ? { ...pricing, estimatedTotal: 0, estimatedDistanceKm: 0 }
         : pricing;
 
-    // Decide booking fee status
     const bookingFeeStatus = insuranceWaived ? "PAID" : "PENDING";
     const bookingFeePaidAt = insuranceWaived ? new Date() : null;
 
@@ -776,7 +813,6 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
       status: JOB_STATUSES.CREATED,
       paymentMode,
 
-      // ✅ store insurance audit info
       insurance: insuranceWaived
         ? {
             enabled: true,
@@ -804,19 +840,16 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
       },
     });
 
-    // ✅ Mark insurance code used ONLY AFTER job is created successfully
-    // (Fix here is partnerId derivation via resolveInsuranceWaiver, so partnerId is no longer null)
     if (insuranceWaived) {
       try {
         await markInsuranceCodeUsed({
-          partnerId: waiver.partnerId, // now correctly derived
+          partnerId: waiver.partnerId,
           code: waiver.code,
           countryCode: requestCountryCode,
           userId: req.user?._id || null,
-          jobId: job._id, // harmless if service ignores
+          jobId: job._id,
         });
       } catch (err) {
-        // If code usage fails, rollback job (safer than free job)
         await Job.findByIdAndDelete(job._id);
         return res.status(500).json({
           message: "Insurance code could not be locked. Try again.",
@@ -826,21 +859,9 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
       }
     }
 
-    /**
-     * ✅ FIX: prevent duplicate “PAID” rows for same insurance job
-     *
-     * Previous logic created TWO payments when insuranceWaived:
-     *  - insurancePayment (PAID / INSURANCE)
-     *  - payment (PAID / INSURANCE) because bookingFee == 0
-     *
-     * New logic:
-     *  - Create ONLY ONE payment record per job/provider/country.
-     *  - Idempotent: if it already exists, reuse it (safe on retries).
-     */
     let payment = null;
 
     if (Number(safePricing.bookingFee) > 0) {
-      // Normal booking fee flow: one pending payment
       payment = await Payment.create({
         job: job._id,
         customer: req.user._id,
@@ -851,11 +872,9 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
         countryCode: requestCountryCode,
       });
     } else {
-      // bookingFee == 0 (insurance / free booking): create ONE PAID payment
       const provider = insuranceWaived ? "INSURANCE" : "FREE_BOOKING";
       const providerReference = insuranceWaived ? waiver.code || null : null;
 
-      // Try to find existing PAID first (handles retries & prevents duplicates)
       payment = await Payment.findOne({
         job: job._id,
         countryCode: requestCountryCode,
@@ -877,7 +896,6 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
             countryCode: requestCountryCode,
           });
         } catch (e) {
-          // If unique index blocked a duplicate, fetch the existing one
           if (e && (e.code === 11000 || String(e.message || "").toLowerCase().includes("duplicate"))) {
             payment = await Payment.findOne({
               job: job._id,
@@ -891,7 +909,6 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
         }
       }
 
-      // ✅ If insurance waived: broadcast now (same as when payment is marked paid)
       if (insuranceWaived) {
         try {
           await broadcastJobToProviders(job._id, requestCountryCode);
@@ -901,7 +918,6 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
       }
     }
 
-    // ✅ If booking fee is already PAID (insurance / free booking), broadcast immediately
     if (job?.pricing?.bookingFeeStatus === "PAID") {
       try {
         await broadcastJobToProviders(job._id);
@@ -984,7 +1000,7 @@ router.delete("/:id/draft", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (re
 
 /* ============================================================
    ✅ CUSTOMER "MY JOBS" ROUTES
-   ============================================================ */
+============================================================ */
 
 router.get("/my/active", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => {
   try {
@@ -1191,10 +1207,59 @@ router.patch("/:id/cancel", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (re
 
     const payment = await Payment.findOne({ job: job._id }).sort({ createdAt: -1 });
 
+    // ✅ UPDATED: actually attempt gateway refund if eligible
+    let refundResult = null;
+
     if (payment) {
       if (refundBookingFee) {
-        payment.status = PAYMENT_STATUSES.REFUNDED || PAYMENT_STATUSES.CANCELLED;
-        await payment.save();
+        if (payment.status === PAYMENT_STATUSES.PAID) {
+          try {
+            refundResult = await attemptGatewayRefund({ payment, reason: refundReason });
+
+            // If gateway refund accepted, mark REFUND_REQUESTED (or fallback)
+            payment.status = resolveRefundRequestedStatus();
+            payment.refundReason = refundReason;
+            payment.refundedAt = new Date(); // "requested at" timestamp
+            payment.refundReference = `REFUND_REQ-${Date.now()}`;
+
+            // attach refund payload safely
+            const existingPayload =
+              payment.providerPayload && typeof payment.providerPayload === "object"
+                ? payment.providerPayload
+                : {};
+            payment.providerPayload = {
+              ...existingPayload,
+              refund: refundResult?.refundResponse || refundResult,
+            };
+
+            await payment.save();
+          } catch (e) {
+            console.error("❌ Refund attempt failed:", e?.message || e);
+
+            // Still record intent (do not lie by marking REFUNDED)
+            payment.status = resolveRefundRequestedStatus();
+            payment.refundReason = refundReason;
+            payment.refundedAt = new Date();
+            payment.refundReference = `REFUND_REQ_FAILED-${Date.now()}`;
+
+            const existingPayload =
+              payment.providerPayload && typeof payment.providerPayload === "object"
+                ? payment.providerPayload
+                : {};
+            payment.providerPayload = {
+              ...existingPayload,
+              refund: { ok: false, error: e?.message || String(e) },
+            };
+
+            await payment.save();
+          }
+        } else {
+          // If it was never paid, cancel it
+          if (payment.status === PAYMENT_STATUSES.PENDING) {
+            payment.status = PAYMENT_STATUSES.CANCELLED;
+            await payment.save();
+          }
+        }
       } else {
         if (payment.status === PAYMENT_STATUSES.PENDING) {
           payment.status = PAYMENT_STATUSES.CANCELLED;
@@ -1209,6 +1274,7 @@ router.patch("/:id/cancel", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (re
       refund: {
         bookingFeeRefunded: refundBookingFee,
         reason: refundReason,
+        refundAttempt: refundResult,
         windows: {
           cancelRefundWindowMinutes: 3,
           providerNoShowRefundMinutes: 45,
@@ -1275,7 +1341,7 @@ router.patch("/:id/status", auth, async (req, res) => {
         if (!Number.isFinite(pickupLat) || !Number.isFinite(pickupLng)) {
           return res.status(400).json({
             code: "PICKUP_LOCATION_INVALID",
-            message: "Pickup location is invalid. Cannot start job.",
+            message: "Pickup location is invalid. Cannot start this job.",
             pickupCoords,
           });
         }
