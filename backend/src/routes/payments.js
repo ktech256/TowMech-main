@@ -133,36 +133,31 @@ async function markPaymentPaidAndBroadcast(payment, payload = null) {
 }
 
 /* ============================================================
-   ✅ ADD: PAYMENT OPTIONS (Android calls this FIRST)
+   ✅ PAYMENT OPTIONS (Android needs this)
    GET /api/payments/options?jobId=...
-   - returns enabled gateways + flow types from routing
+   - returns routing.providers[] so the app can choose gateway/flow
 ============================================================ */
 
 router.get(
   "/options",
   auth,
-  authorizeRoles(USER_ROLES.CUSTOMER, USER_ROLES.ADMIN, USER_ROLES.SUPER_ADMIN),
+  authorizeRoles(USER_ROLES.CUSTOMER),
   async (req, res) => {
     try {
       const jobId = String(req.query.jobId || "").trim();
-      if (!jobId) {
-        return res.status(400).json({ success: false, message: "jobId is required" });
-      }
+      if (!jobId) return res.status(400).json({ success: false, message: "jobId is required" });
 
       const job = await Job.findById(jobId).lean();
       if (!job) return res.status(404).json({ success: false, message: "Job not found" });
 
       // Customers can only query their own job
-      if (req.user?.role === USER_ROLES.CUSTOMER) {
-        if (String(job.customer) !== String(req.user._id)) {
-          return res.status(403).json({ success: false, message: "Not authorized" });
-        }
+      if (String(job.customer) !== String(req.user?._id)) {
+        return res.status(403).json({ success: false, message: "Not authorized" });
       }
 
+      // country isolation (same rule as /create)
       const reqCountry = String(req.countryCode || "ZA").trim().toUpperCase();
       const jobCountry = String(job.countryCode || reqCountry || "ZA").trim().toUpperCase();
-
-      // Guard mismatch
       if (reqCountry && job.countryCode && reqCountry !== jobCountry) {
         return res.status(403).json({
           success: false,
@@ -174,29 +169,23 @@ router.get(
 
       const routing = await resolvePaymentRoutingForCountry(jobCountry);
 
-      const providers = Array.isArray(routing?.providers) ? routing.providers : [];
-
-      const enabledProviders = providers
+      // Return normalized options array
+      const options = (routing?.providers || [])
         .filter((p) => p && p.enabled !== false)
-        .sort((a, b) => Number(a?.priority ?? 999) - Number(b?.priority ?? 999))
-        .map((p) => {
-          const gateway = String(p.gateway || "").trim().toUpperCase();
-          const flow = normalizeFlowType(p.flowType);
-          return {
-            gateway,
-            paymentFlowType: flow,
-            label: p.label || gateway,
-            priority: Number(p.priority ?? 0),
-            isDefault: String(routing?.defaultProvider || "").toUpperCase() === gateway,
-          };
-        })
-        .filter((p) => p.gateway);
+        .sort((a, b) => Number(a.priority || 999) - Number(b.priority || 999))
+        .map((p) => ({
+          gateway: String(p.gateway || "").trim().toUpperCase(),
+          paymentFlowType: normalizeFlowType(p.flowType),
+          label: p.label || String(p.gateway || "").trim(),
+          priority: Number(p.priority || 0),
+        }))
+        .filter((o) => o.gateway);
 
-      return res.status(200).json({
+      return res.json({
         success: true,
         countryCode: jobCountry,
-        defaultProvider: routing?.defaultProvider || null,
-        options: enabledProviders,
+        defaultProvider: routing?.defaultProvider || routing?.defaultProviderKey || null,
+        options,
       });
     } catch (err) {
       return res.status(500).json({
