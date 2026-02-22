@@ -107,10 +107,55 @@ function buildPaymentInstruction({
 }
 
 /**
+ * ✅ Refund alignment helpers
+ * - Do NOT allow late "paid" signals (webhook/verify/ITN) to overwrite a refund state
+ * - Do NOT broadcast if payment is refunded/refund-requested/cancelled
+ */
+function isRefundRequestedStatus(status) {
+  const s = String(status || "").toUpperCase();
+  const rr = PAYMENT_STATUSES?.REFUND_REQUESTED
+    ? String(PAYMENT_STATUSES.REFUND_REQUESTED).toUpperCase()
+    : "REFUND_REQUESTED";
+  return s === rr;
+}
+
+function isRefundedStatus(status) {
+  const s = String(status || "").toUpperCase();
+  const r = PAYMENT_STATUSES?.REFUNDED
+    ? String(PAYMENT_STATUSES.REFUNDED).toUpperCase()
+    : "REFUNDED";
+  return s === r;
+}
+
+function isCancelledStatus(status) {
+  const s = String(status || "").toUpperCase();
+  const c = PAYMENT_STATUSES?.CANCELLED
+    ? String(PAYMENT_STATUSES.CANCELLED).toUpperCase()
+    : "CANCELLED";
+  return s === c;
+}
+
+function isRefundFlowBlocked(status) {
+  // Any of these states must NEVER be overwritten back to PAID by late provider signals.
+  return isRefundRequestedStatus(status) || isRefundedStatus(status) || isCancelledStatus(status);
+}
+
+/**
  * ✅ shared "mark paid + update job + broadcast" helper
+ * (Refund-aligned: will not overwrite refund/cancel states)
  */
 async function markPaymentPaidAndBroadcast(payment, payload = null) {
   if (!payment) return null;
+
+  // ✅ REFUND ALIGNMENT: don't override refund/cancel states
+  if (isRefundFlowBlocked(payment.status)) {
+    // Do not change anything; keep provider payload for audit if provided
+    if (payload) {
+      payment.providerPayload = payload;
+      await payment.save();
+    }
+    return payment;
+  }
 
   if (payment.status !== PAYMENT_STATUSES.PAID) {
     payment.status = PAYMENT_STATUSES.PAID;
@@ -251,6 +296,7 @@ router.post(
         verify?.paid === true || String(verify?.status || "").toLowerCase() === "success";
 
       if (ok) {
+        // ✅ REFUND ALIGNMENT: markPaymentPaidAndBroadcast will not override refund/cancel states
         await markPaymentPaidAndBroadcast(payment, verify?.raw || verify);
       } else {
         payment.providerPayload = verify?.raw || verify;
@@ -305,13 +351,14 @@ router.get(
         return res.status(400).json({ success: false, message: "Payment not successful", verify });
       }
 
+      // ✅ REFUND ALIGNMENT: don't override refund/cancel states
       await markPaymentPaidAndBroadcast(payment, verify?.raw || verify);
 
       return res.status(200).json({
         success: true,
-        message: "Payment verified + marked PAID ✅",
+        message: "Payment verified + processed ✅",
         reference,
-        status: PAYMENT_STATUSES.PAID,
+        status: payment.status, // keep actual status (PAID / REFUND_REQUESTED / REFUNDED / CANCELLED)
       });
     } catch (err) {
       return res.status(500).json({
@@ -347,6 +394,15 @@ router.patch(
 
       if (!payment) {
         return res.status(404).json({ success: false, message: "Payment not found for job" });
+      }
+
+      // ✅ REFUND ALIGNMENT: avoid manually marking paid if refund/cancel state
+      if (isRefundFlowBlocked(payment.status)) {
+        return res.status(400).json({
+          success: false,
+          message: `Cannot mark paid because payment is ${payment.status}`,
+          status: payment.status,
+        });
       }
 
       await markPaymentPaidAndBroadcast(payment, { manual: true, by: String(req.user?._id || "") });
@@ -388,15 +444,28 @@ router.get("/reference/:reference/status", auth, async (req, res) => {
       return res.status(403).json({ message: "Country mismatch" });
     }
 
+    const refundRequested = isRefundRequestedStatus(payment.status);
+    const refunded = isRefundedStatus(payment.status);
+
     return res.status(200).json({
       success: true,
       reference,
       status: payment.status,
+
+      // ✅ keep original "paid" meaning (only true when PAID)
       paid: payment.status === PAYMENT_STATUSES.PAID,
+
+      // ✅ add refund signals (non-breaking additions)
+      refundRequested,
+      refunded,
+
       amount: payment.amount,
       currency: payment.currency,
       gateway: payment.provider,
       paidAt: payment.paidAt || null,
+      refundedAt: payment.refundedAt || null,
+      refundReference: payment.refundReference || null,
+      refundReason: payment.refundReason || null,
     });
   } catch (err) {
     return res.status(500).json({ message: "Failed to load status", error: err.message });
@@ -453,6 +522,11 @@ router.post(
 
       if (payment.status === PAYMENT_STATUSES.PAID) {
         return res.status(200).send("Already paid");
+      }
+
+      // ✅ REFUND ALIGNMENT: don't overwrite refund/cancel states due to late ITNs
+      if (isRefundFlowBlocked(payment.status)) {
+        return res.status(200).send(`Ignored: payment is ${payment.status}`);
       }
 
       if (!signatureMatches) {
@@ -576,7 +650,8 @@ router.post(
       const successUrl = `${frontendBase}/payment-success`;
       const cancelUrl = `${frontendBase}/payment-cancel`;
 
-      const notifyUrl = gatewayEnum === "PAYFAST" ? `${backendBase}/api/payments/notify/payfast` : null;
+      const notifyUrl =
+        gatewayEnum === "PAYFAST" ? `${backendBase}/api/payments/notify/payfast` : null;
 
       let initResponse;
       try {
@@ -624,7 +699,9 @@ router.post(
         null;
 
       const sdkParams =
-        flowType === "SDK" ? initResponse?.sdkParams || initResponse?.data?.sdkParams || null : null;
+        flowType === "SDK"
+          ? initResponse?.sdkParams || initResponse?.data?.sdkParams || null
+          : null;
 
       const instruction = buildPaymentInstruction({
         flowType,
