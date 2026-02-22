@@ -6,7 +6,7 @@ import auth from "../middleware/auth.js";
 import authorizeRoles from "../middleware/role.js";
 import { USER_ROLES } from "../models/User.js";
 
-// ✅ ADD: Paystack refund helper (real refund)
+// ✅ Paystack refund helper (real refund)
 import { paystackRefundPayment } from "../services/payments/providers/paystack.js";
 
 const router = express.Router();
@@ -207,21 +207,22 @@ router.patch(
 
         gatewayRefund = await paystackRefundPayment({
           reference,
-          amount: payment.amount,
+          amount: payment.amount, // MAJOR units -> converted in helper
           currency: payment.currency,
           reason: reason || "admin_refund",
         });
 
-        // accepted -> mark as refund requested (Paystack can be async)
         payment.status = resolveRefundRequestedStatus();
-        payment.refundReference = gatewayRefund?.refundReference || `PAYSTACK_REFUND-${Date.now()}`;
+        payment.refundReference =
+          gatewayRefund?.refundReference ||
+          gatewayRefund?.raw?.data?.reference ||
+          `PAYSTACK_REFUND-${Date.now()}`;
       } else {
-        // Other gateways not integrated yet (DB only)
         payment.status = resolveRefundRequestedStatus();
         payment.refundReference = `MANUAL_REFUND_REQ-${Date.now()}`;
       }
 
-      payment.refundedAt = new Date(); // "requested at" timestamp
+      payment.refundedAt = new Date(); // used as "requested at"
       payment.refundedBy = req.user._id;
       payment.refundReason = reason;
 

@@ -5,6 +5,8 @@ export const PAYMENT_STATUSES = {
   PENDING: "PENDING",
   PAID: "PAID",
   FAILED: "FAILED",
+  CANCELLED: "CANCELLED", // ✅ needed (used across routes)
+  REFUND_REQUESTED: "REFUND_REQUESTED", // ✅ needed (async gateway refunds)
   REFUNDED: "REFUNDED",
 };
 

@@ -22,7 +22,7 @@ import { calculateJobPricing } from "../utils/calculateJobPricing.js";
 // ✅ INSURANCE SERVICES
 import { validateInsuranceCode, markInsuranceCodeUsed } from "../services/insurance/codeService.js";
 
-// ✅ ADD: Paystack refund helper (real refund)
+// ✅ Paystack refund helper (real refund)
 import { paystackRefundPayment } from "../services/payments/providers/paystack.js";
 
 const router = express.Router();
@@ -191,14 +191,9 @@ function haversineDistanceMeters(lat1, lng1, lat2, lng2) {
    ✅ REFUND HELPERS (REAL gateway refund)
 ============================================================ */
 
-/**
- * Some codebases don't include REFUND_REQUESTED in PAYMENT_STATUSES.
- * This helper picks the best available status safely.
- */
 function resolveRefundRequestedStatus() {
   const v = PAYMENT_STATUSES?.REFUND_REQUESTED;
   if (v) return v;
-  // fallback: keep PAID until actually refunded (but we still store refundReference/refundReason)
   return PAYMENT_STATUSES?.PAID || "PAID";
 }
 
@@ -207,21 +202,16 @@ function normalizeProviderKey(v) {
 }
 
 /**
- * ✅ Attempt refund via gateway (Paystack now).
- * Designed to be expandable for other gateways later.
- *
- * Returns:
- * { ok: boolean, mode: "GATEWAY"|"DB_ONLY", refundResponse?, message? }
+ * ✅ Attempt refund via gateway (Paystack).
+ * Returns: { ok, mode, refundResponse?, message? }
  */
 async function attemptGatewayRefund({ payment, reason }) {
   const provider = normalizeProviderKey(payment?.provider);
 
-  // Only refund if it was actually paid
   if (!payment || payment.status !== PAYMENT_STATUSES.PAID) {
     return { ok: false, mode: "DB_ONLY", message: "Payment is not PAID" };
   }
 
-  // Paystack real refund
   if (provider === "PAYSTACK") {
     const reference = String(payment.providerReference || "").trim();
     if (!reference) return { ok: false, mode: "DB_ONLY", message: "Missing providerReference" };
@@ -236,7 +226,6 @@ async function attemptGatewayRefund({ payment, reason }) {
     return { ok: true, mode: "GATEWAY", refundResponse: refundRes };
   }
 
-  // Other gateways: not implemented here yet
   return {
     ok: true,
     mode: "DB_ONLY",
@@ -457,7 +446,6 @@ router.post("/preview", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, r
       });
 
       if (!pricing.currency) pricing.currency = countryCurrency;
-
       if (forceBookingFeeZero) pricing.bookingFee = 0;
 
       const providers = await findNearbyProviders({
@@ -486,11 +474,7 @@ router.post("/preview", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, r
           text: MECHANIC_FINAL_FEE_DISCLAIMER,
         },
         insurance: forceBookingFeeZero
-          ? {
-              applied: true,
-              code: waiver.code,
-              partnerId: waiver.partnerId || null,
-            }
+          ? { applied: true, code: waiver.code, partnerId: waiver.partnerId || null }
           : { applied: false },
         preview: {
           currency: pricing.currency,
@@ -517,7 +501,6 @@ router.post("/preview", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, r
       });
 
       if (!pricing.currency) pricing.currency = countryCurrency;
-
       if (forceBookingFeeZero) pricing.bookingFee = 0;
 
       const providers = await findNearbyProviders({
@@ -541,11 +524,7 @@ router.post("/preview", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, r
               : "Providers found ✅ Please pay booking fee to proceed"
             : "No providers online within range. Booking fee not required.",
         insurance: forceBookingFeeZero
-          ? {
-              applied: true,
-              code: waiver.code,
-              partnerId: waiver.partnerId || null,
-            }
+          ? { applied: true, code: waiver.code, partnerId: waiver.partnerId || null }
           : { applied: false },
         preview: pricing,
       });
@@ -613,11 +592,7 @@ router.post("/preview", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, r
           ? "Providers found ✅ Please select tow truck type"
           : "No providers online within range.",
       insurance: forceBookingFeeZero
-        ? {
-            applied: true,
-            code: waiver.code,
-            partnerId: waiver.partnerId || null,
-          }
+        ? { applied: true, code: waiver.code, partnerId: waiver.partnerId || null }
         : { applied: false },
       preview: {
         currency: countryCurrency,
@@ -771,7 +746,6 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
     });
 
     if (!pricing.currency) pricing.currency = await getCountryCurrency(requestCountryCode);
-
     if (insuranceWaived) pricing.bookingFee = 0;
 
     const hasDropoff =
@@ -793,7 +767,6 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
       description,
       customerProblemDescription: customerProblemDescription || null,
       roleNeeded,
-
       countryCode: requestCountryCode,
 
       pickupLocation: { type: "Point", coordinates: [pickupLng, pickupLat] },
@@ -806,7 +779,6 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
 
       towTruckTypeNeeded: normalizedTowTruckTypeNeeded || null,
       mechanicCategoryNeeded: roleNeeded === USER_ROLES.MECHANIC ? mechanicCategoryNeeded : null,
-
       vehicleType: vehicleType || null,
 
       customer: req.user._id,
@@ -941,11 +913,7 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
           ? { mechanicFinalFeeNotPredetermined: true, text: MECHANIC_FINAL_FEE_DISCLAIMER }
           : null,
       insurance: insuranceWaived
-        ? {
-            applied: true,
-            code: waiver.code,
-            partnerId: waiver.partnerId || null,
-          }
+        ? { applied: true, code: waiver.code, partnerId: waiver.partnerId || null }
         : { applied: false },
       job,
       payment,
@@ -1207,7 +1175,7 @@ router.patch("/:id/cancel", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (re
 
     const payment = await Payment.findOne({ job: job._id }).sort({ createdAt: -1 });
 
-    // ✅ UPDATED: actually attempt gateway refund if eligible
+    // ✅ attempt gateway refund if eligible
     let refundResult = null;
 
     if (payment) {
@@ -1216,27 +1184,27 @@ router.patch("/:id/cancel", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (re
           try {
             refundResult = await attemptGatewayRefund({ payment, reason: refundReason });
 
-            // If gateway refund accepted, mark REFUND_REQUESTED (or fallback)
             payment.status = resolveRefundRequestedStatus();
             payment.refundReason = refundReason;
-            payment.refundedAt = new Date(); // "requested at" timestamp
-            payment.refundReference = `REFUND_REQ-${Date.now()}`;
+            payment.refundedAt = new Date(); // used as "requested at"
 
-            // attach refund payload safely
+            const rr = refundResult?.refundResponse || null;
+            payment.refundReference =
+              rr?.refundReference || rr?.raw?.data?.reference || `REFUND_REQ-${Date.now()}`;
+
             const existingPayload =
               payment.providerPayload && typeof payment.providerPayload === "object"
                 ? payment.providerPayload
                 : {};
             payment.providerPayload = {
               ...existingPayload,
-              refund: refundResult?.refundResponse || refundResult,
+              refund: rr || refundResult,
             };
 
             await payment.save();
           } catch (e) {
             console.error("❌ Refund attempt failed:", e?.message || e);
 
-            // Still record intent (do not lie by marking REFUNDED)
             payment.status = resolveRefundRequestedStatus();
             payment.refundReason = refundReason;
             payment.refundedAt = new Date();
@@ -1254,7 +1222,6 @@ router.patch("/:id/cancel", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (re
             await payment.save();
           }
         } else {
-          // If it was never paid, cancel it
           if (payment.status === PAYMENT_STATUSES.PENDING) {
             payment.status = PAYMENT_STATUSES.CANCELLED;
             await payment.save();

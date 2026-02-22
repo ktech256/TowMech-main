@@ -125,12 +125,12 @@ export async function paystackVerifyPayment(payload = {}) {
 }
 
 /**
- * ✅ NEW: Paystack Refund
- * Docs: POST /refund
+ * ✅ Paystack Refund
+ * POST /refund
  * body: { transaction: <id|reference>, amount?: <kobo> }
  *
- * NOTE: Refund may be async on Paystack.
- * We treat "status:true" response as accepted.
+ * We accept amount in MAJOR units (e.g. ZAR) and convert to kobo internally.
+ * Refund may be async on Paystack; "status:true" means accepted.
  */
 export async function paystackRefundPayment(payload = {}) {
   const baseUrl = getBaseUrl(payload);
@@ -140,15 +140,15 @@ export async function paystackRefundPayment(payload = {}) {
 
   const body = { transaction };
 
-  // Optional partial refund
+  // Optional partial refund (payload.amount is MAJOR units)
   if (payload.amount !== undefined && payload.amount !== null) {
     const n = Number(payload.amount);
     if (Number.isFinite(n) && n > 0) {
-      body.amount = toMinorUnits(n);
+      body.amount = toMinorUnits(n); // to kobo
     }
   }
 
-  // Optional metadata / reason (Paystack ignores unknown fields, but safe)
+  // Optional reason
   const reason = payload.reason ? String(payload.reason).trim() : null;
   if (reason) body.reason = reason;
 
@@ -160,10 +160,8 @@ export async function paystackRefundPayment(payload = {}) {
   const data = res?.data;
   if (!data?.status) throw new Error(data?.message || "Paystack refund failed");
 
-  // Paystack response shape: { status:true, message:"", data:{ ... } }
   const refundData = data?.data || null;
 
-  // Some accounts return: data.reference / data.transaction / data.status
   const refundReference =
     refundData?.reference ||
     refundData?.refund_reference ||
