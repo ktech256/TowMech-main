@@ -17,7 +17,7 @@ import {
   resolvePaymentRoutingForCountry,
 } from "../services/payments/index.js";
 
-// ✅ ADD: Paystack verify helper
+// ✅ Paystack verify helper
 import { paystackVerifyPayment } from "../services/payments/providers/paystack.js";
 
 const router = express.Router();
@@ -242,14 +242,18 @@ router.post(
         verify = await paystackVerifyPayment({ reference });
       } catch (e) {
         console.log("❌ Paystack verify failed inside webhook:", e?.message || e);
+        // return 200 so Paystack does not retry forever
         return res.status(200).json({ received: true, note: "Verify failed" });
       }
 
-      const ok = String(verify?.data?.status || "").toLowerCase() === "success";
+      // ✅ FIX: paystackVerifyPayment returns { status, paid, raw }, not { data: { status } }
+      const ok =
+        verify?.paid === true || String(verify?.status || "").toLowerCase() === "success";
+
       if (ok) {
-        await markPaymentPaidAndBroadcast(payment, verify);
+        await markPaymentPaidAndBroadcast(payment, verify?.raw || verify);
       } else {
-        payment.providerPayload = verify;
+        payment.providerPayload = verify?.raw || verify;
         await payment.save();
       }
 
@@ -290,15 +294,18 @@ router.get(
       }
 
       const verify = await paystackVerifyPayment({ reference });
-      const ok = String(verify?.data?.status || "").toLowerCase() === "success";
+
+      // ✅ FIX: paystackVerifyPayment returns { status, paid, raw }
+      const ok =
+        verify?.paid === true || String(verify?.status || "").toLowerCase() === "success";
 
       if (!ok) {
-        payment.providerPayload = verify;
+        payment.providerPayload = verify?.raw || verify;
         await payment.save();
         return res.status(400).json({ success: false, message: "Payment not successful", verify });
       }
 
-      await markPaymentPaidAndBroadcast(payment, verify);
+      await markPaymentPaidAndBroadcast(payment, verify?.raw || verify);
 
       return res.status(200).json({
         success: true,
