@@ -795,7 +795,7 @@ router.post("/register", async (req, res) => {
 });
 
 /**
- * ✅ Login → ALWAYS OTP
+ * ✅ Login → DIRECT ACCESS (NO OTP)
  */
 router.post("/login", async (req, res) => {
   try {
@@ -836,27 +836,46 @@ router.post("/login", async (req, res) => {
 
     if (!user.countryCode) {
       user.countryCode = requestCountryCode;
-      await user.save();
     }
 
-    const otpCode = await generateAndSaveOtp(user, { minutes: 10 });
+    let sessionId = null;
 
-    const debugEnabled = String(process.env.ENABLE_OTP_DEBUG).toLowerCase() === "true";
-    if (debugEnabled) console.log(`🟧 OTP_DEBUG (LOGIN) → userPhone=${user.phone} | otp=${otpCode}`);
+    if (isProviderRole(user.role)) {
+      if (!user.providerProfile) {
+        user.providerProfile = {
+          isOnline: false,
+          verificationStatus: "PENDING",
+          location: { type: "Point", coordinates: [0, 0] },
+          towTruckTypes: [],
+          mechanicCategories: [],
+        };
+      }
 
-    const userDialingCode = await getDialingCodeForCountry(user.countryCode || requestCountryCode);
-
-    try {
-      await sendOtpSms(user.phone, otpCode, "OTP", userDialingCode, getReqLang(req));
-    } catch (smsErr) {
-      console.error("❌ SMS OTP SEND FAILED:", smsErr.message);
+      sessionId = crypto.randomBytes(24).toString("hex");
+      user.providerProfile.sessionId = sessionId;
+      user.providerProfile.sessionIssuedAt = new Date();
+      user.providerProfile.isOnline = false;
     }
+
+    await user.save();
+
+    const token = generateToken(user._id, user.role, sessionId);
 
     return res.status(200).json({
-      message: t(req, "auth.otp_sent", { fallback: "OTP sent via SMS ✅" }),
-      otp: debugEnabled ? otpCode : undefined,
-      requiresOtp: true,
-      isStaticOtpAccount: isStaticOtpTestPhone(user.phone),
+      message: t(req, "auth.login_success", { fallback: "Login successful ✅" }),
+      token,
+      user:
+        typeof user.toSafeJSON === "function"
+          ? user.toSafeJSON(user.role)
+          : {
+              _id: user._id,
+              id: user._id,
+              name: user.name,
+              email: user.email,
+              role: user.role,
+              countryCode: user.countryCode,
+              permissions: user.permissions || {},
+            },
       countryCode: user.countryCode || requestCountryCode,
     });
   } catch (err) {
