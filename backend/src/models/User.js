@@ -228,6 +228,15 @@ const providerProfileSchema = new mongoose.Schema(
       default: "PENDING",
     },
 
+    /**
+     * ✅ NEW: Job Preference (Insurance vs Cash)
+     */
+    jobPreference: {
+      type: String,
+      enum: ["BOTH", "INSURANCE", "CASH"],
+      default: "BOTH",
+    },
+
     verificationDocs: {
       idDocumentUrl: { type: String, default: null },
       licenseUrl: { type: String, default: null },
@@ -334,7 +343,27 @@ const userSchema = new mongoose.Schema(
 
     accountStatus: { type: accountStatusSchema, default: () => ({}) },
   },
-  { timestamps: true }
+  {
+    timestamps: true,
+    toJSON: {
+      transform: (doc, ret) => {
+        if (ret.ratingStats) {
+          if (ret.role === USER_ROLES.MECHANIC || ret.role === USER_ROLES.TOW_TRUCK) {
+            ret.rating = ret.ratingStats.asProvider?.avg || 0;
+            ret.ratingCount = ret.ratingStats.asProvider?.count || 0;
+          } else {
+            ret.rating = ret.ratingStats.asCustomer?.avg || 0;
+            ret.ratingCount = ret.ratingStats.asCustomer?.count || 0;
+          }
+        }
+        delete ret.password;
+        delete ret.otpCode;
+        delete ret.otpExpiresAt;
+        return ret;
+      },
+    },
+    toObject: { virtuals: true },
+  }
 );
 
 userSchema.index({ countryCode: 1, role: 1 });
@@ -369,11 +398,7 @@ userSchema.methods.matchPassword = async function (enteredPassword) {
 };
 
 userSchema.methods.toSafeJSON = function (viewerRole) {
-  const obj = this.toObject();
-
-  delete obj.password;
-  delete obj.otpCode;
-  delete obj.otpExpiresAt;
+  const obj = this.toJSON();
 
   if (obj.providerProfile) {
     delete obj.providerProfile.sessionId;

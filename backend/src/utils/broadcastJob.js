@@ -68,6 +68,9 @@ export const broadcastJobToProviders = async (jobId) => {
     // Mechanic filter
     mechanicCategoryNeeded,
 
+    // ✅ NEW: Insurance filtering
+    isInsurance: !!job.insurance?.enabled,
+
     excludedProviders: job.excludedProviders || [],
     maxDistanceMeters: 20000,
     limit: 10,
@@ -144,10 +147,13 @@ export const broadcastJobToProviders = async (jobId) => {
     console.log("✅ Providers with tokens:", providersWithTokens.length);
 
     if (providersWithTokens.length > 0) {
+      const isInsurance = !!job.insurance?.enabled;
+      const jobTypeText = isInsurance ? "INSURANCE JOB" : "CASH JOB";
+
       const pushTitle =
         job.roleNeeded === USER_ROLES.MECHANIC
-          ? "🔧 New Mechanic Job Near You"
-          : "🚨 New Job Request Near You";
+          ? `🔧 ${jobTypeText}: New Mechanic Job`
+          : `🚨 ${jobTypeText}: New Job Request`;
 
       // TowTruck extras
       const towType = job.towTruckTypeNeeded ? `Tow Type: ${job.towTruckTypeNeeded}` : "";

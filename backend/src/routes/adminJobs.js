@@ -102,7 +102,7 @@ router.get(
 
       const jobs = await Job.find({ countryCode: workspaceCountryCode })
         .populate("customer", "name email phone role countryCode")
-        .populate("assignedTo", "name email phone role countryCode")
+        .populate("assignedTo", "name email phone role countryCode providerProfile ratingStats")
         .sort({ createdAt: -1 });
 
       return res.status(200).json({
@@ -149,7 +149,7 @@ router.get(
         status: { $in: activeStatuses },
       })
         .populate("customer", "name email phone role countryCode")
-        .populate("assignedTo", "name email phone role countryCode")
+        .populate("assignedTo", "name email phone role countryCode providerProfile ratingStats")
         .sort({ createdAt: -1 });
 
       return res.status(200).json({
@@ -189,7 +189,7 @@ router.get(
         countryCode: workspaceCountryCode,
       })
         .populate("customer", "name email phone role countryCode")
-        .populate("assignedTo", "name email phone role countryCode");
+        .populate("assignedTo", "name email phone role countryCode providerProfile ratingStats");
 
       if (!job) return res.status(404).json({ message: "Job not found ❌" });
 

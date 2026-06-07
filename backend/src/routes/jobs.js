@@ -455,6 +455,7 @@ router.post("/preview", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, r
         towTruckTypeNeeded: null,
         vehicleType,
         mechanicCategoryNeeded,
+        isInsurance: forceBookingFeeZero, // ✅ NEW
         excludedProviders: [],
         maxDistanceMeters: 20000,
         limit: 10,
@@ -509,6 +510,7 @@ router.post("/preview", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, r
         pickupLat,
         towTruckTypeNeeded: normalizedTowTruckTypeNeeded,
         vehicleType,
+        isInsurance: forceBookingFeeZero, // ✅ NEW
         excludedProviders: [],
         maxDistanceMeters: 20000,
         limit: 10,
@@ -556,6 +558,7 @@ router.post("/preview", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, r
         pickupLat,
         towTruckTypeNeeded: normalizedType,
         vehicleType,
+        isInsurance: forceBookingFeeZero, // ✅ NEW
         excludedProviders: [],
         maxDistanceMeters: 20000,
         limit: 10,
@@ -714,6 +717,7 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
       towTruckTypeNeeded: normalizedTowTruckTypeNeeded,
       vehicleType,
       mechanicCategoryNeeded: roleNeeded === USER_ROLES.MECHANIC ? mechanicCategoryNeeded : null,
+      isInsurance: insuranceWaived, // ✅ NEW
       excludedProviders: [],
       maxDistanceMeters: 20000,
       limit: 10,
@@ -985,7 +989,7 @@ router.get("/my/active", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, 
     })
       .sort({ createdAt: -1 })
       .populate("customer", "name email role phone")
-      .populate("assignedTo", "name email role phone providerProfile")
+      .populate("assignedTo", "name email role phone providerProfile ratingStats")
       .limit(50);
 
     return res.status(200).json({ jobs });
@@ -1008,7 +1012,7 @@ router.get("/my/history", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req,
     })
       .sort({ createdAt: -1 })
       .populate("customer", "name email role phone")
-      .populate("assignedTo", "name email role phone providerProfile")
+      .populate("assignedTo", "name email role phone providerProfile ratingStats")
       .limit(100);
 
     return res.status(200).json({ jobs });
@@ -1036,7 +1040,7 @@ router.get("/customer/active", auth, authorizeRoles(USER_ROLES.CUSTOMER), async 
     })
       .sort({ createdAt: -1 })
       .populate("customer", "name email role phone")
-      .populate("assignedTo", "name email role phone providerProfile")
+      .populate("assignedTo", "name email role phone providerProfile ratingStats")
       .limit(50);
 
     return res.status(200).json({ jobs });
@@ -1053,7 +1057,7 @@ router.get("/:id", auth, async (req, res) => {
   try {
     const job = await Job.findById(req.params.id)
       .populate("customer", "name email role phone")
-      .populate("assignedTo", "name email role phone providerProfile");
+      .populate("assignedTo", "name email role phone providerProfile ratingStats");
 
     if (!job) return res.status(404).json({ message: "Job not found" });
 
@@ -1453,6 +1457,14 @@ router.post("/rate", auth, async (req, res) => {
       rating: stars,
       comment: text,
     });
+
+    // ✅ Sync rating to job document for easier history-based calculation in apps
+    if (isCustomer) {
+      job.ratingByCustomer = stars;
+    } else {
+      job.ratingByProvider = stars;
+    }
+    await job.save();
 
     await recomputeUserRatingStats(targetUserId);
 

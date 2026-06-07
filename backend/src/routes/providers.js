@@ -170,7 +170,7 @@ router.get("/me", auth, async (req, res) => {
     }
 
     const user = await User.findById(req.user._id).select(
-      "name firstName lastName email phone birthday nationalityType saIdNumber passportNumber country role providerProfile createdAt updatedAt"
+      "name firstName lastName email phone birthday nationalityType saIdNumber passportNumber country role providerProfile ratingStats createdAt updatedAt"
     );
 
     if (!user) return res.status(404).json({ message: "User not found" });
@@ -195,7 +195,7 @@ router.patch("/me", auth, async (req, res) => {
       return res.status(403).json({ message: "Only providers can update this profile" });
     }
 
-    const { email, phone, mechanicCategories, towTruckTypes, carTypesSupported } = req.body || {};
+    const { email, phone, mechanicCategories, towTruckTypes, carTypesSupported, jobPreference } = req.body || {};
 
     const { allowedTowTruckTypes, allowedMechanicCategories, allowedVehicleTypes } =
       await getAllowedProviderTypesFromPricingConfig();
@@ -251,10 +251,14 @@ router.patch("/me", auth, async (req, res) => {
       }
     }
 
+    if (jobPreference && ["BOTH", "INSURANCE", "CASH"].includes(jobPreference.toUpperCase())) {
+      user.providerProfile.jobPreference = jobPreference.toUpperCase();
+    }
+
     await user.save();
 
     const fresh = await User.findById(user._id).select(
-      "name email phone role providerProfile createdAt updatedAt"
+      "name email phone role providerProfile ratingStats createdAt updatedAt"
     );
 
     return res.status(200).json({ user: fresh });
@@ -364,6 +368,7 @@ router.patch("/me/status", auth, async (req, res) => {
       towTruckTypes,
       carTypesSupported,
       mechanicCategories, // ✅ NEW
+      jobPreference, // ✅ NEW
     } = req.body;
 
     const providerRoles = [USER_ROLES.MECHANIC, USER_ROLES.TOW_TRUCK];
@@ -510,6 +515,10 @@ router.patch("/me/status", auth, async (req, res) => {
         }
         user.providerProfile.mechanicCategories = normalizedCats;
       }
+    }
+
+    if (jobPreference && ["BOTH", "INSURANCE", "CASH"].includes(jobPreference.toUpperCase())) {
+      user.providerProfile.jobPreference = jobPreference.toUpperCase();
     }
 
     if (typeof isOnline === "boolean") {

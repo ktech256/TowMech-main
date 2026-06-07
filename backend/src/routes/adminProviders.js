@@ -129,7 +129,7 @@ router.get(
         "providerProfile.verificationStatus": { $ne: "APPROVED" },
         "accountStatus.isArchived": { $ne: true },
       })
-        .select("name email role countryCode providerProfile createdAt accountStatus")
+        .select("name email role countryCode providerProfile ratingStats createdAt accountStatus")
         .sort({ createdAt: -1 });
 
       return res.status(200).json({
@@ -169,7 +169,7 @@ router.get(
         "providerProfile.verificationStatus": "APPROVED",
         "accountStatus.isArchived": { $ne: true },
       })
-        .select("name email role countryCode providerProfile createdAt accountStatus")
+        .select("name email role countryCode providerProfile ratingStats createdAt accountStatus")
         .sort({ createdAt: -1 });
 
       return res.status(200).json({
@@ -209,7 +209,7 @@ router.get(
         "providerProfile.verificationStatus": "REJECTED",
         "accountStatus.isArchived": { $ne: true },
       })
-        .select("name email role countryCode providerProfile createdAt accountStatus")
+        .select("name email role countryCode providerProfile ratingStats createdAt accountStatus")
         .sort({ createdAt: -1 });
 
       return res.status(200).json({
@@ -244,7 +244,7 @@ router.get(
       const workspaceCountryCode = req.countryCode;
 
       const provider = await User.findById(req.params.id).select(
-        "name email role countryCode providerProfile.verificationDocs providerProfile.verificationStatus accountStatus"
+        "name email role countryCode providerProfile ratingStats accountStatus"
       );
 
       if (!provider) return res.status(404).json({ message: "Provider not found" });

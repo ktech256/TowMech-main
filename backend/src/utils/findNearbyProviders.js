@@ -47,6 +47,7 @@ export const findNearbyProviders = async ({
   mechanicCategoryNeeded = undefined, // ✅ NEW
 
   vehicleType = null,
+  isInsurance = false, // ✅ NEW
   excludedProviders = [],
   maxDistanceMeters = 20000,
   limit = 10,
@@ -62,6 +63,17 @@ export const findNearbyProviders = async ({
     "providerProfile.verificationStatus": "APPROVED",
     _id: { $nin: excludedProviders || [] },
   };
+
+  /**
+   * ✅ NEW: Job Preference Filtering
+   * Insurance Job => Provider must accept INSURANCE or BOTH
+   * Cash Job => Provider must accept CASH or BOTH
+   */
+  if (isInsurance) {
+    providerQuery["providerProfile.jobPreference"] = { $in: ["INSURANCE", "BOTH"] };
+  } else {
+    providerQuery["providerProfile.jobPreference"] = { $in: ["CASH", "BOTH"] };
+  }
 
   /**
    * ✅ TowTruck filters
