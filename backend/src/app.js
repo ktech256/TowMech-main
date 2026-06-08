@@ -8,6 +8,7 @@ import authRoutes from "./routes/auth.js";
 import jobRoutes from "./routes/jobs.js";
 import providerRoutes from "./routes/providers.js";
 import paymentRoutes from "./routes/payments.js";
+import payoutRoutes from "./routes/payouts.js"; // ✅ NEW
 import notificationRoutes from "./routes/notifications.js";
 
 // ✅ SAFETY ROUTES
@@ -158,6 +159,7 @@ app.get("/health", (req, res) => {
 app.use("/api/auth", authRoutes);
 app.use("/api/jobs", jobRoutes);
 app.use("/api/providers", providerRoutes);
+app.use("/api/payouts", payoutRoutes); // ✅ NEW
 app.use("/api/payments", paymentRoutes);
 app.use("/api/notifications", notificationRoutes);
 

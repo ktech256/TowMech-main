@@ -522,6 +522,20 @@ router.patch("/me/status", auth, async (req, res) => {
     }
 
     if (typeof isOnline === "boolean") {
+      // ✅ NEW: Restriction - Provider cannot go OFFLINE while an active job exists
+      if (isOnline === false) {
+        const activeJobCount = await Job.countDocuments({
+          assignedTo: user._id,
+          status: { $in: [JOB_STATUSES.ASSIGNED, JOB_STATUSES.IN_PROGRESS] },
+        });
+
+        if (activeJobCount > 0) {
+          return res.status(400).json({
+            message: "Cannot go OFFLINE while you have an active job 📵",
+            activeJobCount,
+          });
+        }
+      }
       user.providerProfile.isOnline = isOnline;
     }
 

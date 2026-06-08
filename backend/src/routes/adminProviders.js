@@ -123,12 +123,22 @@ router.get(
 
       const workspaceCountryCode = req.countryCode;
 
-      const providers = await User.find({
+      const { minRating, maxRating } = req.query;
+      const query = {
         countryCode: workspaceCountryCode,
         role: { $in: [USER_ROLES.TOW_TRUCK, USER_ROLES.MECHANIC] },
         "providerProfile.verificationStatus": { $ne: "APPROVED" },
         "accountStatus.isArchived": { $ne: true },
-      })
+      };
+
+      if (minRating || maxRating) {
+        query["ratingStats.asProvider.avg"] = {
+          $gte: Number(minRating) || 0,
+          $lte: Number(maxRating) || 5
+        };
+      }
+
+      const providers = await User.find(query)
         .select("name email role countryCode providerProfile ratingStats createdAt accountStatus")
         .sort({ createdAt: -1 });
 
@@ -163,12 +173,22 @@ router.get(
 
       const workspaceCountryCode = req.countryCode;
 
-      const providers = await User.find({
+      const { minRating, maxRating } = req.query;
+      const query = {
         countryCode: workspaceCountryCode,
         role: { $in: [USER_ROLES.TOW_TRUCK, USER_ROLES.MECHANIC] },
         "providerProfile.verificationStatus": "APPROVED",
         "accountStatus.isArchived": { $ne: true },
-      })
+      };
+
+      if (minRating || maxRating) {
+        query["ratingStats.asProvider.avg"] = {
+          $gte: Number(minRating) || 0,
+          $lte: Number(maxRating) || 5
+        };
+      }
+
+      const providers = await User.find(query)
         .select("name email role countryCode providerProfile ratingStats createdAt accountStatus")
         .sort({ createdAt: -1 });
 
@@ -203,12 +223,22 @@ router.get(
 
       const workspaceCountryCode = req.countryCode;
 
-      const providers = await User.find({
+      const { minRating, maxRating } = req.query;
+      const query = {
         countryCode: workspaceCountryCode,
         role: { $in: [USER_ROLES.TOW_TRUCK, USER_ROLES.MECHANIC] },
         "providerProfile.verificationStatus": "REJECTED",
         "accountStatus.isArchived": { $ne: true },
-      })
+      };
+
+      if (minRating || maxRating) {
+        query["ratingStats.asProvider.avg"] = {
+          $gte: Number(minRating) || 0,
+          $lte: Number(maxRating) || 5
+        };
+      }
+
+      const providers = await User.find(query)
         .select("name email role countryCode providerProfile ratingStats createdAt accountStatus")
         .sort({ createdAt: -1 });
 

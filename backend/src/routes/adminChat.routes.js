@@ -104,6 +104,31 @@ router.get("/threads/:threadId/messages", ...adminOnly, async (req, res) => {
 });
 
 /**
+ * ✅ Admin: get messages by Job ID (PER COUNTRY)
+ * GET /api/admin/chats/jobs/:jobId/messages
+ */
+router.get("/jobs/:jobId/messages", ...adminOnly, async (req, res) => {
+  try {
+    const workspaceCountryCode = resolveCountryCode(req);
+    const jobId = req.params.jobId;
+
+    const messages = await ChatMessage.find({ job: jobId })
+      .sort({ createdAt: 1 })
+      .populate("sender", "name email phone role countryCode");
+
+    return res.status(200).json({
+      countryCode: workspaceCountryCode,
+      messages,
+      items: messages,
+    });
+  } catch (err) {
+    return res
+      .status(500)
+      .json({ message: "Failed to load messages for job", error: err.message });
+  }
+});
+
+/**
  * OLD: GET /api/admin/chats  (PER COUNTRY)
  */
 router.get("/", ...adminOnly, async (req, res) => {

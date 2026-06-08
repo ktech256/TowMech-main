@@ -102,9 +102,29 @@ router.get(
 
       const workspaceCountryCode = req.countryCode;
 
-      const { role, search, page = 1, limit = 25 } = req.query;
+      const { role, search, minRating, maxRating, page = 1, limit = 25 } = req.query;
 
       const query = {};
+      if (blockRestrictedAdmins(req, res)) return; // double check
+
+      // ✅ Rating Filter (Provider/Customer specific)
+      if (minRating || maxRating) {
+        const min = Number(minRating) || 0;
+        const max = Number(maxRating) || 5;
+
+        // If role is specified, we filter that specific ratingStat
+        if (role === USER_ROLES.MECHANIC || role === USER_ROLES.TOW_TRUCK) {
+          query["ratingStats.asProvider.avg"] = { $gte: min, $lte: max };
+        } else if (role === USER_ROLES.CUSTOMER) {
+          query["ratingStats.asCustomer.avg"] = { $gte: min, $lte: max };
+        } else {
+          // If no role, check if either matches (flexible)
+          query.$or = [
+            { "ratingStats.asProvider.avg": { $gte: min, $lte: max } },
+            { "ratingStats.asCustomer.avg": { $gte: min, $lte: max } },
+          ];
+        }
+      }
 
       // ✅ COUNTRY SCOPING:
       // - Always include global SuperAdmins if role filter is empty
