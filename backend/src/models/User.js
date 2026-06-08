@@ -206,6 +206,7 @@ const providerProfileSchema = new mongoose.Schema(
   {
     isOnline: { type: Boolean, default: false },
     lastSeenAt: { type: Date, default: null },
+    lastHeartbeatAt: { type: Date, default: null }, // ✅ NEW: Heartbeat tracking
 
     location: {
       type: { type: String, enum: ["Point"], default: "Point" },

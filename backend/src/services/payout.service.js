@@ -93,13 +93,17 @@ export async function markPayoutAsPaid(payoutId, adminId) {
   // Send Notifications
   const provider = payout.provider;
   if (provider && provider.email) {
-    const periodStr = `${payout.weekStartDate.toLocaleDateString()} -> ${payout.weekEndDate.toLocaleDateString()}`;
+    const fromStr = payout.weekStartDate.toISOString().split('T')[0];
+    const toStr = payout.weekEndDate.toISOString().split('T')[0];
+    const amountStr = `${payout.currency} ${payout.totalAmount.toFixed(2)}`;
+
+    const notificationText = `Your payout of ${amountStr}\nfor period ${fromStr} to ${toStr}\nhas been processed.\nStandard transfer cutoff times apply.`;
 
     // 1. Email
     await sendEmail({
       to: provider.email,
-      subject: "Your Weekly Payout has been processed",
-      text: `Hello ${provider.name}, your payout of ${payout.currency} ${payout.totalAmount} for period ${periodStr} has been processed. Standard transfer cutoff times apply.`
+      subject: "Payout Processed ✅",
+      text: `Hello ${provider.name},\n\n${notificationText}`
     });
 
     // 2. Push Notification
@@ -107,12 +111,12 @@ export async function markPayoutAsPaid(payoutId, adminId) {
         await sendPushToManyUsers({
             userIds: [provider._id],
             title: "Payout Processed 💰",
-            body: `Your payout of ${payout.currency} ${payout.totalAmount} has been marked as PAID.`
+            body: notificationText
         });
     }
 
     // 3. SMS (Mock/Logic)
-    console.log(`[SMS MOCK] To ${provider.phone}: Your payout of ${payout.currency} ${payout.totalAmount} for period ${periodStr} has been processed. Standard transfer cutoff times apply.`);
+    console.log(`[SMS MOCK] To ${provider.phone}:\n${notificationText}`);
   }
 
   return payout;

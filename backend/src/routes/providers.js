@@ -94,6 +94,34 @@ async function getAllowedProviderTypesFromPricingConfig() {
 }
 
 /**
+ * ✅ Provider heartbeat
+ * POST /api/providers/heartbeat
+ */
+router.post("/heartbeat", auth, async (req, res) => {
+  try {
+    const user = await User.findById(req.user._id);
+    if (!user || !user.providerProfile) {
+      return res.status(403).json({ message: "Only providers can send heartbeats" });
+    }
+
+    user.providerProfile.lastHeartbeatAt = new Date();
+    user.providerProfile.lastSeenAt = new Date();
+
+    // If heartbeat received but flagged offline, we keep it offline
+    // unless they explicitly toggle online.
+    // However, if they are online, this confirms they ARE still there.
+
+    await user.save();
+    return res.status(200).json({
+      isOnline: user.providerProfile.isOnline,
+      lastHeartbeatAt: user.providerProfile.lastHeartbeatAt
+    });
+  } catch (err) {
+    return res.status(500).json({ message: "Heartbeat failed", error: err.message });
+  }
+});
+
+/**
  * ✅ Provider updates current GPS location (for customer tracking)
  * PATCH /api/providers/location
  */
