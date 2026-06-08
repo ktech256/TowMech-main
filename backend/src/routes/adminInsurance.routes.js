@@ -5,11 +5,12 @@ import User, { USER_ROLES } from "../models/User.js";
 
 import InsurancePartner from "../models/InsurancePartner.js";
 import InsuranceCode from "../models/InsuranceCode.js";
+import FinancialLog from "../models/FinancialLog.js";
 
 import { generateCodesForPartner, disableInsuranceCode } from "../services/insurance/codeService.js";
 
 // ✅ Invoice builder + PDF renderers
-import { buildInsuranceInvoice } from "../services/insurance/invoiceService.js";
+import { buildInsuranceInvoice, buildCollectiveInsuranceReport } from "../services/insurance/invoiceService.js";
 import {
   renderPartnerInvoicePdfBuffer,
   renderProvidersSummaryPdfBuffer,
@@ -78,6 +79,26 @@ async function requireAdmin(req, res, next) {
     return next();
   } catch (err) {
     return res.status(500).json({ message: "Auth error", ...errPayload(err) });
+  }
+}
+
+/**
+ * Helper: Record Financial Log
+ */
+async function recordFinancialLog(req, { action, entityType, entityId, details }) {
+  try {
+    await FinancialLog.create({
+      action,
+      entityType,
+      entityId,
+      countryCode: resolveReqCountryCode(req),
+      performedBy: req.user._id,
+      details,
+      ip: req.ip,
+      userAgent: req.headers["user-agent"]
+    });
+  } catch (err) {
+    console.error("❌ Failed to record financial log:", err.message);
   }
 }
 
@@ -279,6 +300,45 @@ router.get("/invoice", auth, requireAdmin, async (req, res) => {
 });
 
 /**
+ * ✅ Combined report across all active insurance partners (Phase 2)
+ * GET /api/admin/insurance/reports/collective
+ */
+router.get("/reports/collective", auth, requireAdmin, async (req, res) => {
+  try {
+    const countryCode = resolveReqCountryCode(req);
+
+    const report = await buildCollectiveInsuranceReport({
+      countryCode,
+      month: String(req.query?.month || "").trim() || null,
+      from: String(req.query?.from || "").trim() || null,
+      to: String(req.query?.to || "").trim() || null,
+    });
+
+    return res.status(200).json({ ok: true, report });
+  } catch (err) {
+    return res.status(500).json({ message: "Report fetch failed", ...errPayload(err) });
+  }
+});
+
+/**
+ * ✅ GET Financial Audit Logs (Phase 5)
+ * GET /api/admin/insurance/logs/audit
+ */
+router.get("/logs/audit", auth, requireAdmin, async (req, res) => {
+  try {
+    const countryCode = resolveReqCountryCode(req);
+    const logs = await FinancialLog.find({ countryCode })
+      .populate("performedBy", "name email")
+      .sort({ createdAt: -1 })
+      .limit(100);
+
+    return res.status(200).json({ logs });
+  } catch (err) {
+    return res.status(500).json({ message: "Failed to fetch logs", ...errPayload(err) });
+  }
+});
+
+/**
  * ============================
  * 1) Partner invoice PDF
  * ============================
@@ -298,6 +358,13 @@ router.get("/invoice/pdf", auth, requireAdmin, async (req, res) => {
 
     const pdfBuffer = await renderPartnerInvoicePdfBuffer(invoice);
     const filename = periodFilename(invoice, "partner-invoice");
+
+    await recordFinancialLog(req, {
+      action: "INVOICE_DOWNLOADED",
+      entityType: "INSURANCE",
+      entityId: invoice.partner.partnerId,
+      details: { filename, period: invoice.period }
+    });
 
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);

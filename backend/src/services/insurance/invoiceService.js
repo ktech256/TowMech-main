@@ -1,6 +1,6 @@
 // backend/src/services/insurance/invoiceService.js
 import InsurancePartner from "../../models/InsurancePartner.js";
-import Job from "../../models/Job.js";
+import Job, { JOB_STATUSES } from "../../models/Job.js";
 
 function parseMonthToRange(month) {
   const start = new Date(`${month}-01T00:00:00.000Z`);
@@ -79,9 +79,13 @@ export async function buildInsuranceInvoice(args) {
 
   const filter = {
     countryCode,
+    status: JOB_STATUSES.COMPLETED,
     "insurance.enabled": true,
     "insurance.partnerId": partnerId,
-    createdAt: { $gte: rangeStart, $lt: rangeEnd },
+    $or: [
+      { completedAt: { $gte: rangeStart, $lt: rangeEnd } },
+      { completedAt: null, updatedAt: { $gte: rangeStart, $lt: rangeEnd } }
+    ]
   };
 
   if (providerId) filter.assignedTo = providerId;
@@ -269,5 +273,90 @@ export async function buildInsuranceInvoice(args) {
     },
     items,
     groupedByProvider,
+  };
+}
+
+/**
+ * ✅ Combined report across all active insurance partners (Phase 2)
+ */
+export async function buildCollectiveInsuranceReport(args) {
+  const countryCode = String(args.countryCode || "ZA").trim().toUpperCase();
+
+  const month = normalizeMonth(args.month);
+  const from = parseDateParam(args.from);
+  const to = parseDateParam(args.to);
+
+  let rangeStart = null;
+  let rangeEnd = null;
+
+  if (month) {
+    const r = parseMonthToRange(month);
+    rangeStart = r.start;
+    rangeEnd = r.end;
+  } else if (from && to) {
+    const start = new Date(from);
+    const end = new Date(to);
+    end.setUTCHours(0, 0, 0, 0);
+    end.setUTCDate(end.getUTCDate() + 1);
+    rangeStart = start;
+    rangeEnd = end;
+  } else {
+    throw new Error("Provide month=YYYY-MM OR from & to dates");
+  }
+
+  const partners = await InsurancePartner.find({
+    countryCodes: { $in: [countryCode] },
+    isActive: true,
+  }).lean();
+
+  const results = [];
+  let grandTotalOwed = 0;
+  let totalJobs = 0;
+
+  for (const p of partners) {
+    const filter = {
+      countryCode,
+      status: JOB_STATUSES.COMPLETED,
+      "insurance.enabled": true,
+      "insurance.partnerId": p._id,
+      $or: [
+        { completedAt: { $gte: rangeStart, $lt: rangeEnd } },
+        { completedAt: null, updatedAt: { $gte: rangeStart, $lt: rangeEnd } },
+      ],
+    };
+
+    const jobs = await Job.find(filter).select("pricing").lean();
+
+    let amountOwed = 0;
+    let jobCount = jobs.length;
+
+    for (const j of jobs) {
+      amountOwed += Number(j?.pricing?.estimatedTotal || 0) || 0;
+    }
+
+    results.push({
+      partnerId: String(p._id),
+      name: p.name,
+      partnerCode: p.partnerCode,
+      amountOwed,
+      jobCount,
+      currency: "ZAR",
+    });
+
+    grandTotalOwed += amountOwed;
+    totalJobs += jobCount;
+  }
+
+  return {
+    countryCode,
+    period: {
+      month: month || null,
+      from: toIso(rangeStart),
+      to: toIso(rangeEnd),
+    },
+    partners: results,
+    grandTotalOwed,
+    totalJobs,
+    currency: "ZAR",
   };
 }

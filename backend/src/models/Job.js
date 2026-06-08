@@ -207,6 +207,15 @@ const jobSchema = new mongoose.Schema(
     cancelledBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
     cancelReason: { type: String, default: null },
     cancelledAt: { type: Date, default: null },
+    completedAt: { type: Date, default: null },
+
+    /**
+     * ✅ Phase 1: Customer Authorized Job Start
+     * Allows provider to start job even if GPS distance > 30m
+     */
+    customerStartAuthorization: { type: Boolean, default: false },
+    customerStartAuthorizedAt: { type: Date, default: null },
+    customerStartAuthorizedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
 
     dispatchAttempts: [
       {

@@ -144,6 +144,34 @@ router.get(
       const revenueWeek = weekRevenueAgg?.[0]?.total || 0;
       const revenueMonth = monthRevenueAgg?.[0]?.total || 0;
 
+      /**
+       * ✅ INSURANCE VS CASH REVENUE (Phase 5)
+       */
+      const insuranceRevenueAgg = await Job.aggregate([
+        {
+          $match: {
+            countryCode: workspaceCountryCode,
+            status: JOB_STATUSES.COMPLETED,
+            "insurance.enabled": true,
+          },
+        },
+        { $group: { _id: null, total: { $sum: "$pricing.estimatedTotal" } } },
+      ]);
+
+      const cashRevenueAgg = await Job.aggregate([
+        {
+          $match: {
+            countryCode: workspaceCountryCode,
+            status: JOB_STATUSES.COMPLETED,
+            "insurance.enabled": false,
+          },
+        },
+        { $group: { _id: null, total: { $sum: "$pricing.estimatedTotal" } } },
+      ]);
+
+      const insuranceRevenue = insuranceRevenueAgg?.[0]?.total || 0;
+      const cashRevenue = cashRevenueAgg?.[0]?.total || 0;
+
       const paymentsPaid = await Payment.countDocuments({
         countryCode: workspaceCountryCode,
         status: PAYMENT_STATUSES.PAID,
@@ -260,6 +288,8 @@ router.get(
             revenueToday,
             revenueWeek,
             revenueMonth,
+            insuranceRevenue,
+            cashRevenue,
           },
           payments: {
             paymentsPaid,

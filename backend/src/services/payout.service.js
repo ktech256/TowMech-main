@@ -27,11 +27,10 @@ export function getWeekRange(date = new Date()) {
 export async function syncProviderWeeklyPayout(providerId, weekStartDate) {
   const { start, end } = getWeekRange(weekStartDate);
 
-  // Find all COMPLETED INSURANCE jobs for this provider in this range
+  // Find all COMPLETED jobs for this provider in this range (Insurance + Cash)
   const jobs = await Job.find({
     assignedTo: providerId,
     status: JOB_STATUSES.COMPLETED,
-    "insurance.enabled": true,
     updatedAt: { $gte: start, $lt: end }
   });
 
@@ -41,13 +40,18 @@ export async function syncProviderWeeklyPayout(providerId, weekStartDate) {
   const countryCode = user.countryCode || "ZA";
   const currency = jobs[0].pricing?.currency || "ZAR";
 
-  let totalAmount = 0;
+  let totalInsuranceAmount = 0;
   const dailyBreakdown = new Map();
   const jobList = [];
 
   jobs.forEach(job => {
+    const isInsurance = job.insurance?.enabled === true;
     const amount = job.pricing?.providerAmountDue || 0;
-    totalAmount += amount;
+
+    // Only Insurance jobs add to the "TowMech Payout" total
+    if (isInsurance) {
+      totalInsuranceAmount += amount;
+    }
 
     const dateKey = job.updatedAt.toISOString().split('T')[0];
     const currentDayAmount = dailyBreakdown.get(dateKey) || 0;
@@ -56,7 +60,8 @@ export async function syncProviderWeeklyPayout(providerId, weekStartDate) {
     jobList.push({
       job: job._id,
       amount,
-      completedAt: job.updatedAt
+      completedAt: job.updatedAt,
+      isInsurance
     });
   });
 
@@ -67,7 +72,7 @@ export async function syncProviderWeeklyPayout(providerId, weekStartDate) {
       weekEndDate: end,
       dailyBreakdown,
       jobs: jobList,
-      totalAmount,
+      totalAmount: totalInsuranceAmount,
       currency,
       processedAt: new Date()
     },

@@ -165,6 +165,12 @@ const permissionsSchema = new mongoose.Schema(
     canManageLegal: { type: Boolean, default: false },
     canManageInsurance: { type: Boolean, default: false },
 
+    // ✅ Phase 4: Financial Permissions
+    canManageInsuranceInvoices: { type: Boolean, default: false },
+    canManageProviderPayouts: { type: Boolean, default: false },
+    canViewProviderStatements: { type: Boolean, default: false },
+    canViewInsuranceStatements: { type: Boolean, default: false },
+
     canViewStats: { type: Boolean, default: false },
   },
   { _id: false }

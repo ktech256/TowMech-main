@@ -15,7 +15,11 @@ const authorizeRoles = (...rolesOrPermission) => {
     "canManageUsers",
     "canManagePricing",
     "canViewStats",
-    "canVerifyProviders"
+    "canVerifyProviders",
+    "canManageInsuranceInvoices",
+    "canManageProviderPayouts",
+    "canViewProviderStatements",
+    "canViewInsuranceStatements"
   ];
 
   // ✅ Only treat last argument as permission if it matches valid permission key

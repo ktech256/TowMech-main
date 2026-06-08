@@ -3,6 +3,7 @@ import express from "express";
 import auth from "../middleware/auth.js";
 import authorizeRoles from "../middleware/role.js";
 import User, { USER_ROLES } from "../models/User.js";
+import Job, { JOB_STATUSES } from "../models/Job.js";
 
 const router = express.Router();
 
@@ -403,6 +404,89 @@ router.patch(
     } catch (err) {
       return res.status(500).json({
         message: "Could not reject provider",
+        error: err.message,
+      });
+    }
+  }
+);
+
+/**
+ * ✅ Admin views a provider's Financial Scorecard (Phase 5)
+ * GET /api/admin/providers/providers/:id/financials
+ */
+router.get(
+  "/providers/:id/financials",
+  auth,
+  authorizeRoles(USER_ROLES.ADMIN, USER_ROLES.SUPER_ADMIN),
+  async (req, res) => {
+    try {
+      if (blockRestrictedAdmins(req, res)) return;
+      if (!requirePermission(req, res, "canVerifyProviders")) return;
+
+      const requestedCountryCode = resolveReqCountryCode(req);
+      if (!enforceWorkspaceAccess(req, res, requestedCountryCode)) return;
+
+      const workspaceCountryCode = req.countryCode;
+
+      const provider = await User.findById(req.params.id);
+      if (!provider) return res.status(404).json({ message: "Provider not found" });
+
+      if (
+        req.user.role !== USER_ROLES.SUPER_ADMIN &&
+        String(provider.countryCode || "").toUpperCase() !== workspaceCountryCode
+      ) {
+        return res.status(404).json({ message: "Provider not found" });
+      }
+
+      const now = new Date();
+      const weekStart = new Date(now);
+      weekStart.setDate(now.getDate() - now.getDay());
+      weekStart.setHours(0, 0, 0, 0);
+
+      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+
+      // Aggregations
+      const completedJobs = await Job.find({
+          assignedTo: provider._id,
+          status: JOB_STATUSES.COMPLETED
+      }).select("pricing createdAt updatedAt cancelledAt");
+
+      const activeJobsCount = await Job.countDocuments({
+          assignedTo: provider._id,
+          status: { $in: [JOB_STATUSES.ASSIGNED, JOB_STATUSES.IN_PROGRESS] }
+      });
+
+      const cancelledCount = await Job.countDocuments({
+          assignedTo: provider._id,
+          status: JOB_STATUSES.CANCELLED,
+          cancelledBy: provider._id // Only count if provider cancelled
+      });
+
+      const totalAssigned = await Job.countDocuments({ assignedTo: provider._id });
+      const cancellationRate = totalAssigned > 0 ? (cancelledCount / totalAssigned) * 100 : 0;
+
+      let weeklyEarnings = 0;
+      let monthlyEarnings = 0;
+
+      completedJobs.forEach(j => {
+          const earnings = j.pricing?.providerAmountDue || 0;
+          if (j.updatedAt >= weekStart) weeklyEarnings += earnings;
+          if (j.updatedAt >= monthStart) monthlyEarnings += earnings;
+      });
+
+      return res.status(200).json({
+          providerId: provider._id,
+          weeklyEarnings,
+          monthlyEarnings,
+          activeJobs: activeJobsCount,
+          completedJobs: completedJobs.length,
+          cancellationRate: cancellationRate.toFixed(2),
+          ratingTrend: provider.ratingStats?.asProvider?.avg || 0,
+          currency: provider.countryCode === "ZA" ? "ZAR" : "USD" // Fallback simplified
+      });
+    } catch (err) {
+      return res.status(500).json({
+        message: "Could not fetch financials",
         error: err.message,
       });
     }

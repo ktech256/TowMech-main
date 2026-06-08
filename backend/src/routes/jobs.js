@@ -1116,6 +1116,47 @@ router.get("/:id", auth, async (req, res) => {
   }
 });
 
+/**
+ * ✅ CUSTOMER authorizes job start (Phase 1)
+ * PATCH /api/jobs/:id/authorize-start
+ */
+router.patch("/:id/authorize-start", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => {
+  try {
+    const job = await Job.findById(req.params.id);
+    if (!job) return res.status(404).json({ message: "Job not found" });
+
+    if (job.customer?.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ message: "Not allowed: job not yours" });
+    }
+
+    // Allow authorization if provider is assigned.
+    // Some systems use legacy "ACCEPTED" or "ARRIVED" strings manually.
+    const st = String(job.status || "").toUpperCase();
+    const isReadyForStart = st === "ASSIGNED" || st === "ARRIVED" || st === "ACCEPTED";
+
+    if (!isReadyForStart) {
+      return res.status(400).json({
+        message: "Job start can only be authorized when a provider is assigned.",
+        currentStatus: job.status
+      });
+    }
+
+    job.customerStartAuthorization = true;
+    job.customerStartAuthorizedAt = new Date();
+    job.customerStartAuthorizedBy = req.user._id;
+
+    await job.save();
+
+    return res.status(200).json({
+      message: "Job start authorized ✅",
+      job,
+    });
+  } catch (err) {
+    console.error("❌ AUTHORIZE START ERROR:", err);
+    return res.status(500).json({ message: "Failed to authorize job start", error: err.message });
+  }
+});
+
 // ✅ Remaining routes unchanged
 router.patch("/:id/cancel", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => {
   try {
@@ -1365,17 +1406,24 @@ router.patch("/:id/status", auth, async (req, res) => {
 
         const distMeters = haversineDistanceMeters(myLat, myLng, pickupLat, pickupLng);
 
-        if (distMeters > START_JOB_MAX_DISTANCE_METERS) {
+        // ✅ Phase 1: Check for Customer Start Authorization
+        const isAuthorized = job.customerStartAuthorization === true;
+
+        if (distMeters > START_JOB_MAX_DISTANCE_METERS && !isAuthorized) {
           return res.status(409).json({
             code: "TOO_FAR_FROM_PICKUP",
             message: `You must be within ${START_JOB_MAX_DISTANCE_METERS} meters of pickup to start this job.`,
             distanceMeters: distMeters,
             maxAllowedMeters: START_JOB_MAX_DISTANCE_METERS,
+            customerStartAuthorization: false
           });
         }
       }
 
       job.status = status;
+      if (status === JOB_STATUSES.COMPLETED) {
+        job.completedAt = new Date();
+      }
       await job.save();
 
       // ✅ NEW: If insurance job is COMPLETED, officially consume the code

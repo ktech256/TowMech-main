@@ -19,7 +19,8 @@ const weeklyPayoutSchema = new mongoose.Schema(
     jobs: [{
       job: { type: mongoose.Schema.Types.ObjectId, ref: "Job" },
       amount: Number,
-      completedAt: Date
+      completedAt: Date,
+      isInsurance: { type: Boolean, default: true }
     }],
 
     totalAmount: { type: Number, default: 0 },
