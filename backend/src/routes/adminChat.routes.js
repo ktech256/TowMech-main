@@ -83,7 +83,7 @@ router.get("/threads/:threadId/messages", ...adminOnly, async (req, res) => {
       return res.status(404).json({ message: "Thread not found ❌" });
     }
 
-    const messages = await ChatMessage.find({ thread: threadId, countryCode: workspaceCountryCode })
+    const messages = await ChatMessage.find({ thread: threadId })
       .sort({ createdAt: 1 })
       .skip((p - 1) * l)
       .limit(l)
@@ -174,7 +174,7 @@ router.get("/:conversationId/messages", ...adminOnly, async (req, res) => {
       return res.status(404).json({ message: "Thread not found ❌" });
     }
 
-    const messages = await ChatMessage.find({ thread: threadId, countryCode: workspaceCountryCode })
+    const messages = await ChatMessage.find({ thread: threadId })
       .sort({ createdAt: 1 })
       .skip((p - 1) * l)
       .limit(l)

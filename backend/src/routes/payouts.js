@@ -42,6 +42,11 @@ router.get("/admin", auth, authorizeRoles(USER_ROLES.ADMIN, USER_ROLES.SUPER_ADM
 
     const payouts = await WeeklyPayout.find(filter)
       .populate("provider", "name email phone")
+      .populate({
+        path: "jobs.job",
+        select: "title status pickupAddressText createdAt customer",
+        populate: { path: "customer", select: "name" }
+      })
       .sort({ weekStartDate: -1 });
 
     return res.status(200).json({ payouts });

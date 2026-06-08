@@ -7,6 +7,8 @@ const ChatThreadSchema = new mongoose.Schema(
     customer: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
     provider: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: false, default: null },
 
+    countryCode: { type: String, default: "ZA", uppercase: true },
+
     // Useful for filtering/search in admin
     roleNeeded: { type: String, default: null },
 

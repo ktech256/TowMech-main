@@ -73,6 +73,7 @@ async function ensureThread(job) {
       job: job._id,
       customer: job.customer,
       provider: job.assignedTo,
+      countryCode: job.countryCode || "ZA",
       status: "ACTIVE",
       lastMessageAt: null,
     });
@@ -180,6 +181,7 @@ export function registerChatSocket(io) {
           sender: socket.user._id,
           senderRole: socket.user.role,
           text: safeText,
+          countryCode: thread.countryCode || access.job.countryCode || "ZA", // ✅ NEW: for Admin Dashboard filtering
         });
 
         await ChatThread.findByIdAndUpdate(thread._id, {

@@ -210,6 +210,9 @@ export const broadcastJobToProviders = async (jobId) => {
           totalFee: String(totalFee),
           providerPayout: String(providerPayout),
 
+          // ✅ NEW: Insurance flag for Banner/Popup
+          is_insurance: String(isInsurance),
+
           // Distance: compute per provider on Android
           pickupLat: String(pickupLat),
           pickupLng: String(pickupLng),

@@ -336,6 +336,42 @@ export async function markInsuranceCodeUsed({
   };
 }
 
+/**
+ * ✅ Unlock a code (Release lock)
+ * Called when a job is cancelled before completion.
+ */
+export async function unlockInsuranceCode({
+  partnerId = null,
+  code,
+  countryCode = "ZA",
+  jobId = null,
+}) {
+  if (!code) throw new Error("code is required");
+
+  const normalizedCode = String(code).trim().toUpperCase();
+  const normalizedCountry = String(countryCode || "ZA").trim().toUpperCase();
+
+  const filter = {
+    code: normalizedCode,
+    countryCode: normalizedCountry,
+    isActive: true,
+    ...(partnerId ? { partner: partnerId } : {}),
+  };
+
+  const update = {
+    $set: {
+      "lock.isLocked": false,
+      "lock.lockedAt": null,
+      "lock.lockedUntil": null,
+      "lock.lockedByUser": null,
+      "lock.lockedByJob": null,
+    },
+  };
+
+  const doc = await InsuranceCode.findOneAndUpdate(filter, update, { new: true });
+  return { ok: !!doc, message: doc ? "Code unlocked ✅" : "Code not found" };
+}
+
 export async function disableInsuranceCode({ codeId, updatedBy = null }) {
   if (!codeId) throw new Error("codeId is required");
 

@@ -20,7 +20,12 @@ import { broadcastJobToProviders } from "../utils/broadcastJob.js";
 import { calculateJobPricing } from "../utils/calculateJobPricing.js";
 
 // ✅ INSURANCE SERVICES
-import { validateInsuranceCode, markInsuranceCodeUsed } from "../services/insurance/codeService.js";
+import {
+  validateInsuranceCode,
+  markInsuranceCodeUsed,
+  lockInsuranceCodeForJob,
+  unlockInsuranceCode,
+} from "../services/insurance/codeService.js";
 
 // ✅ Paystack refund helper (real refund)
 import { paystackRefundPayment } from "../services/payments/providers/paystack.js";
@@ -818,12 +823,15 @@ router.post("/", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (req, res) => 
 
     if (insuranceWaived) {
       try {
-        await markInsuranceCodeUsed({
+        // ✅ CHANGE: Do NOT mark as used immediately. Only LOCK it.
+        // Business Rule: consumed only on completion.
+        await lockInsuranceCodeForJob({
           partnerId: waiver.partnerId,
           code: waiver.code,
           countryCode: requestCountryCode,
           userId: req.user?._id || null,
           jobId: job._id,
+          ttlMinutes: 240, // 4 hours lock for active job
         });
       } catch (err) {
         await Job.findByIdAndDelete(job._id);
@@ -1177,6 +1185,20 @@ router.patch("/:id/cancel", auth, authorizeRoles(USER_ROLES.CUSTOMER), async (re
 
     await job.save();
 
+    // ✅ NEW: If insurance was used, unlock the code so it can be reused
+    if (job.insurance?.enabled && job.insurance?.code) {
+      try {
+        await unlockInsuranceCode({
+          partnerId: job.insurance.partnerId,
+          code: job.insurance.code,
+          countryCode: job.countryCode,
+          jobId: job._id,
+        });
+      } catch (err) {
+        console.error("❌ Failed to unlock insurance code on cancel:", err.message);
+      }
+    }
+
     const payment = await Payment.findOne({ job: job._id }).sort({ createdAt: -1 });
 
     // ✅ attempt gateway refund if eligible
@@ -1355,6 +1377,21 @@ router.patch("/:id/status", auth, async (req, res) => {
 
       job.status = status;
       await job.save();
+
+      // ✅ NEW: If insurance job is COMPLETED, officially consume the code
+      if (status === JOB_STATUSES.COMPLETED && job.insurance?.enabled && job.insurance?.code) {
+        try {
+          await markInsuranceCodeUsed({
+            partnerId: job.insurance.partnerId,
+            code: job.insurance.code,
+            countryCode: job.countryCode,
+            userId: job.customer,
+            jobId: job._id,
+          });
+        } catch (err) {
+          console.error("❌ Failed to mark insurance code as used on completion:", err.message);
+        }
+      }
 
       return res.status(200).json({
         message: "Job status updated ✅",

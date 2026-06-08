@@ -35,6 +35,14 @@ const weeklyPayoutSchema = new mongoose.Schema(
     paidAt: { type: Date, default: null },
     paidBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
 
+    // ✅ Audit Trail (Professionalization)
+    auditTrail: [{
+      action: String, // e.g. "GENERATED", "PAID", "REVERSED"
+      performedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+      timestamp: { type: Date, default: Date.now },
+      note: String
+    }],
+
     // For auditing/logging
     processedAt: { type: Date, default: Date.now },
   },

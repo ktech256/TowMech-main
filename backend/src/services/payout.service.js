@@ -79,8 +79,20 @@ export async function syncProviderWeeklyPayout(providerId, weekStartDate) {
 
 /**
  * ✅ Admin marks payout as PAID
+ * Business Rule: Payouts can ONLY be processed on Tuesday 08:00 AM - 04:00 PM
  */
 export async function markPayoutAsPaid(payoutId, adminId) {
+  const now = new Date();
+  const day = now.getDay(); // 0=Sun, 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat
+  const hour = now.getHours();
+
+  // Tuesday check
+  if (day !== 2 || hour < 8 || hour >= 16) {
+    throw new Error(
+      "Payouts can only be processed on Tuesdays between 08:00 AM and 04:00 PM (Local Server Time)."
+    );
+  }
+
   const payout = await WeeklyPayout.findById(payoutId).populate("provider");
   if (!payout) throw new Error("Payout not found");
   if (payout.status === "PAID") throw new Error("Payout already paid");
@@ -88,31 +100,44 @@ export async function markPayoutAsPaid(payoutId, adminId) {
   payout.status = "PAID";
   payout.paidAt = new Date();
   payout.paidBy = adminId;
+
+  // ✅ AUDIT TRAIL: Add history entry
+  const historyEntry = {
+    action: "PAID",
+    performedBy: adminId,
+    timestamp: new Date(),
+    note: "Payout marked as paid via Admin Dashboard",
+  };
+
+  if (!payout.auditTrail) payout.auditTrail = [];
+  payout.auditTrail.push(historyEntry);
+
   await payout.save();
 
   // Send Notifications
   const provider = payout.provider;
   if (provider && provider.email) {
-    const fromStr = payout.weekStartDate.toISOString().split('T')[0];
-    const toStr = payout.weekEndDate.toISOString().split('T')[0];
+    const fromStr = payout.weekStartDate.toISOString().split("T")[0];
+    const toStr = payout.weekEndDate.toISOString().split("T")[0];
     const amountStr = `${payout.currency} ${payout.totalAmount.toFixed(2)}`;
 
     const notificationText = `Your payout of ${amountStr}\nfor period ${fromStr} to ${toStr}\nhas been processed.\nStandard transfer cutoff times apply.`;
 
-    // 1. Email
+    // 1. Email (Attach simulated invoice link)
+    const invoiceLink = `https://towmech.com/payouts/invoice/${payout._id}`;
     await sendEmail({
       to: provider.email,
       subject: "Payout Processed ✅",
-      text: `Hello ${provider.name},\n\n${notificationText}`
+      text: `Hello ${provider.name},\n\n${notificationText}\n\nYou can view your statement here: ${invoiceLink}`,
     });
 
     // 2. Push Notification
-    if (provider.fcmToken) {
-        await sendPushToManyUsers({
-            userIds: [provider._id],
-            title: "Payout Processed 💰",
-            body: notificationText
-        });
+    if (provider.fcmToken || provider.providerProfile?.fcmToken) {
+      await sendPushToManyUsers({
+        userIds: [provider._id],
+        title: "Payout Processed 💰",
+        body: notificationText,
+      });
     }
 
     // 3. SMS (Mock/Logic)

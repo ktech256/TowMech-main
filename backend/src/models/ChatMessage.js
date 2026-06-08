@@ -12,6 +12,9 @@ const ChatMessageSchema = new mongoose.Schema(
     // Stored as already-masked text (contacts blocked)
     text: { type: String, required: true },
 
+    // ✅ NEW: countryCode for Admin Dashboard (Tenant isolation)
+    countryCode: { type: String, default: "ZA", uppercase: true, index: true },
+
     // If you later add attachments:
     // attachmentUrl: { type: String, default: null },
   },
