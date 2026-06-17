@@ -449,6 +449,57 @@ router.patch(
 );
 
 /**
+ * ✅ ADMIN / SUPERADMIN: Unblock Device
+ * POST /api/admin/users/unblock-device
+ */
+router.post(
+  "/users/unblock-device",
+  auth,
+  authorizeRoles(USER_ROLES.ADMIN, USER_ROLES.SUPER_ADMIN, "canManageUsers"),
+  async (req, res) => {
+    try {
+      if (blockRestrictedAdmins(req, res)) return;
+
+      const { userId } = req.body;
+      if (!userId) return res.status(400).json({ message: "userId is required" });
+
+      const target = await User.findById(userId);
+      if (!target) return res.status(404).json({ message: "User not found" });
+
+      const requestedCountryCode = resolveCountryCode(req);
+      if (!enforceWorkspaceAccess(req, res, requestedCountryCode)) return;
+      const workspaceCountryCode = req.countryCode;
+
+      if (
+        req.user.role !== USER_ROLES.SUPER_ADMIN &&
+        target.role !== USER_ROLES.SUPER_ADMIN &&
+        String(target.countryCode || "").toUpperCase() !== workspaceCountryCode
+      ) {
+        return res.status(404).json({ message: "User not found" });
+      }
+
+      target.isDeviceBlocked = false;
+      target.otpAttempts = 0;
+      target.blockReason = null;
+      target.blockExpiresAt = null;
+
+      await target.save();
+
+      // Audit log entry simulation
+      console.log(`[AUDIT] DEVICE_UNBLOCK | User: ${target._id} | Admin: ${req.user._id} | Timestamp: ${new Date().toISOString()}`);
+
+      return res.status(200).json({
+        success: true,
+        message: "Device unblocked and OTP counters reset successfully ✅",
+        user: safeUser(target, req.user.role),
+      });
+    } catch (err) {
+      return res.status(500).json({ message: "Could not unblock device", error: err.message });
+    }
+  }
+);
+
+/**
  * ✅ SUPERADMIN ONLY: archive a user
  * PATCH /api/admin/users/:id/archive
  */

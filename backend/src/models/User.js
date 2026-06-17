@@ -342,6 +342,13 @@ const userSchema = new mongoose.Schema(
     otpCode: { type: String, default: null },
     otpExpiresAt: { type: Date, default: null },
 
+    // ✅ NEW: Device Blocking & OTP tracking
+    isDeviceBlocked: { type: Boolean, default: false },
+    otpAttempts: { type: Number, default: 0 },
+    lastOtpRequestAt: { type: Date, default: null },
+    blockReason: { type: String, default: null },
+    blockExpiresAt: { type: Date, default: null },
+
     providerProfile: { type: providerProfileSchema, default: null },
 
     permissions: { type: permissionsSchema, default: null },
@@ -429,10 +436,24 @@ userSchema.methods.toSafeJSON = function (viewerRole) {
 
       isArchived: status.isArchived,
     };
+    // Include device block info for admins
+    obj.isDeviceBlocked = this.isDeviceBlocked;
+    obj.otpAttempts = this.otpAttempts;
+    obj.blockExpiresAt = this.blockExpiresAt;
+    obj.blockReason = this.blockReason;
+    obj.lastOtpRequestAt = this.lastOtpRequestAt;
+
     return obj;
   }
 
   obj.accountStatus = status;
+  // Include for SuperAdmins too
+  obj.isDeviceBlocked = this.isDeviceBlocked;
+  obj.otpAttempts = this.otpAttempts;
+  obj.blockExpiresAt = this.blockExpiresAt;
+  obj.blockReason = this.blockReason;
+  obj.lastOtpRequestAt = this.lastOtpRequestAt;
+
   return obj;
 };
 
