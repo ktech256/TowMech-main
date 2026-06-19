@@ -531,7 +531,7 @@ router.patch(
       const role = provider.role;
 
       const commonRequired = ["idDocument", "driverLicense", "selfie", "huruCriminalCheck", "proofOfResidence"];
-      const towTruckRequired = ["vehicleRC1", "proofOfVehicle", "vehicleLicenseDisc"];
+      const towTruckRequired = ["proofOfVehicle", "vehicleLicenseDisc"]; // RC1 is optional
 
       const requiredFields = [...commonRequired];
       if (role === USER_ROLES.TOW_TRUCK) {
