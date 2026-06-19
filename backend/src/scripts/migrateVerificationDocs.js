@@ -44,8 +44,14 @@ const migrate = async () => {
       // Ensure other fields exist as NOT_SUBMITTED if missing
       const fields = ["vehicleRC1", "huruCriminalCheck", "proofOfResidence", "vehicleLicenseDisc"];
       for (const f of fields) {
-        if (!docs[f]) {
-          docs[f] = { status: "NOT_SUBMITTED", url: null, updatedAt: new Date() };
+        if (!docs[f] || typeof docs[f] === 'string') {
+          docs[f] = {
+            url: typeof docs[f] === 'string' ? docs[f] : null,
+            status: overallStatus,
+            updatedAt: new Date(),
+            submittedAt: new Date(),
+            history: []
+          };
           changed = true;
         }
       }

@@ -59,21 +59,37 @@ router.patch(
         const fileName = `providers/${user._id}/${field}-${Date.now()}`;
         const url = await uploadToFirebase(file.buffer, fileName, file.mimetype);
 
-        // Initialize object if it doesn't exist
-        if (!user.providerProfile.verificationDocs[field]) {
-          user.providerProfile.verificationDocs[field] = {};
+        // Move current to history if it exists and has a URL
+        const current = user.providerProfile.verificationDocs[field];
+        if (current && current.url) {
+          if (!current.history) current.history = [];
+          current.history.push({
+            url: current.url,
+            status: current.status,
+            reason: current.reason,
+            submittedAt: current.submittedAt,
+            updatedAt: current.updatedAt,
+            captureTimestamp: current.captureTimestamp,
+          });
         }
 
+        // Update current version
         user.providerProfile.verificationDocs[field] = {
+          ...user.providerProfile.verificationDocs[field],
           url,
           status: "PENDING",
+          reason: null,
+          submittedAt: new Date(),
           updatedAt: new Date(),
+          captureTimestamp: req.body[`${field}Timestamp`] || new Date(),
         };
 
         // Sync to legacy if applicable
         if (field === "idDocument") user.providerProfile.verificationDocs.idDocumentUrl = url;
         if (field === "driverLicense") user.providerProfile.verificationDocs.licenseUrl = url;
         if (field === "proofOfVehicle") user.providerProfile.verificationDocs.vehicleProofUrl = url;
+
+        user.markModified(`providerProfile.verificationDocs.${field}`);
       };
 
       const docFields = [

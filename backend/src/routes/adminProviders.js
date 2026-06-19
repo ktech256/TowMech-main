@@ -441,6 +441,7 @@ router.patch(
         provider.photoUrl = provider.providerProfile.verificationDocs[field].url;
       }
 
+      provider.markModified(`providerProfile.verificationDocs.${field}`);
       await provider.save();
 
       // Send Notification
@@ -490,6 +491,7 @@ router.patch(
       // Overall status reverts to REJECTED if any required doc is rejected
       provider.providerProfile.verificationStatus = "REJECTED";
 
+      provider.markModified(`providerProfile.verificationDocs.${field}`);
       await provider.save();
 
       // Send Notification

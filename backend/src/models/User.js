@@ -208,6 +208,23 @@ const accountStatusSchema = new mongoose.Schema(
   { _id: false }
 );
 
+const verificationDocSchema = new mongoose.Schema({
+  url: { type: String, default: null },
+  status: { type: String, enum: ["NOT_SUBMITTED", "PENDING", "APPROVED", "REJECTED"], default: "NOT_SUBMITTED" },
+  reason: { type: String, default: null },
+  updatedAt: { type: Date, default: null },
+  submittedAt: { type: Date, default: null },
+  captureTimestamp: { type: Date, default: null }, // Specifically for Selfie Camera hardening
+  history: [{
+    url: String,
+    status: String,
+    reason: String,
+    submittedAt: Date,
+    updatedAt: Date,
+    captureTimestamp: Date
+  }]
+}, { _id: false });
+
 const providerProfileSchema = new mongoose.Schema(
   {
     isOnline: { type: Boolean, default: false },
@@ -246,54 +263,14 @@ const providerProfileSchema = new mongoose.Schema(
 
     verificationDocs: {
       // ✅ Phase 6: Independent Documents
-      idDocument: {
-        url: { type: String, default: null },
-        status: { type: String, enum: ["NOT_SUBMITTED", "PENDING", "APPROVED", "REJECTED"], default: "NOT_SUBMITTED" },
-        reason: { type: String, default: null },
-        updatedAt: { type: Date, default: null }
-      },
-      driverLicense: {
-        url: { type: String, default: null },
-        status: { type: String, enum: ["NOT_SUBMITTED", "PENDING", "APPROVED", "REJECTED"], default: "NOT_SUBMITTED" },
-        reason: { type: String, default: null },
-        updatedAt: { type: Date, default: null }
-      },
-      selfie: {
-        url: { type: String, default: null },
-        status: { type: String, enum: ["NOT_SUBMITTED", "PENDING", "APPROVED", "REJECTED"], default: "NOT_SUBMITTED" },
-        reason: { type: String, default: null },
-        updatedAt: { type: Date, default: null }
-      },
-      vehicleRC1: {
-        url: { type: String, default: null },
-        status: { type: String, enum: ["NOT_SUBMITTED", "PENDING", "APPROVED", "REJECTED"], default: "NOT_SUBMITTED" },
-        reason: { type: String, default: null },
-        updatedAt: { type: Date, default: null }
-      },
-      huruCriminalCheck: {
-        url: { type: String, default: null },
-        status: { type: String, enum: ["NOT_SUBMITTED", "PENDING", "APPROVED", "REJECTED"], default: "NOT_SUBMITTED" },
-        reason: { type: String, default: null },
-        updatedAt: { type: Date, default: null }
-      },
-      proofOfResidence: {
-        url: { type: String, default: null },
-        status: { type: String, enum: ["NOT_SUBMITTED", "PENDING", "APPROVED", "REJECTED"], default: "NOT_SUBMITTED" },
-        reason: { type: String, default: null },
-        updatedAt: { type: Date, default: null }
-      },
-      proofOfVehicle: {
-        url: { type: String, default: null },
-        status: { type: String, enum: ["NOT_SUBMITTED", "PENDING", "APPROVED", "REJECTED"], default: "NOT_SUBMITTED" },
-        reason: { type: String, default: null },
-        updatedAt: { type: Date, default: null }
-      },
-      vehicleLicenseDisc: {
-        url: { type: String, default: null },
-        status: { type: String, enum: ["NOT_SUBMITTED", "PENDING", "APPROVED", "REJECTED"], default: "NOT_SUBMITTED" },
-        reason: { type: String, default: null },
-        updatedAt: { type: Date, default: null }
-      },
+      idDocument: { type: verificationDocSchema, default: () => ({}) },
+      driverLicense: { type: verificationDocSchema, default: () => ({}) },
+      selfie: { type: verificationDocSchema, default: () => ({}) },
+      vehicleRC1: { type: verificationDocSchema, default: () => ({}) },
+      huruCriminalCheck: { type: verificationDocSchema, default: () => ({}) },
+      proofOfResidence: { type: verificationDocSchema, default: () => ({}) },
+      proofOfVehicle: { type: verificationDocSchema, default: () => ({}) },
+      vehicleLicenseDisc: { type: verificationDocSchema, default: () => ({}) },
 
       // legacy (to be migrated)
       idDocumentUrl: { type: String, default: null },
