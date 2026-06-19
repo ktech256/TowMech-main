@@ -330,6 +330,17 @@ const userSchema = new mongoose.Schema(
     passportNumber: { type: String, default: null },
     country: { type: String, default: null },
 
+    /**
+     * ✅ NEW: Identification tracking (Phase 5)
+     * Optional for Customers
+     */
+    identificationType: {
+      type: String,
+      enum: ["SA_ID", "PASSPORT"],
+      default: null,
+    },
+    identificationNumber: { type: String, default: null },
+
     email: { type: String, required: true, unique: true, lowercase: true },
     password: { type: String, required: true },
 

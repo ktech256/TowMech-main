@@ -298,37 +298,67 @@ async function sendOtpSms(phone, otpCode, purpose = "OTP", dialingCode = null, l
 }
 
 /**
- * ✅ Helper: Validate South African ID (Luhn algorithm)
+ * ✅ Helper: Validate South African ID (Luhn algorithm + Date/Age check)
  */
-function isValidSouthAfricanID(id) {
-  if (!id || typeof id !== "string") return false;
-  if (!/^\d{13}$/.test(id)) return false;
+function validateSouthAfricanID(id) {
+  if (!id || typeof id !== "string") return { ok: false, message: "South African ID must be a string." };
+  if (!/^\d{13}$/.test(id)) return { ok: false, message: "South African ID must contain exactly 13 digits." };
 
+  // 1. Luhn Algorithm
   let sum = 0;
   let alternate = false;
-
   for (let i = id.length - 1; i >= 0; i--) {
     let n = parseInt(id[i], 10);
-
     if (alternate) {
       n *= 2;
       if (n > 9) n -= 9;
     }
-
     sum += n;
     alternate = !alternate;
   }
+  if (sum % 10 !== 0) return { ok: false, message: "Invalid South African ID number (checksum failed)." };
 
-  return sum % 10 === 0;
+  // 2. Date and Age Validation
+  const yearPart = parseInt(id.substring(0, 2), 10);
+  const monthPart = parseInt(id.substring(2, 4), 10);
+  const dayPart = parseInt(id.substring(4, 6), 10);
+
+  if (monthPart < 1 || monthPart > 12) return { ok: false, message: "Invalid date of birth in ID (month)." };
+
+  const now = new Date();
+  const currentYear = now.getFullYear();
+  const currentCentury = Math.floor(currentYear / 100) * 100;
+  const yearShort = currentYear % 100;
+
+  let fullYear = currentCentury + yearPart;
+  if (yearPart > yearShort) {
+    fullYear -= 100;
+  }
+
+  const dob = new Date(fullYear, monthPart - 1, dayPart);
+  if (isNaN(dob.getTime()) || dob.getDate() !== dayPart) {
+    return { ok: false, message: "Invalid date of birth in ID." };
+  }
+
+  // Age 18 check
+  let age = currentYear - dob.getFullYear();
+  const m = now.getMonth() - dob.getMonth();
+  if (m < 0 || (m === 0 && now.getDate() < dob.getDate())) {
+    age--;
+  }
+
+  if (age < 18) return { ok: false, message: "You must be at least 18 years old." };
+
+  return { ok: true, dob };
 }
 
 /**
- * ✅ Helper: Validate passport number (8–11 alphanumeric)
+ * ✅ Helper: Validate passport number (6–11 alphanumeric)
  */
 function isValidPassport(passport) {
   if (!passport || typeof passport !== "string") return false;
   const clean = passport.trim();
-  return /^[a-zA-Z0-9]{8,11}$/.test(clean);
+  return /^[a-zA-Z0-9]{6,11}$/.test(clean);
 }
 
 /**
@@ -573,6 +603,8 @@ router.post("/register", async (req, res) => {
       saIdNumber,
       passportNumber,
       country,
+      identificationType, // ✅ NEW
+      identificationNumber, // ✅ NEW
       role = USER_ROLES.CUSTOMER,
       towTruckTypes,
       mechanicCategories,
@@ -625,10 +657,41 @@ router.post("/register", async (req, res) => {
     }
 
     /**
-     * ✅ CHANGE: Customer ID/Passport is OPTIONAL
-     * - Customers may still send nationalityType, saIdNumber, passportNumber, country
-     * - If provided, we validate; if missing, we allow registration
-     * - Providers/admin remain unchanged (providers still require documents as before via their own flows)
+     * ✅ Phase 5: ID / Passport Implementation
+     * 1. Identification Type + Number are optional for Customers.
+     * 2. If provided, they MUST be validated based on country and type.
+     */
+    let validatedIdType = identificationType || null;
+    let validatedIdNumber = identificationNumber || null;
+
+    // Backward compatibility mapping if new fields missing but old fields present
+    if (!validatedIdType && nationalityType) {
+        if (nationalityType === "SouthAfrican") validatedIdType = "SA_ID";
+        else if (nationalityType === "ForeignNational") validatedIdType = "PASSPORT";
+    }
+    if (!validatedIdNumber) {
+        validatedIdNumber = saIdNumber || passportNumber || null;
+    }
+
+    // Validate only if identificationNumber is provided
+    if (validatedIdNumber) {
+        if (validatedIdType === "SA_ID" && requestCountryCode === "ZA") {
+            const v = validateSouthAfricanID(validatedIdNumber);
+            if (!v.ok) return res.status(400).json({ message: v.message });
+        } else if (validatedIdType === "PASSPORT") {
+            if (!isValidPassport(validatedIdNumber)) {
+                return res.status(400).json({
+                    message: t(req, "errors.invalid_passport", {
+                        fallback: "Passport number must be 6 to 11 alphanumeric characters",
+                    }),
+                });
+            }
+        }
+    }
+
+    /**
+     * Providers/Admin still require nationalityType/docs (handled in their own flows)
+     * For Customer registration route specifically, we prioritize identificationType/Number
      */
     if (role !== USER_ROLES.CUSTOMER) {
       if (!nationalityType || !["SouthAfrican", "ForeignNational"].includes(nationalityType)) {
@@ -640,53 +703,25 @@ router.post("/register", async (req, res) => {
       }
 
       if (nationalityType === "SouthAfrican") {
-        if (!saIdNumber)
-          return res.status(400).json({ message: t(req, "errors.sa_id_required", { fallback: "saIdNumber is required for SouthAfrican" }) });
-        if (!isValidSouthAfricanID(saIdNumber))
-          return res.status(400).json({ message: t(req, "errors.invalid_sa_id", { fallback: "Invalid South African ID number" }) });
+        const saId = saIdNumber || validatedIdNumber;
+        if (!saId) return res.status(400).json({ message: t(req, "errors.sa_id_required", { fallback: "saIdNumber is required for SouthAfrican" }) });
+        const v = validateSouthAfricanID(saId);
+        if (!v.ok) return res.status(400).json({ message: v.message });
       }
 
       if (nationalityType === "ForeignNational") {
-        if (!passportNumber || !country) {
+        const pass = passportNumber || validatedIdNumber;
+        if (!pass || !country) {
           return res.status(400).json({
             message: t(req, "errors.foreign_required", { fallback: "passportNumber and country are required for ForeignNational" }),
           });
         }
-        if (!isValidPassport(passportNumber)) {
+        if (!isValidPassport(pass)) {
           return res.status(400).json({
-            message: t(req, "errors.invalid_passport", { fallback: "passportNumber must be 8 to 11 alphanumeric characters" }),
+            message: t(req, "errors.invalid_passport", { fallback: "Passport number must be 6 to 11 alphanumeric characters" }),
           });
         }
       }
-    } else {
-      // CUSTOMER: nationalityType can be present (or not); ID/Passport is optional
-      if (nationalityType && !["SouthAfrican", "ForeignNational"].includes(nationalityType)) {
-        return res.status(400).json({
-          message: t(req, "errors.invalid_nationality_type", {
-            fallback: "nationalityType must be SouthAfrican or ForeignNational",
-          }),
-        });
-      }
-
-      // Validate only if provided
-      if (nationalityType === "SouthAfrican" && saIdNumber) {
-        if (!isValidSouthAfricanID(saIdNumber)) {
-          return res.status(400).json({
-            message: t(req, "errors.invalid_sa_id", { fallback: "Invalid South African ID number" }),
-          });
-        }
-      }
-
-      if (nationalityType === "ForeignNational" && passportNumber) {
-        if (!isValidPassport(passportNumber)) {
-          return res.status(400).json({
-            message: t(req, "errors.invalid_passport", {
-              fallback: "passportNumber must be 8 to 11 alphanumeric characters",
-            }),
-          });
-        }
-      }
-      // country is optional for customer (even if ForeignNational)
     }
 
     const { allowedTowTruckTypes, allowedMechanicCategories } =
@@ -766,6 +801,10 @@ router.post("/register", async (req, res) => {
       saIdNumber: nationalityType === "SouthAfrican" ? (saIdNumber || null) : null,
       passportNumber: nationalityType === "ForeignNational" ? (passportNumber || null) : null,
       country: nationalityType === "ForeignNational" ? (country || null) : null,
+
+      // ✅ Phase 5: Identification Fields
+      identificationType: validatedIdType,
+      identificationNumber: validatedIdNumber,
 
       role,
       providerProfile:
