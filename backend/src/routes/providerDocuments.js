@@ -10,23 +10,21 @@ const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage() });
 
 /**
- * ✅ Provider uploads verification documents
+ * ✅ Provider uploads verification documents (Phase 6)
  * PATCH /api/providers/me/documents
- *
- * Upload using form-data with keys (supports BOTH):
- * - idDocument OR idDocumentUrl
- * - license OR licenseUrl
- * - vehicleProof OR vehicleProofUrl
- * - workshopProof OR workshopProofUrl
  */
 router.patch(
   "/me/documents",
   auth,
   upload.fields([
     { name: "idDocument", maxCount: 1 },
-    { name: "license", maxCount: 1 },
-    { name: "vehicleProof", maxCount: 1 },
-    { name: "workshopProof", maxCount: 1 },
+    { name: "driverLicense", maxCount: 1 },
+    { name: "selfie", maxCount: 1 },
+    { name: "vehicleRC1", maxCount: 1 },
+    { name: "huruCriminalCheck", maxCount: 1 },
+    { name: "proofOfResidence", maxCount: 1 },
+    { name: "proofOfVehicle", maxCount: 1 },
+    { name: "vehicleLicenseDisc", maxCount: 1 },
 
     // backward compatibility
     { name: "idDocumentUrl", maxCount: 1 },
@@ -41,7 +39,6 @@ router.patch(
 
       if (!user) return res.status(404).json({ message: "User not found" });
 
-      // ✅ Ensure provider only
       if (![USER_ROLES.TOW_TRUCK, USER_ROLES.MECHANIC].includes(user.role)) {
         return res
           .status(403)
@@ -55,29 +52,54 @@ router.patch(
 
       const files = req.files || {};
 
-      // helper: find file by either new key or legacy key
-      const getFile = (primaryKey, legacyKey) =>
-        files?.[primaryKey]?.[0] || files?.[legacyKey]?.[0] || null;
+      const uploadDoc = async (field) => {
+        const file = files[field]?.[0];
+        if (!file) return;
 
-      const uploadDoc = async (primaryKey, legacyKey, saveKey) => {
-        const file = getFile(primaryKey, legacyKey);
-        if (!file) return null;
-
-        const fileName = `providers/${user._id}/${saveKey}-${Date.now()}`;
+        const fileName = `providers/${user._id}/${field}-${Date.now()}`;
         const url = await uploadToFirebase(file.buffer, fileName, file.mimetype);
 
-        user.providerProfile.verificationDocs[saveKey] = url;
-        return url;
+        // Initialize object if it doesn't exist
+        if (!user.providerProfile.verificationDocs[field]) {
+          user.providerProfile.verificationDocs[field] = {};
+        }
+
+        user.providerProfile.verificationDocs[field] = {
+          url,
+          status: "PENDING",
+          updatedAt: new Date(),
+        };
+
+        // Sync to legacy if applicable
+        if (field === "idDocument") user.providerProfile.verificationDocs.idDocumentUrl = url;
+        if (field === "driverLicense") user.providerProfile.verificationDocs.licenseUrl = url;
+        if (field === "proofOfVehicle") user.providerProfile.verificationDocs.vehicleProofUrl = url;
       };
 
-      // ✅ Upload each doc if provided
-      await uploadDoc("idDocument", "idDocumentUrl", "idDocumentUrl");
-      await uploadDoc("license", "licenseUrl", "licenseUrl");
-      await uploadDoc("vehicleProof", "vehicleProofUrl", "vehicleProofUrl");
-      await uploadDoc("workshopProof", "workshopProofUrl", "workshopProofUrl");
+      const docFields = [
+        "idDocument",
+        "driverLicense",
+        "selfie",
+        "vehicleRC1",
+        "huruCriminalCheck",
+        "proofOfResidence",
+        "proofOfVehicle",
+        "vehicleLicenseDisc",
+      ];
 
-      // ✅ set provider status to pending after upload
-      user.providerProfile.verificationStatus = "PENDING";
+      for (const field of docFields) {
+        await uploadDoc(field);
+      }
+
+      // Handle legacy keys if they were sent instead
+      if (files.idDocumentUrl?.[0] && !files.idDocument?.[0]) await uploadDoc("idDocumentUrl");
+      if (files.licenseUrl?.[0] && !files.driverLicense?.[0]) await uploadDoc("driverLicense");
+      if (files.vehicleProofUrl?.[0] && !files.proofOfVehicle?.[0]) await uploadDoc("proofOfVehicle");
+
+      // ✅ set overall verification status to PENDING if it was NOT_SUBMITTED or REJECTED
+      if (user.providerProfile.verificationStatus !== "APPROVED") {
+        user.providerProfile.verificationStatus = "PENDING";
+      }
 
       await user.save();
 

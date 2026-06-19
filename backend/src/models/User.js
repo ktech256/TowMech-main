@@ -245,6 +245,57 @@ const providerProfileSchema = new mongoose.Schema(
     },
 
     verificationDocs: {
+      // ✅ Phase 6: Independent Documents
+      idDocument: {
+        url: { type: String, default: null },
+        status: { type: String, enum: ["NOT_SUBMITTED", "PENDING", "APPROVED", "REJECTED"], default: "NOT_SUBMITTED" },
+        reason: { type: String, default: null },
+        updatedAt: { type: Date, default: null }
+      },
+      driverLicense: {
+        url: { type: String, default: null },
+        status: { type: String, enum: ["NOT_SUBMITTED", "PENDING", "APPROVED", "REJECTED"], default: "NOT_SUBMITTED" },
+        reason: { type: String, default: null },
+        updatedAt: { type: Date, default: null }
+      },
+      selfie: {
+        url: { type: String, default: null },
+        status: { type: String, enum: ["NOT_SUBMITTED", "PENDING", "APPROVED", "REJECTED"], default: "NOT_SUBMITTED" },
+        reason: { type: String, default: null },
+        updatedAt: { type: Date, default: null }
+      },
+      vehicleRC1: {
+        url: { type: String, default: null },
+        status: { type: String, enum: ["NOT_SUBMITTED", "PENDING", "APPROVED", "REJECTED"], default: "NOT_SUBMITTED" },
+        reason: { type: String, default: null },
+        updatedAt: { type: Date, default: null }
+      },
+      huruCriminalCheck: {
+        url: { type: String, default: null },
+        status: { type: String, enum: ["NOT_SUBMITTED", "PENDING", "APPROVED", "REJECTED"], default: "NOT_SUBMITTED" },
+        reason: { type: String, default: null },
+        updatedAt: { type: Date, default: null }
+      },
+      proofOfResidence: {
+        url: { type: String, default: null },
+        status: { type: String, enum: ["NOT_SUBMITTED", "PENDING", "APPROVED", "REJECTED"], default: "NOT_SUBMITTED" },
+        reason: { type: String, default: null },
+        updatedAt: { type: Date, default: null }
+      },
+      proofOfVehicle: {
+        url: { type: String, default: null },
+        status: { type: String, enum: ["NOT_SUBMITTED", "PENDING", "APPROVED", "REJECTED"], default: "NOT_SUBMITTED" },
+        reason: { type: String, default: null },
+        updatedAt: { type: Date, default: null }
+      },
+      vehicleLicenseDisc: {
+        url: { type: String, default: null },
+        status: { type: String, enum: ["NOT_SUBMITTED", "PENDING", "APPROVED", "REJECTED"], default: "NOT_SUBMITTED" },
+        reason: { type: String, default: null },
+        updatedAt: { type: Date, default: null }
+      },
+
+      // legacy (to be migrated)
       idDocumentUrl: { type: String, default: null },
       licenseUrl: { type: String, default: null },
       vehicleProofUrl: { type: String, default: null },
@@ -342,6 +393,7 @@ const userSchema = new mongoose.Schema(
     identificationNumber: { type: String, default: null },
 
     email: { type: String, required: true, unique: true, lowercase: true },
+    photoUrl: { type: String, default: null },
     password: { type: String, required: true },
 
     role: {

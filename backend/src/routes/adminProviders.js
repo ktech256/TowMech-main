@@ -4,6 +4,7 @@ import auth from "../middleware/auth.js";
 import authorizeRoles from "../middleware/role.js";
 import User, { USER_ROLES } from "../models/User.js";
 import Job, { JOB_STATUSES } from "../models/Job.js";
+import { sendPushToUser } from "../utils/sendPush.js";
 
 const router = express.Router();
 
@@ -406,6 +407,165 @@ router.patch(
         message: "Could not reject provider",
         error: err.message,
       });
+    }
+  }
+);
+
+/**
+ * ✅ Phase 6: Individual Document Approval
+ * PATCH /api/admin/providers/providers/:id/documents/:field/approve
+ */
+router.patch(
+  "/providers/:id/documents/:field/approve",
+  auth,
+  authorizeRoles(USER_ROLES.ADMIN, USER_ROLES.SUPER_ADMIN),
+  async (req, res) => {
+    try {
+      if (blockRestrictedAdmins(req, res)) return;
+      if (!requirePermission(req, res, "canVerifyProviders")) return;
+
+      const { id, field } = req.params;
+      const provider = await User.findById(id);
+      if (!provider) return res.status(404).json({ message: "Provider not found" });
+
+      if (!provider.providerProfile.verificationDocs[field]) {
+        return res.status(400).json({ message: `Document ${field} not found` });
+      }
+
+      provider.providerProfile.verificationDocs[field].status = "APPROVED";
+      provider.providerProfile.verificationDocs[field].updatedAt = new Date();
+      provider.providerProfile.verificationDocs[field].reason = null;
+
+      // If it's a selfie, update the profile photo
+      if (field === "selfie") {
+        provider.photoUrl = provider.providerProfile.verificationDocs[field].url;
+      }
+
+      await provider.save();
+
+      // Send Notification
+      const fieldLabel = field.replace(/([A-Z])/g, " $1").replace(/^./, (str) => str.toUpperCase());
+      await sendPushToUser({
+        userId: provider._id,
+        title: "Document Approved ✅",
+        body: `Your ${fieldLabel} has been approved.`,
+      });
+
+      return res.status(200).json({
+        message: `${fieldLabel} approved ✅`,
+        verificationDocs: provider.providerProfile.verificationDocs,
+      });
+    } catch (err) {
+      return res.status(500).json({ message: "Approval failed", error: err.message });
+    }
+  }
+);
+
+/**
+ * ✅ Phase 6: Individual Document Rejection
+ * PATCH /api/admin/providers/providers/:id/documents/:field/reject
+ */
+router.patch(
+  "/providers/:id/documents/:field/reject",
+  auth,
+  authorizeRoles(USER_ROLES.ADMIN, USER_ROLES.SUPER_ADMIN),
+  async (req, res) => {
+    try {
+      if (blockRestrictedAdmins(req, res)) return;
+      if (!requirePermission(req, res, "canVerifyProviders")) return;
+
+      const { id, field } = req.params;
+      const { reason } = req.body;
+      const provider = await User.findById(id);
+      if (!provider) return res.status(404).json({ message: "Provider not found" });
+
+      if (!provider.providerProfile.verificationDocs[field]) {
+        return res.status(400).json({ message: `Document ${field} not found` });
+      }
+
+      provider.providerProfile.verificationDocs[field].status = "REJECTED";
+      provider.providerProfile.verificationDocs[field].updatedAt = new Date();
+      provider.providerProfile.verificationDocs[field].reason = reason || "Incomplete or blurry.";
+
+      // Overall status reverts to REJECTED if any required doc is rejected
+      provider.providerProfile.verificationStatus = "REJECTED";
+
+      await provider.save();
+
+      // Send Notification
+      const fieldLabel = field.replace(/([A-Z])/g, " $1").replace(/^./, (str) => str.toUpperCase());
+      await sendPushToUser({
+        userId: provider._id,
+        title: "Document Rejected ❌",
+        body: `Your ${fieldLabel} was rejected. Reason: ${provider.providerProfile.verificationDocs[field].reason}`,
+      });
+
+      return res.status(200).json({
+        message: `${fieldLabel} rejected ❌`,
+        verificationDocs: provider.providerProfile.verificationDocs,
+      });
+    } catch (err) {
+      return res.status(500).json({ message: "Rejection failed", error: err.message });
+    }
+  }
+);
+
+/**
+ * ✅ Phase 6: Final Provider Approval
+ * PATCH /api/admin/providers/providers/:id/final-approve
+ */
+router.patch(
+  "/providers/:id/final-approve",
+  auth,
+  authorizeRoles(USER_ROLES.ADMIN, USER_ROLES.SUPER_ADMIN),
+  async (req, res) => {
+    try {
+      if (blockRestrictedAdmins(req, res)) return;
+      if (!requirePermission(req, res, "canVerifyProviders")) return;
+
+      const { id } = req.params;
+      const provider = await User.findById(id);
+      if (!provider) return res.status(404).json({ message: "Provider not found" });
+
+      const docs = provider.providerProfile.verificationDocs;
+      const role = provider.role;
+
+      const commonRequired = ["idDocument", "driverLicense", "selfie", "huruCriminalCheck", "proofOfResidence"];
+      const towTruckRequired = ["vehicleRC1", "proofOfVehicle", "vehicleLicenseDisc"];
+
+      const requiredFields = [...commonRequired];
+      if (role === USER_ROLES.TOW_TRUCK) {
+        requiredFields.push(...towTruckRequired);
+      }
+
+      const allApproved = requiredFields.every((f) => docs[f] && docs[f].status === "APPROVED");
+
+      if (!allApproved) {
+        return res.status(400).json({
+          message: "Cannot approve provider. Not all required documents are approved ❌",
+          requiredFields,
+        });
+      }
+
+      provider.providerProfile.verificationStatus = "APPROVED";
+      provider.providerProfile.verifiedAt = new Date();
+      provider.providerProfile.verifiedBy = req.user._id;
+
+      await provider.save();
+
+      // Send Notification
+      await sendPushToUser({
+        userId: provider._id,
+        title: "Verification Complete 🎊",
+        body: "Congratulations! Your verification is complete. You can now go online.",
+      });
+
+      return res.status(200).json({
+        message: "Provider fully verified successfully ✅",
+        provider: provider.toSafeJSON(req.user.role),
+      });
+    } catch (err) {
+      return res.status(500).json({ message: "Final approval failed", error: err.message });
     }
   }
 );
