@@ -154,7 +154,7 @@ router.get(
       }
 
       const providers = await User.find(query)
-        .select("name email role countryCode providerProfile ratingStats createdAt accountStatus")
+        .select("name email role countryCode providerProfile identificationType identificationNumber passportCountry ratingStats createdAt accountStatus")
         .sort({ createdAt: -1 });
 
       return res.status(200).json({
@@ -204,7 +204,7 @@ router.get(
       }
 
       const providers = await User.find(query)
-        .select("name email role countryCode providerProfile ratingStats createdAt accountStatus")
+        .select("name email role countryCode providerProfile identificationType identificationNumber passportCountry ratingStats createdAt accountStatus")
         .sort({ createdAt: -1 });
 
       return res.status(200).json({
@@ -254,7 +254,7 @@ router.get(
       }
 
       const providers = await User.find(query)
-        .select("name email role countryCode providerProfile ratingStats createdAt accountStatus")
+        .select("name email role countryCode providerProfile identificationType identificationNumber passportCountry ratingStats createdAt accountStatus")
         .sort({ createdAt: -1 });
 
       return res.status(200).json({

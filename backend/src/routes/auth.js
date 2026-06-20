@@ -1286,7 +1286,7 @@ router.post("/reset-password", async (req, res) => {
 router.get("/me", auth, async (req, res) => {
   try {
     const user = await User.findById(req.user._id).select(
-      "name firstName lastName email phone birthday nationalityType saIdNumber passportNumber country role providerProfile countryCode permissions createdAt updatedAt"
+      "name firstName lastName email phone birthday nationalityType saIdNumber passportNumber country identificationType identificationNumber passportCountry role providerProfile countryCode permissions createdAt updatedAt"
     );
 
     if (!user) return res.status(404).json({ message: t(req, "errors.user_not_found", { fallback: "User not found" }) });
@@ -1356,7 +1356,7 @@ router.patch("/me", auth, async (req, res) => {
     await user.save();
 
     const fresh = await User.findById(userId).select(
-      "name firstName lastName email phone birthday nationalityType saIdNumber passportNumber country role providerProfile countryCode permissions createdAt updatedAt"
+      "name firstName lastName email phone birthday nationalityType saIdNumber passportNumber country identificationType identificationNumber passportCountry role providerProfile countryCode permissions createdAt updatedAt"
     );
 
     const safe = typeof fresh.toSafeJSON === "function" ? fresh.toSafeJSON(fresh.role) : fresh;
