@@ -73,6 +73,7 @@ import adminPartnersRoutes from "./routes/adminPartners.js";
 import partnerAuthRoutes from "./routes/partnerAuth.js";
 import fleetPortalRoutes from "./routes/fleetPortal.js";
 import insurancePortalRoutes from "./routes/insurancePortal.js";
+import adminPortalControlRoutes from "./routes/adminPortalControl.js";
 
 // ✅ Verification Auditor (Phase 7)
 import { runVerificationAudit } from "./utils/verificationAuditor.js";
@@ -246,6 +247,7 @@ app.use("/api/admin/partners", adminPartnersRoutes);
 app.use("/api/partner-auth", partnerAuthRoutes);
 app.use("/api/fleet-portal", fleetPortalRoutes);
 app.use("/api/insurance-portal", insurancePortalRoutes);
+app.use("/api/admin/portal-control", adminPortalControlRoutes);
 
 /**
  * ✅ ✅ ✅ ADMIN ROUTES REQUIRED BY DASHBOARD (NEW)

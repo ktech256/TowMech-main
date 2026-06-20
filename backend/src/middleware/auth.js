@@ -2,6 +2,9 @@
 
 import jwt from "jsonwebtoken";
 import User, { USER_ROLES } from "../models/User.js";
+import GlobalPortalSettings from "../models/GlobalPortalSettings.js";
+import Partner from "../models/Partner.js";
+import InsurancePartner from "../models/InsurancePartner.js";
 
 const auth = async (req, res, next) => {
   const authHeader = req.headers.authorization;
@@ -144,6 +147,49 @@ const auth = async (req, res, next) => {
 
     // attach user to req
     req.user = user;
+
+    /**
+     * ✅ PARTNER PORTAL SESSION INVALIDATION
+     */
+    if (decoded.partnerId) {
+       // Check if portal is disabled or partner suspended
+       const [settings, partner, insPartner] = await Promise.all([
+          GlobalPortalSettings.findOne(),
+          Partner.findById(decoded.partnerId),
+          InsurancePartner.findById(decoded.partnerId)
+       ]);
+
+       const targetPartner = partner || insPartner;
+
+       if (settings) {
+          if (settings.emergencyShutdownMode) {
+             return res.status(503).json({ message: "Portals are currently under emergency maintenance." });
+          }
+          if (targetPartner?.type === "FLEET" && !settings.fleetPortalEnabled) {
+             return res.status(503).json({ message: "Fleet portal is currently disabled." });
+          }
+          if (targetPartner?.type === "INSURANCE" && !settings.insurancePortalEnabled) {
+             return res.status(503).json({ message: "Insurance portal is currently disabled." });
+          }
+
+          if (settings.forceLogoutAllPartners) {
+             const iatDate = new Date(decoded.iat * 1000);
+             if (iatDate < settings.forceLogoutAllPartners) {
+                return res.status(401).json({
+                   message: "System-wide session invalidation. Please login again.",
+                   code: "GLOBAL_FORCE_LOGOUT"
+                });
+             }
+          }
+       }
+
+       if (targetPartner && targetPartner.isSuspended) {
+          return res.status(403).json({
+             message: "Your partner account has been suspended by an administrator.",
+             code: "PARTNER_SUSPENDED"
+          });
+       }
+    }
 
     return next();
   } catch (err) {

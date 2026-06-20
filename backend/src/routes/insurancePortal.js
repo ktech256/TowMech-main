@@ -6,6 +6,7 @@ import InsuranceCode from "../models/InsuranceCode.js";
 import Job, { JOB_STATUSES } from "../models/Job.js";
 import { generateCodesForPartner } from "../services/insurance/codeService.js";
 import { logAuditEvent } from "../utils/auditLogger.js";
+import GlobalPortalSettings from "../models/GlobalPortalSettings.js";
 
 const router = express.Router();
 
@@ -16,6 +17,20 @@ const requirePartnerAccess = async (req, res, next) => {
 
   const partner = await InsurancePartner.findById(req.user.partnerId);
   if (!partner) return res.status(403).json({ message: "Partner record not found." });
+
+  if (partner.isSuspended) {
+     return res.status(403).json({ message: "Access denied. Your insurer account is suspended." });
+  }
+
+  const settings = await GlobalPortalSettings.findOne();
+  if (settings) {
+     if (settings.emergencyShutdownMode) {
+        return res.status(503).json({ message: "System is currently under emergency maintenance." });
+     }
+     if (!settings.insurancePortalEnabled) {
+        return res.status(503).json({ message: "Insurance portal is currently disabled." });
+     }
+  }
 
   // 🌍 STRICT COUNTRY ISOLATION
   const requestedCountry = String(req.countryCode || "ZA").toUpperCase();
@@ -155,6 +170,13 @@ router.get("/statements", auth, requirePartnerAccess, async (req, res) => {
 
     const totalRevenue = jobs.reduce((acc, job) => acc + (job.pricing?.estimatedTotal || 0), 0);
     const utilization = jobs.length;
+
+    await logAuditEvent(req, {
+       action: "STATEMENT_GENERATED",
+       entityType: "PARTNER",
+       entityId: req.user.partnerId,
+       details: { from, to, utilization }
+    });
 
     return res.status(200).json({
       period: { from, to },

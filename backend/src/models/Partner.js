@@ -53,9 +53,15 @@ const PartnerSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ["ACTIVE", "INACTIVE", "PENDING_ACTIVATION"],
+      enum: ["ACTIVE", "INACTIVE", "PENDING_ACTIVATION", "SUSPENDED"],
       default: "PENDING_ACTIVATION",
       index: true,
+    },
+    isSuspended: { type: Boolean, default: false },
+    portalAccessFlags: {
+      canViewLiveMap: { type: Boolean, default: true },
+      canGenerateCodes: { type: Boolean, default: true },
+      canViewStatements: { type: Boolean, default: true },
     },
     activationToken: {
       type: String,

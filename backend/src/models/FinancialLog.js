@@ -10,7 +10,8 @@ const financialLogSchema = new mongoose.Schema(
           "INVOICE_GENERATED", "STATEMENT_GENERATED", "INVOICE_EDITED",
           "INVOICE_DOWNLOADED", "INVOICE_PAID", "PAYOUT_PROCESSED",
           "PARTNER_CODE_CREATED", "PARTNER_CODE_REVOKED", "PARTNER_CODE_USED",
-          "DRIVER_LINKED", "INSURANCE_CODE_VALIDATED"
+          "DRIVER_LINKED", "INSURANCE_CODE_VALIDATED",
+          "PARTNER_LOGIN", "PARTNER_LOGOUT", "PORTAL_DISABLED", "PORTAL_ENABLED"
         ]
     },
     entityType: { type: String, enum: ["INSURANCE", "PROVIDER", "PARTNER"], required: true },

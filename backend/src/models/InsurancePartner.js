@@ -82,6 +82,16 @@ const InsurancePartnerSchema = new mongoose.Schema(
       index: true,
     },
 
+    type: { type: String, default: "INSURANCE" },
+
+    isSuspended: { type: Boolean, default: false },
+    portalAccessFlags: {
+      canViewCodes: { type: Boolean, default: true },
+      canGenerateCodes: { type: Boolean, default: true },
+      canViewStatements: { type: Boolean, default: true },
+      canViewJobs: { type: Boolean, default: true },
+    },
+
     /**
      * Billing model:
      * - insurance jobs are NOT paid immediately by customer
