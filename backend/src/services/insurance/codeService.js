@@ -106,22 +106,13 @@ export async function validateInsuranceCode({
     isActive: true,
   };
 
-  const doc = partnerId
-    ? await InsuranceCode.findOne(query)
-    : await InsuranceCode.findOne(query).sort({ createdAt: -1 });
-
-  if (!partnerId) {
-    const count = await InsuranceCode.countDocuments(query);
-    if (count > 1) {
-      return {
-        ok: false,
-        message:
-          "Insurance code matches multiple partners for this country. Please contact support or regenerate codes.",
-      };
-    }
-  }
+  const doc = await InsuranceCode.findOne(query)
+    .populate("partner", "name partnerCode type")
+    .sort({ createdAt: -1 });
 
   if (!doc) return { ok: false, message: "Invalid code" };
+
+  const partner = doc.partner;
 
   if (!doc.expiresAt || doc.expiresAt < new Date()) {
     return { ok: false, message: "Code expired" };
@@ -162,9 +153,10 @@ export async function validateInsuranceCode({
   return {
     ok: true,
     message: "Code valid ✅",
+    partner: partner ? { name: partner.name, partnerCode: partner.partnerCode } : null,
     code: {
       id: doc._id,
-      partnerId: doc.partner,
+      partnerId: doc.partner?._id || doc.partner,
       partnerCode: doc.partnerCode,
       code: doc.code,
       countryCode: doc.countryCode,

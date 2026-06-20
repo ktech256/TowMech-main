@@ -283,6 +283,16 @@ router.patch("/codes/:id/disable", auth, requireAdmin, async (req, res) => {
 router.get("/invoice", auth, requireAdmin, async (req, res) => {
   try {
     const countryCode = resolveReqCountryCode(req);
+    const { from, to } = req.query;
+
+    if (from) {
+      const maxMonths = 12;
+      const limitDate = new Date();
+      limitDate.setMonth(limitDate.getMonth() - maxMonths);
+      if (new Date(from) < limitDate) {
+        return res.status(400).json({ message: `Invoice data is limited to the last ${maxMonths} months.` });
+      }
+    }
 
     const invoice = await buildInsuranceInvoice({
       countryCode,

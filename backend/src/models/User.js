@@ -10,6 +10,8 @@ export const USER_ROLES = {
   MECHANIC: "Mechanic",
   TOW_TRUCK: "TowTruck",
   ADMIN: "Admin",
+  PARTNER_ADMIN: "PartnerAdmin",
+  PARTNER_OPERATOR: "PartnerOperator",
 };
 
 /**
@@ -370,6 +372,32 @@ const userSchema = new mongoose.Schema(
     passportCountry: { type: String, default: null }, // ✅ Phase 8: Passport Country Management
     verifiedCountry: { type: String, default: null }, // ✅ Phase 9: Country Synchronization Fix
     country: { type: String, default: null },
+
+    /**
+     * ✅ NEW: Partner Ecosystem (Phase 10)
+     */
+    partnerId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Partner",
+      default: null,
+      index: true,
+    },
+    partnerRole: {
+      type: String,
+      enum: ["OWNER", "ADMIN", "OPERATOR", "DRIVER"],
+      default: null,
+    },
+    isCompanyDriver: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+    verificationSource: {
+      type: String,
+      enum: ["INDIVIDUAL", "COMPANY"],
+      default: "INDIVIDUAL",
+      index: true,
+    },
 
     /**
      * ✅ NEW: Identification tracking (Phase 5)

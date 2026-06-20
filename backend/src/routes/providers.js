@@ -18,6 +18,11 @@ import { uploadToFirebase } from "../utils/uploadToFirebase.js";
 
 // ✅✅✅ ADDED (push helpers)
 import { sendPushToManyUsers } from "../utils/sendPush.js";
+import { logAuditEvent } from "../utils/auditLogger.js";
+
+// ✅ ADDED (for driver verification codes)
+import DriverVerificationCode from "../models/DriverVerificationCode.js";
+import Partner from "../models/Partner.js";
 
 const router = express.Router();
 
@@ -931,6 +936,66 @@ router.patch("/jobs/:jobId/cancel", auth, async (req, res) => {
       message: "Could not cancel and rebroadcast job",
       error: err.message,
     });
+  }
+});
+
+/**
+ * ✅ VALIDATE COMPANY CODE (for Company Drivers)
+ * POST /api/providers/validate-company-code
+ */
+router.post("/validate-company-code", auth, async (req, res) => {
+  try {
+    const { code } = req.body;
+    if (!code) return res.status(400).json({ message: "Company code is required" });
+
+    const user = await User.findById(req.user._id);
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    // Race condition protection: Atomic update ensures code is only used once
+    const verificationCode = await DriverVerificationCode.findOneAndUpdate(
+      {
+        code: code.trim().toUpperCase(),
+        isRevoked: false,
+        usedBy: null, // ensure unused
+        expiresAt: { $gt: new Date() } // ensure not expired
+      },
+      {
+        $set: {
+          usedBy: user._id,
+          usedAt: new Date()
+        }
+      },
+      { new: true }
+    ).populate("partnerId");
+
+    if (!verificationCode) {
+      return res.status(404).json({ message: "Invalid, expired, or already used verification code." });
+    }
+
+    // Link provider to partner
+    user.partnerId = verificationCode.partnerId._id;
+    user.isCompanyDriver = true;
+    user.verificationSource = "COMPANY";
+    user.partnerRole = "DRIVER";
+    await user.save();
+
+    await logAuditEvent(req, {
+      action: "PARTNER_CODE_USED",
+      entityType: "PARTNER",
+      entityId: verificationCode.partnerId._id,
+      details: { driverId: user._id, code: verificationCode.code }
+    });
+
+    return res.status(200).json({
+      message: "Company verified successfully ✅",
+      partner: {
+        name: verificationCode.partnerId.name,
+        type: verificationCode.partnerId.type,
+        verifiedAt: verificationCode.usedAt
+      }
+    });
+  } catch (err) {
+    return res.status(500).json({ message: "Validation failed", error: err.message });
   }
 });
 

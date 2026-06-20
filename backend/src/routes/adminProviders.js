@@ -154,7 +154,7 @@ router.get(
       }
 
       const providers = await User.find(query)
-        .select("name email role countryCode providerProfile identificationType identificationNumber passportCountry verifiedCountry ratingStats createdAt accountStatus")
+        .select("name email role countryCode providerProfile identificationType identificationNumber passportCountry verifiedCountry partnerId isCompanyDriver verificationSource ratingStats createdAt accountStatus")
         .sort({ createdAt: -1 });
 
       return res.status(200).json({
@@ -204,7 +204,7 @@ router.get(
       }
 
       const providers = await User.find(query)
-        .select("name email role countryCode providerProfile identificationType identificationNumber passportCountry verifiedCountry ratingStats createdAt accountStatus")
+        .select("name email role countryCode providerProfile identificationType identificationNumber passportCountry verifiedCountry partnerId isCompanyDriver verificationSource ratingStats createdAt accountStatus")
         .sort({ createdAt: -1 });
 
       return res.status(200).json({
@@ -254,7 +254,7 @@ router.get(
       }
 
       const providers = await User.find(query)
-        .select("name email role countryCode providerProfile identificationType identificationNumber passportCountry verifiedCountry ratingStats createdAt accountStatus")
+        .select("name email role countryCode providerProfile identificationType identificationNumber passportCountry verifiedCountry partnerId isCompanyDriver verificationSource ratingStats createdAt accountStatus")
         .sort({ createdAt: -1 });
 
       return res.status(200).json({
@@ -291,8 +291,8 @@ router.get(
       console.log(`[VERIFICATION_TRACE] Admin fetching verification for provider: ${req.params.id}`);
 
       const provider = await User.findById(req.params.id).select(
-        "name firstName lastName email role countryCode providerProfile identificationType identificationNumber passportCountry verifiedCountry saIdNumber passportNumber ratingStats accountStatus"
-      );
+        "name firstName lastName email role countryCode providerProfile identificationType identificationNumber passportCountry verifiedCountry saIdNumber passportNumber partnerId isCompanyDriver verificationSource ratingStats accountStatus"
+      ).populate("partnerId", "name type partnerCode");
 
       if (!provider) {
         console.error(`[VERIFICATION_TRACE] Provider not found: ${req.params.id}`);
@@ -595,9 +595,17 @@ router.patch(
 
       const docs = provider.providerProfile.verificationDocs;
       const role = provider.role;
+      const isCompanyVerified = provider.verificationSource === "COMPANY";
 
-      const commonRequired = ["idDocument", "driverLicense", "selfie", "huruCriminalCheck", "proofOfResidence"];
-      const towTruckRequired = ["proofOfVehicle", "vehicleLicenseDisc"]; // RC1 is optional
+      // 🏢 Reduced document requirements for Company Drivers
+      const commonRequired = isCompanyVerified
+          ? ["idDocument", "selfie"]
+          : ["idDocument", "driverLicense", "selfie", "huruCriminalCheck", "proofOfResidence"];
+
+      // 🏢 Reduced vehicle requirements for Company Tow Trucks (often fleet-owned)
+      const towTruckRequired = isCompanyVerified
+          ? [] // Company fleets often verify their own vehicles
+          : ["proofOfVehicle", "vehicleLicenseDisc"]; // RC1 remains optional
 
       const requiredFields = [...commonRequired];
       if (role === USER_ROLES.TOW_TRUCK) {

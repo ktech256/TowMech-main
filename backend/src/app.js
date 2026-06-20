@@ -68,6 +68,12 @@ import adminLegalRoutes from "./routes/adminLegal.routes.js";
 import adminInsuranceRoutes from "./routes/adminInsurance.routes.js";
 import adminServiceCategoriesRoutes from "./routes/adminServiceCategories.js";
 
+// ✅ NEW: Partner Ecosystem (Phase 10)
+import adminPartnersRoutes from "./routes/adminPartners.js";
+import partnerAuthRoutes from "./routes/partnerAuth.js";
+import fleetPortalRoutes from "./routes/fleetPortal.js";
+import insurancePortalRoutes from "./routes/insurancePortal.js";
+
 // ✅ Verification Auditor (Phase 7)
 import { runVerificationAudit } from "./utils/verificationAuditor.js";
 
@@ -232,6 +238,14 @@ app.use("/api/admin/overview", adminOverviewRoutes);
 app.use("/api/admin/safety", adminSafetyRoutes);
 app.use("/api/admin", adminUsersRoutes);
 app.use("/api/superadmin", superAdminRoutes);
+
+/**
+ * ✅ PARTNER ECOSYSTEM (Phase 10)
+ */
+app.use("/api/admin/partners", adminPartnersRoutes);
+app.use("/api/partner-auth", partnerAuthRoutes);
+app.use("/api/fleet-portal", fleetPortalRoutes);
+app.use("/api/insurance-portal", insurancePortalRoutes);
 
 /**
  * ✅ ✅ ✅ ADMIN ROUTES REQUIRED BY DASHBOARD (NEW)
