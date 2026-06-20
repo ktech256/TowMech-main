@@ -154,7 +154,7 @@ router.get(
       }
 
       const providers = await User.find(query)
-        .select("name email role countryCode providerProfile identificationType identificationNumber passportCountry ratingStats createdAt accountStatus")
+        .select("name email role countryCode providerProfile identificationType identificationNumber passportCountry verifiedCountry ratingStats createdAt accountStatus")
         .sort({ createdAt: -1 });
 
       return res.status(200).json({
@@ -204,7 +204,7 @@ router.get(
       }
 
       const providers = await User.find(query)
-        .select("name email role countryCode providerProfile identificationType identificationNumber passportCountry ratingStats createdAt accountStatus")
+        .select("name email role countryCode providerProfile identificationType identificationNumber passportCountry verifiedCountry ratingStats createdAt accountStatus")
         .sort({ createdAt: -1 });
 
       return res.status(200).json({
@@ -254,7 +254,7 @@ router.get(
       }
 
       const providers = await User.find(query)
-        .select("name email role countryCode providerProfile identificationType identificationNumber passportCountry ratingStats createdAt accountStatus")
+        .select("name email role countryCode providerProfile identificationType identificationNumber passportCountry verifiedCountry ratingStats createdAt accountStatus")
         .sort({ createdAt: -1 });
 
       return res.status(200).json({
@@ -291,7 +291,7 @@ router.get(
       console.log(`[VERIFICATION_TRACE] Admin fetching verification for provider: ${req.params.id}`);
 
       const provider = await User.findById(req.params.id).select(
-        "name firstName lastName email role countryCode providerProfile identificationType identificationNumber passportCountry saIdNumber passportNumber ratingStats accountStatus"
+        "name firstName lastName email role countryCode providerProfile identificationType identificationNumber passportCountry verifiedCountry saIdNumber passportNumber ratingStats accountStatus"
       );
 
       if (!provider) {
@@ -369,6 +369,13 @@ router.patch(
       provider.providerProfile.verificationStatus = "APPROVED";
       provider.providerProfile.verifiedAt = new Date();
       provider.providerProfile.verifiedBy = req.user._id;
+
+      // Phase 9: Country Synchronization Fix
+      if (provider.identificationType === "SA_ID") {
+          provider.verifiedCountry = "South Africa";
+      } else if (provider.identificationType === "PASSPORT") {
+          provider.verifiedCountry = provider.passportCountry;
+      }
 
       await provider.save();
 
@@ -619,6 +626,13 @@ router.patch(
       provider.providerProfile.verifiedAt = new Date();
       provider.providerProfile.verifiedBy = req.user._id;
 
+      // Phase 9: Country Synchronization Fix
+      if (provider.identificationType === "SA_ID") {
+          provider.verifiedCountry = "South Africa";
+      } else if (provider.identificationType === "PASSPORT") {
+          provider.verifiedCountry = provider.passportCountry;
+      }
+
       await provider.save();
       console.log(`[VERIFICATION_TRACE] Final approve SUCCESS for ${id}`);
 
@@ -761,9 +775,11 @@ router.patch(
         provider.saIdNumber = provider.identificationNumber;
         provider.passportNumber = null;
         provider.passportCountry = null; // Clear country for SA ID users
+        provider.verifiedCountry = "South Africa"; // Sync Phase 9
       } else if (provider.identificationType === "PASSPORT") {
         provider.passportNumber = provider.identificationNumber;
         provider.saIdNumber = null;
+        provider.verifiedCountry = provider.passportCountry; // Sync Phase 9
       }
 
       await provider.save();
