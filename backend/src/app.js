@@ -58,6 +58,7 @@ import i18n from "./middleware/i18n.js";
 import legalRoutes from "./routes/legal.routes.js";
 import insuranceRoutes from "./routes/insurance.routes.js";
 import countryRoutes from "./routes/country.routes.js";
+import providerDocRoutes from "./routes/providerDocuments.js";
 
 // ✅ ✅ ✅ MISSING DASHBOARD ROUTES (NEW)
 import adminCountriesRoutes from "./routes/adminCountries.routes.js";
@@ -158,6 +159,7 @@ app.get("/health", (req, res) => {
  */
 app.use("/api/auth", authRoutes);
 app.use("/api/jobs", jobRoutes);
+app.use("/api/providers", providerDocRoutes); // ✅ Granular Doc Routes (Phase 6)
 app.use("/api/providers", providerRoutes);
 app.use("/api/payouts", payoutRoutes); // ✅ NEW
 app.use("/api/payments", paymentRoutes);

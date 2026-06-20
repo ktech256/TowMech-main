@@ -35,9 +35,16 @@ router.patch(
   async (req, res) => {
     try {
       const userId = req.user._id;
+      console.log(`[VERIFICATION_TRACE] Upload start for provider: ${userId}`);
+
       const user = await User.findById(userId);
 
-      if (!user) return res.status(404).json({ message: "User not found" });
+      if (!user) {
+        console.error(`[VERIFICATION_TRACE] User not found: ${userId}`);
+        return res.status(404).json({ message: "User not found" });
+      }
+
+      console.log(`[VERIFICATION_TRACE] Provider Role: ${user.role}`);
 
       if (![USER_ROLES.TOW_TRUCK, USER_ROLES.MECHANIC].includes(user.role)) {
         return res
@@ -51,13 +58,16 @@ router.patch(
       }
 
       const files = req.files || {};
+      console.log(`[VERIFICATION_TRACE] Files received: ${Object.keys(files).join(", ")}`);
 
       const uploadDoc = async (field) => {
         const file = files[field]?.[0];
         if (!file) return;
 
+        console.log(`[VERIFICATION_TRACE] Processing field: ${field}`);
         const fileName = `providers/${user._id}/${field}-${Date.now()}`;
         const url = await uploadToFirebase(file.buffer, fileName, file.mimetype);
+        console.log(`[VERIFICATION_TRACE] Firebase upload success for ${field}: ${url}`);
 
         // Move current to history if it exists and has a URL
         const current = user.providerProfile.verificationDocs[field];
@@ -74,22 +84,28 @@ router.patch(
         }
 
         // Update current version
-        user.providerProfile.verificationDocs[field] = {
-          ...user.providerProfile.verificationDocs[field],
+        const newDoc = {
           url,
           status: "PENDING",
           reason: null,
           submittedAt: new Date(),
           updatedAt: new Date(),
           captureTimestamp: req.body[`${field}Timestamp`] || new Date(),
+          history: current?.history || []
         };
 
-        // Sync to legacy if applicable
-        if (field === "idDocument") user.providerProfile.verificationDocs.idDocumentUrl = url;
-        if (field === "driverLicense") user.providerProfile.verificationDocs.licenseUrl = url;
-        if (field === "proofOfVehicle") user.providerProfile.verificationDocs.vehicleProofUrl = url;
+        user.set(`providerProfile.verificationDocs.${field}`, newDoc);
 
+        console.log(`[VERIFICATION_TRACE] Set ${field} status to PENDING with URL: ${url}`);
+
+        // Sync to legacy if applicable
+        if (field === "idDocument") user.set('providerProfile.verificationDocs.idDocumentUrl', url);
+        if (field === "driverLicense") user.set('providerProfile.verificationDocs.licenseUrl', url);
+        if (field === "proofOfVehicle") user.set('providerProfile.verificationDocs.vehicleProofUrl', url);
+
+        user.markModified('providerProfile.verificationDocs');
         user.markModified(`providerProfile.verificationDocs.${field}`);
+        console.log(`[VERIFICATION_TRACE] markedModified for verificationDocs and ${field}`);
       };
 
       const docFields = [
@@ -118,13 +134,16 @@ router.patch(
       }
 
       await user.save();
+      console.log(`[VERIFICATION_TRACE] user.save() completed for ${userId}`);
 
       return res.status(200).json({
         message: "Documents uploaded successfully ✅",
         verificationStatus: user.providerProfile.verificationStatus,
         verificationDocs: user.providerProfile.verificationDocs,
+        user: await User.findById(user._id).select("name email phone role providerProfile createdAt updatedAt")
       });
     } catch (err) {
+      console.error(`[VERIFICATION_TRACE] ERROR: ${err.message}`, err);
       return res.status(500).json({
         message: "Failed to upload documents ❌",
         error: err.message,

@@ -275,17 +275,31 @@ router.get(
 
       const workspaceCountryCode = req.countryCode;
 
+      console.log(`[VERIFICATION_TRACE] Admin fetching verification for provider: ${req.params.id}`);
+
       const provider = await User.findById(req.params.id).select(
         "name email role countryCode providerProfile ratingStats accountStatus"
       );
 
-      if (!provider) return res.status(404).json({ message: "Provider not found" });
+      if (!provider) {
+        console.error(`[VERIFICATION_TRACE] Provider not found: ${req.params.id}`);
+        return res.status(404).json({ message: "Provider not found" });
+      }
 
       if (
         req.user.role !== USER_ROLES.SUPER_ADMIN &&
         String(provider.countryCode || "").toUpperCase() !== workspaceCountryCode
       ) {
         return res.status(404).json({ message: "Provider not found" });
+      }
+
+      console.log(`[VERIFICATION_TRACE] Docs found: ${!!provider.providerProfile?.verificationDocs}`);
+      if (provider.providerProfile?.verificationDocs) {
+        Object.keys(provider.providerProfile.verificationDocs).forEach(k => {
+          if (provider.providerProfile.verificationDocs[k]?.url) {
+            console.log(`[VERIFICATION_TRACE] - ${k}: PENDING/SUBMITTED`);
+          }
+        });
       }
 
       return res.status(200).json({
@@ -295,6 +309,7 @@ router.get(
         verificationDocs: provider.providerProfile?.verificationDocs || {},
       });
     } catch (err) {
+      console.error(`[VERIFICATION_TRACE] ERROR: ${err.message}`, err);
       return res.status(500).json({
         message: "Could not fetch verification docs",
         error: err.message,
@@ -425,6 +440,8 @@ router.patch(
       if (!requirePermission(req, res, "canVerifyProviders")) return;
 
       const { id, field } = req.params;
+      console.log(`[VERIFICATION_TRACE] Approving document: ${field} for provider: ${id}`);
+
       const provider = await User.findById(id);
       if (!provider) return res.status(404).json({ message: "Provider not found" });
 
@@ -443,6 +460,7 @@ router.patch(
 
       provider.markModified(`providerProfile.verificationDocs.${field}`);
       await provider.save();
+      console.log(`[VERIFICATION_TRACE] Approved ${field} for ${id}`);
 
       // Send Notification
       const fieldLabel = field.replace(/([A-Z])/g, " $1").replace(/^./, (str) => str.toUpperCase());
@@ -457,6 +475,7 @@ router.patch(
         verificationDocs: provider.providerProfile.verificationDocs,
       });
     } catch (err) {
+      console.error(`[VERIFICATION_TRACE] Approval ERROR: ${err.message}`);
       return res.status(500).json({ message: "Approval failed", error: err.message });
     }
   }
@@ -477,6 +496,8 @@ router.patch(
 
       const { id, field } = req.params;
       const { reason } = req.body;
+      console.log(`[VERIFICATION_TRACE] Rejecting document: ${field} for provider: ${id}. Reason: ${reason}`);
+
       const provider = await User.findById(id);
       if (!provider) return res.status(404).json({ message: "Provider not found" });
 
@@ -493,6 +514,7 @@ router.patch(
 
       provider.markModified(`providerProfile.verificationDocs.${field}`);
       await provider.save();
+      console.log(`[VERIFICATION_TRACE] Rejected ${field} for ${id}`);
 
       // Send Notification
       const fieldLabel = field.replace(/([A-Z])/g, " $1").replace(/^./, (str) => str.toUpperCase());
@@ -507,6 +529,7 @@ router.patch(
         verificationDocs: provider.providerProfile.verificationDocs,
       });
     } catch (err) {
+      console.error(`[VERIFICATION_TRACE] Rejection ERROR: ${err.message}`);
       return res.status(500).json({ message: "Rejection failed", error: err.message });
     }
   }
@@ -526,6 +549,8 @@ router.patch(
       if (!requirePermission(req, res, "canVerifyProviders")) return;
 
       const { id } = req.params;
+      console.log(`[VERIFICATION_TRACE] Final approve requested for provider: ${id}`);
+
       const provider = await User.findById(id);
       if (!provider) return res.status(404).json({ message: "Provider not found" });
 
@@ -543,6 +568,7 @@ router.patch(
       const allApproved = requiredFields.every((f) => docs[f] && docs[f].status === "APPROVED");
 
       if (!allApproved) {
+        console.warn(`[VERIFICATION_TRACE] Final approve denied for ${id}. Not all required docs approved.`);
         return res.status(400).json({
           message: "Cannot approve provider. Not all required documents are approved ❌",
           requiredFields,
@@ -554,6 +580,7 @@ router.patch(
       provider.providerProfile.verifiedBy = req.user._id;
 
       await provider.save();
+      console.log(`[VERIFICATION_TRACE] Final approve SUCCESS for ${id}`);
 
       // Send Notification
       await sendPushToUser({
@@ -567,6 +594,7 @@ router.patch(
         provider: provider.toSafeJSON(req.user.role),
       });
     } catch (err) {
+      console.error(`[VERIFICATION_TRACE] Final Approval ERROR: ${err.message}`);
       return res.status(500).json({ message: "Final approval failed", error: err.message });
     }
   }
