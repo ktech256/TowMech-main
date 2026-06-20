@@ -363,6 +363,31 @@ router.patch("/me/status", auth, async (req, res) => {
         });
       }
 
+      // Phase 7: Document Expiry Restriction
+      const docs = user.providerProfile.verificationDocs || {};
+      const now = new Date();
+      let hasOverdueDoc = false;
+      let overdueLabel = "";
+
+      for (const field of Object.keys(docs)) {
+        const d = docs[field];
+        if (d && d.status === "EXPIRED" && d.gracePeriodEnd && new Date(d.gracePeriodEnd) <= now) {
+          hasOverdueDoc = true;
+          overdueLabel = field.replace(/([A-Z])/g, " $1").replace(/^./, (str) => str.toUpperCase());
+          break;
+        }
+        if (d && d.status === "UPDATE_REQUIRED") {
+            // Optional: block if update is overdue? For now just allow if not expired.
+        }
+      }
+
+      if (hasOverdueDoc) {
+        return res.status(403).json({
+          message: `Account restricted. Required document [${overdueLabel}] expired and grace period ended.`,
+          code: "DOCUMENTS_EXPIRED"
+        });
+      }
+
       if (hasIncomingLatLng && incomingLat === 0 && incomingLng === 0) {
         return res.status(400).json({
           message: "Cannot go ONLINE without a valid GPS location (lat/lng is 0,0).",

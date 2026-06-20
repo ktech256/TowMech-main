@@ -3,8 +3,43 @@ import auth from "../middleware/auth.js";
 import authorizeRoles from "../middleware/role.js";
 import User, { USER_ROLES } from "../models/User.js";
 import admin, { initFirebase } from "../config/firebase.js";
+import Notification from "../models/Notification.js";
 
 const router = express.Router();
+
+/**
+ * ✅ Get user's personal notifications (Inbox)
+ * GET /api/notifications/my
+ */
+router.get("/my", auth, async (req, res) => {
+  try {
+    const notifications = await Notification.find({ userId: req.user._id })
+      .sort({ createdAt: -1 })
+      .limit(50);
+
+    return res.status(200).json({ notifications });
+  } catch (err) {
+    return res.status(500).json({ message: "Could not fetch notifications", error: err.message });
+  }
+});
+
+/**
+ * ✅ Mark notification as read
+ * PATCH /api/notifications/:id/read
+ */
+router.patch("/:id/read", auth, async (req, res) => {
+  try {
+    const notif = await Notification.findOneAndUpdate(
+      { _id: req.params.id, userId: req.user._id },
+      { $set: { isRead: true } },
+      { new: true }
+    );
+    if (!notif) return res.status(404).json({ message: "Notification not found" });
+    return res.status(200).json({ notification: notif });
+  } catch (err) {
+    return res.status(500).json({ message: "Update failed", error: err.message });
+  }
+});
 
 /**
  * ✅ Test route (GET)

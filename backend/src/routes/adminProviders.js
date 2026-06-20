@@ -4,9 +4,22 @@ import auth from "../middleware/auth.js";
 import authorizeRoles from "../middleware/role.js";
 import User, { USER_ROLES } from "../models/User.js";
 import Job, { JOB_STATUSES } from "../models/Job.js";
+import Notification from "../models/Notification.js";
 import { sendPushToUser } from "../utils/sendPush.js";
 
 const router = express.Router();
+
+/**
+ * ✅ Helper to notify user via Push + In-App
+ */
+async function notifyProvider(userId, title, body, type = "VERIFICATION") {
+  try {
+    await sendPushToUser({ userId, title, body, data: { type } });
+    await Notification.create({ userId, title, body, type });
+  } catch (err) {
+    console.error(`[ADMIN] Notify error for ${userId}:`, err.message);
+  }
+}
 
 /**
  * ✅ Resolve active workspace country (Tenant)
@@ -464,11 +477,12 @@ router.patch(
 
       // Send Notification
       const fieldLabel = field.replace(/([A-Z])/g, " $1").replace(/^./, (str) => str.toUpperCase());
-      await sendPushToUser({
-        userId: provider._id,
-        title: "Document Approved ✅",
-        body: `Your ${fieldLabel} has been approved.`,
-      });
+      await notifyProvider(
+        provider._id,
+        "Document Approved ✅",
+        `Your ${fieldLabel} has been approved.`,
+        "VERIFICATION"
+      );
 
       return res.status(200).json({
         message: `${fieldLabel} approved ✅`,
@@ -518,11 +532,12 @@ router.patch(
 
       // Send Notification
       const fieldLabel = field.replace(/([A-Z])/g, " $1").replace(/^./, (str) => str.toUpperCase());
-      await sendPushToUser({
-        userId: provider._id,
-        title: "Document Rejected ❌",
-        body: `Your ${fieldLabel} was rejected. Reason: ${provider.providerProfile.verificationDocs[field].reason}`,
-      });
+      await notifyProvider(
+        provider._id,
+        "Document Rejected ❌",
+        `Your ${fieldLabel} was rejected. Reason: ${provider.providerProfile.verificationDocs[field].reason}`,
+        "VERIFICATION"
+      );
 
       return res.status(200).json({
         message: `${fieldLabel} rejected ❌`,
@@ -583,11 +598,12 @@ router.patch(
       console.log(`[VERIFICATION_TRACE] Final approve SUCCESS for ${id}`);
 
       // Send Notification
-      await sendPushToUser({
-        userId: provider._id,
-        title: "Verification Complete 🎊",
-        body: "Congratulations! Your verification is complete. You can now go online.",
-      });
+      await notifyProvider(
+        provider._id,
+        "Verification Complete 🎊",
+        "Congratulations! Your verification is complete. You can now go online.",
+        "VERIFICATION"
+      );
 
       return res.status(200).json({
         message: "Provider fully verified successfully ✅",
@@ -596,6 +612,100 @@ router.patch(
     } catch (err) {
       console.error(`[VERIFICATION_TRACE] Final Approval ERROR: ${err.message}`);
       return res.status(500).json({ message: "Final approval failed", error: err.message });
+    }
+  }
+);
+
+/**
+ * ✅ Phase 7: Require Document Update
+ * PATCH /api/admin/providers/providers/:id/documents/:field/require-update
+ */
+router.patch(
+  "/providers/:id/documents/:field/require-update",
+  auth,
+  authorizeRoles(USER_ROLES.ADMIN, USER_ROLES.SUPER_ADMIN),
+  async (req, res) => {
+    try {
+      if (blockRestrictedAdmins(req, res)) return;
+      if (!requirePermission(req, res, "canVerifyProviders")) return;
+
+      const { id, field } = req.params;
+      const { reason } = req.body;
+      console.log(`[VERIFICATION_TRACE] Requesting document update: ${field} for provider: ${id}. Reason: ${reason}`);
+
+      const provider = await User.findById(id);
+      if (!provider) return res.status(404).json({ message: "Provider not found" });
+
+      if (!provider.providerProfile.verificationDocs[field]) {
+        provider.providerProfile.verificationDocs[field] = { status: "NOT_SUBMITTED" };
+      }
+
+      const doc = provider.providerProfile.verificationDocs[field];
+      doc.status = "UPDATE_REQUIRED";
+      doc.updateRequired = true;
+      doc.updateReason = reason || "Please upload a valid document.";
+      doc.updatedAt = new Date();
+
+      provider.markModified(`providerProfile.verificationDocs.${field}`);
+      await provider.save();
+
+      // Send Notification
+      const fieldLabel = field.replace(/([A-Z])/g, " $1").replace(/^./, (str) => str.toUpperCase());
+      await notifyProvider(
+        provider._id,
+        "Document Update Required ⚠️",
+        `Admin requested an update for your ${fieldLabel}. Reason: ${doc.updateReason}`,
+        "VERIFICATION"
+      );
+
+      return res.status(200).json({
+        message: `${fieldLabel} update requested ✅`,
+        verificationDocs: provider.providerProfile.verificationDocs,
+      });
+    } catch (err) {
+      console.error(`[VERIFICATION_TRACE] Update Request ERROR: ${err.message}`);
+      return res.status(500).json({ message: "Update request failed", error: err.message });
+    }
+  }
+);
+
+/**
+ * ✅ Phase 7: Set Document Expiry
+ * PATCH /api/admin/providers/providers/:id/documents/:field/expiry
+ */
+router.patch(
+  "/providers/:id/documents/:field/expiry",
+  auth,
+  authorizeRoles(USER_ROLES.ADMIN, USER_ROLES.SUPER_ADMIN),
+  async (req, res) => {
+    try {
+      if (blockRestrictedAdmins(req, res)) return;
+      if (!requirePermission(req, res, "canVerifyProviders")) return;
+
+      const { id, field } = req.params;
+      const { expiryDate, expiryType } = req.body;
+
+      const provider = await User.findById(id);
+      if (!provider) return res.status(404).json({ message: "Provider not found" });
+
+      if (!provider.providerProfile.verificationDocs[field]) {
+        return res.status(400).json({ message: `Document ${field} not found` });
+      }
+
+      const doc = provider.providerProfile.verificationDocs[field];
+      doc.expiryType = expiryType || "NA";
+      doc.expiryDate = expiryDate ? new Date(expiryDate) : null;
+      doc.updatedAt = new Date();
+
+      provider.markModified(`providerProfile.verificationDocs.${field}`);
+      await provider.save();
+
+      return res.status(200).json({
+        message: "Expiry updated ✅",
+        verificationDocs: provider.providerProfile.verificationDocs,
+      });
+    } catch (err) {
+      return res.status(500).json({ message: "Expiry update failed", error: err.message });
     }
   }
 );

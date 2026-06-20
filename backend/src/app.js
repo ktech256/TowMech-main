@@ -68,6 +68,9 @@ import adminLegalRoutes from "./routes/adminLegal.routes.js";
 import adminInsuranceRoutes from "./routes/adminInsurance.routes.js";
 import adminServiceCategoriesRoutes from "./routes/adminServiceCategories.js";
 
+// ✅ Verification Auditor (Phase 7)
+import { runVerificationAudit } from "./utils/verificationAuditor.js";
+
 const app = express();
 
 /**
@@ -242,6 +245,16 @@ app.use("/api/admin/legal", adminLegalRoutes);
 app.use("/api/admin/insurance", adminInsuranceRoutes);
 
 app.use("/api/admin/service-categories", adminServiceCategoriesRoutes);
+
+/**
+ * ✅ Phase 7: Daily Verification Audit
+ */
+setInterval(() => {
+  runVerificationAudit().catch(err => console.error("❌ Auditor Error:", err));
+}, 24 * 60 * 60 * 1000); // Once every 24 hours
+
+// Trigger once on boot (optional, but helps verification)
+runVerificationAudit().catch(err => console.error("❌ Auditor Boot Error:", err));
 
 /**
  * ✅ 404 Handler

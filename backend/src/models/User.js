@@ -210,18 +210,29 @@ const accountStatusSchema = new mongoose.Schema(
 
 const verificationDocSchema = new mongoose.Schema({
   url: { type: String, default: null },
-  status: { type: String, enum: ["NOT_SUBMITTED", "PENDING", "APPROVED", "REJECTED"], default: "NOT_SUBMITTED" },
+  status: { type: String, enum: ["NOT_SUBMITTED", "PENDING", "APPROVED", "REJECTED", "VERIFIED", "UPDATE_REQUIRED", "EXPIRED"], default: "NOT_SUBMITTED" },
   reason: { type: String, default: null },
   updatedAt: { type: Date, default: null },
   submittedAt: { type: Date, default: null },
-  captureTimestamp: { type: Date, default: null }, // Specifically for Selfie Camera hardening
+  captureTimestamp: { type: Date, default: null },
+
+  // Phase 7: Expiry & Lifecycle
+  expiryDate: { type: Date, default: null },
+  expiryType: { type: String, enum: ["NA", "HAS_EXPIRY"], default: "NA" },
+  expiredAt: { type: Date, default: null },
+  updateRequired: { type: Boolean, default: false },
+  updateReason: { type: String, default: null },
+  gracePeriodEnd: { type: Date, default: null },
+
   history: [{
     url: String,
     status: String,
     reason: String,
     submittedAt: Date,
     updatedAt: Date,
-    captureTimestamp: Date
+    captureTimestamp: Date,
+    expiryDate: Date,
+    updateReason: String
   }]
 }, { _id: false });
 
