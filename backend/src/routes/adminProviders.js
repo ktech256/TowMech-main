@@ -291,7 +291,7 @@ router.get(
       console.log(`[VERIFICATION_TRACE] Admin fetching verification for provider: ${req.params.id}`);
 
       const provider = await User.findById(req.params.id).select(
-        "name email role countryCode providerProfile ratingStats accountStatus"
+        "name firstName lastName email role countryCode providerProfile identificationType identificationNumber passportCountry saIdNumber passportNumber ratingStats accountStatus"
       );
 
       if (!provider) {
@@ -453,6 +453,7 @@ router.patch(
       if (!requirePermission(req, res, "canVerifyProviders")) return;
 
       const { id, field } = req.params;
+      const { asType } = req.body; // Phase 8: ID Type Enforcement
       console.log(`[VERIFICATION_TRACE] Approving document: ${field} for provider: ${id}`);
 
       const provider = await User.findById(id);
@@ -460,6 +461,22 @@ router.patch(
 
       if (!provider.providerProfile.verificationDocs[field]) {
         return res.status(400).json({ message: `Document ${field} not found` });
+      }
+
+      // Phase 8: Identification Consistency Enforcement
+      if (field === "idDocument") {
+        if (provider.identificationType === "SA_ID" && asType !== "SA_ID") {
+          return res.status(400).json({
+            message: "Provider registered using South African ID. Passport document cannot be approved.",
+            code: "ID_TYPE_MISMATCH"
+          });
+        }
+        if (provider.identificationType === "PASSPORT" && asType !== "PASSPORT") {
+          return res.status(400).json({
+            message: "Provider registered using Passport. South African ID cannot be approved.",
+            code: "ID_TYPE_MISMATCH"
+          });
+        }
       }
 
       provider.providerProfile.verificationDocs[field].status = "APPROVED";
@@ -590,6 +607,14 @@ router.patch(
         });
       }
 
+      // Phase 8: Passport Country Check
+      if (provider.identificationType === "PASSPORT" && !provider.passportCountry) {
+          return res.status(400).json({
+              message: "Cannot final approve. Passport country must be selected for passport holders.",
+              code: "PASSPORT_COUNTRY_REQUIRED"
+          });
+      }
+
       provider.providerProfile.verificationStatus = "APPROVED";
       provider.providerProfile.verifiedAt = new Date();
       provider.providerProfile.verifiedBy = req.user._id;
@@ -706,6 +731,49 @@ router.patch(
       });
     } catch (err) {
       return res.status(500).json({ message: "Expiry update failed", error: err.message });
+    }
+  }
+);
+
+/**
+ * ✅ Phase 8: Update Provider Identification Details
+ * PATCH /api/admin/providers/providers/:id/identification
+ */
+router.patch(
+  "/providers/:id/identification",
+  auth,
+  authorizeRoles(USER_ROLES.ADMIN, USER_ROLES.SUPER_ADMIN),
+  async (req, res) => {
+    try {
+      if (blockRestrictedAdmins(req, res)) return;
+      if (!requirePermission(req, res, "canVerifyProviders")) return;
+
+      const { identificationType, identificationNumber, passportCountry } = req.body;
+      const provider = await User.findById(req.params.id);
+      if (!provider) return res.status(404).json({ message: "Provider not found" });
+
+      if (identificationType) provider.identificationType = identificationType;
+      if (identificationNumber) provider.identificationNumber = identificationNumber;
+      if (passportCountry) provider.passportCountry = passportCountry;
+
+      // Sync legacy fields
+      if (provider.identificationType === "SA_ID") {
+        provider.saIdNumber = provider.identificationNumber;
+        provider.passportNumber = null;
+        provider.passportCountry = null; // Clear country for SA ID users
+      } else if (provider.identificationType === "PASSPORT") {
+        provider.passportNumber = provider.identificationNumber;
+        provider.saIdNumber = null;
+      }
+
+      await provider.save();
+
+      return res.status(200).json({
+        message: "Identification updated ✅",
+        provider: provider.toSafeJSON(req.user.role),
+      });
+    } catch (err) {
+      return res.status(500).json({ message: "Update failed", error: err.message });
     }
   }
 );

@@ -367,6 +367,7 @@ const userSchema = new mongoose.Schema(
 
     saIdNumber: { type: String, default: null },
     passportNumber: { type: String, default: null },
+    passportCountry: { type: String, default: null }, // ✅ Phase 8: Passport Country Management
     country: { type: String, default: null },
 
     /**
