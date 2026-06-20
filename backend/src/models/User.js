@@ -285,6 +285,22 @@ const providerProfileSchema = new mongoose.Schema(
       proofOfVehicle: { type: verificationDocSchema, default: () => ({}) },
       vehicleLicenseDisc: { type: verificationDocSchema, default: () => ({}) },
 
+      /**
+       * ✅ NEW: Company Verification State (Phase 11)
+       * Restructured from User Profile to Verification state
+       */
+      companyVerification: {
+        isCompanyDriver: { type: Boolean, default: false },
+        partnerId: { type: mongoose.Schema.Types.ObjectId, ref: "Partner", default: null },
+        status: { type: String, enum: ["NOT_SUBMITTED", "PENDING", "APPROVED", "REJECTED"], default: "NOT_SUBMITTED" },
+        verifiedAt: { type: Date, default: null },
+        revokedAt: { type: Date, default: null },
+        partnerName: { type: String, default: null },
+        partnerType: { type: String, default: null },
+        partnerCode: { type: String, default: null },
+        verificationSource: { type: String, enum: ["INDIVIDUAL", "COMPANY"], default: "INDIVIDUAL" },
+      },
+
       // legacy (to be migrated)
       idDocumentUrl: { type: String, default: null },
       licenseUrl: { type: String, default: null },
@@ -375,6 +391,7 @@ const userSchema = new mongoose.Schema(
 
     /**
      * ✅ NEW: Partner Ecosystem (Phase 10)
+     * Managed via verificationDocs.companyVerification
      */
     partnerId: {
       type: mongoose.Schema.Types.ObjectId,
@@ -386,17 +403,6 @@ const userSchema = new mongoose.Schema(
       type: String,
       enum: ["OWNER", "ADMIN", "OPERATOR", "DRIVER"],
       default: null,
-    },
-    isCompanyDriver: {
-      type: Boolean,
-      default: false,
-      index: true,
-    },
-    verificationSource: {
-      type: String,
-      enum: ["INDIVIDUAL", "COMPANY"],
-      default: "INDIVIDUAL",
-      index: true,
     },
 
     /**

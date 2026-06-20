@@ -23,10 +23,53 @@ async function notifyProvider(userId, title, body, type = "VERIFICATION") {
 }
 
 /**
+ * ✅ Migration: Move Company Driver fields to Verification state
+ */
+async function migrateCompanyDrivers() {
+  try {
+    const users = await User.find({
+      $or: [
+        { isCompanyDriver: true },
+        { verificationSource: "COMPANY" }
+      ]
+    });
+
+    if (users.length === 0) return;
+
+    console.log(`[MIGRATION] Found ${users.length} company drivers to migrate.`);
+
+    for (const user of users) {
+      if (!user.providerProfile) user.providerProfile = {};
+      if (!user.providerProfile.verificationDocs) user.providerProfile.verificationDocs = {};
+
+      // Skip if already migrated
+      if (user.providerProfile.verificationDocs.companyVerification?.isCompanyDriver) continue;
+
+      user.providerProfile.verificationDocs.companyVerification = {
+        isCompanyDriver: user.isCompanyDriver || false,
+        partnerId: user.partnerId || null,
+        status: "APPROVED", // Assume existing ones are approved
+        verifiedAt: user.updatedAt,
+        verificationSource: user.verificationSource || "COMPANY"
+      };
+
+      user.markModified("providerProfile.verificationDocs.companyVerification");
+      await user.save();
+    }
+  } catch (err) {
+    console.error(`[MIGRATION] Company drivers migration error:`, err.message);
+  }
+}
+
+/**
  * ✅ Run Daily Verification Audit
  */
 export async function runVerificationAudit() {
   console.log("[AUDITOR] Starting daily verification audit...");
+
+  // ✅ Phase 11: Company Driver Restructure Migration
+  await migrateCompanyDrivers();
+
   const now = new Date();
   const sevenDaysFromNow = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
 

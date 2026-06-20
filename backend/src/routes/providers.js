@@ -972,11 +972,25 @@ router.post("/validate-company-code", auth, async (req, res) => {
       return res.status(404).json({ message: "Invalid, expired, or already used verification code." });
     }
 
-    // Link provider to partner
+    // Link provider to partner via Verification System (Phase 11 Restructure)
     user.partnerId = verificationCode.partnerId._id;
-    user.isCompanyDriver = true;
-    user.verificationSource = "COMPANY";
     user.partnerRole = "DRIVER";
+
+    if (!user.providerProfile) user.providerProfile = {};
+    if (!user.providerProfile.verificationDocs) user.providerProfile.verificationDocs = {};
+
+    user.providerProfile.verificationDocs.companyVerification = {
+      isCompanyDriver: true,
+      partnerId: verificationCode.partnerId._id,
+      status: "APPROVED", // Auto-approved if code is valid
+      verifiedAt: new Date(),
+      partnerName: verificationCode.partnerId.name,
+      partnerType: verificationCode.partnerId.type,
+      partnerCode: verificationCode.partnerId.partnerCode,
+      verificationSource: "COMPANY"
+    };
+
+    user.markModified("providerProfile.verificationDocs.companyVerification");
     await user.save();
 
     await logAuditEvent(req, {

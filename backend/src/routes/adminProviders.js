@@ -595,7 +595,7 @@ router.patch(
 
       const docs = provider.providerProfile.verificationDocs;
       const role = provider.role;
-      const isCompanyVerified = provider.verificationSource === "COMPANY";
+      const isCompanyVerified = docs?.companyVerification?.verificationSource === "COMPANY";
 
       // 🏢 Reduced document requirements for Company Drivers
       const commonRequired = isCompanyVerified
