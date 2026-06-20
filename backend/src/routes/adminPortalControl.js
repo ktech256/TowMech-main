@@ -81,20 +81,51 @@ router.get("/partners", auth, requireAdmin, async (req, res) => {
 
     // Enhance with metrics
     const enhancedPartners = await Promise.all(partners.map(async (p) => {
-      const driverCount = await User.countDocuments({ partnerId: p._id });
+      const drivers = await User.find({ partnerId: p._id }).distinct("_id");
+      const driverCount = drivers.length;
+
       const activeJobs = await Job.countDocuments({
          $or: [
-            { assignedTo: { $in: await User.find({ partnerId: p._id }).distinct("_id") } },
+            { assignedTo: { $in: drivers } },
             { "insurance.partnerId": p._id }
          ],
          status: { $in: [JOB_STATUSES.ASSIGNED, JOB_STATUSES.IN_PROGRESS] }
       });
 
+      // Revenue aggregation
+      const now = new Date();
+      const startOfDay = new Date(now.setHours(0,0,0,0));
+      const startOfWeek = new Date(now.setDate(now.getDate() - now.getDay()));
+      const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+
+      const [todayJobs, weeklyJobs, monthlyJobs] = await Promise.all([
+         Job.find({
+            $or: [{ assignedTo: { $in: drivers } }, { "insurance.partnerId": p._id }],
+            status: JOB_STATUSES.COMPLETED,
+            completedAt: { $gte: startOfDay }
+         }).select("pricing.providerAmountDue pricing.estimatedTotal"),
+         Job.find({
+            $or: [{ assignedTo: { $in: drivers } }, { "insurance.partnerId": p._id }],
+            status: JOB_STATUSES.COMPLETED,
+            completedAt: { $gte: startOfWeek }
+         }).select("pricing.providerAmountDue pricing.estimatedTotal"),
+         Job.find({
+            $or: [{ assignedTo: { $in: drivers } }, { "insurance.partnerId": p._id }],
+            status: JOB_STATUSES.COMPLETED,
+            completedAt: { $gte: startOfMonth }
+         }).select("pricing.providerAmountDue pricing.estimatedTotal")
+      ]);
+
+      const sumRevenue = (jobs) => jobs.reduce((acc, j) => acc + (j.pricing?.providerAmountDue || j.pricing?.estimatedTotal || 0), 0);
+
       return {
         ...p.toObject(),
         metrics: {
           driverCount,
-          activeJobs
+          activeJobs,
+          todayRevenue: sumRevenue(todayJobs),
+          weeklyRevenue: sumRevenue(weeklyJobs),
+          monthlyRevenue: sumRevenue(monthlyJobs)
         }
       };
     }));

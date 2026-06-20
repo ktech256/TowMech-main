@@ -6,6 +6,8 @@ const GlobalPortalSettingsSchema = new mongoose.Schema(
     fleetPortalEnabled: { type: Boolean, default: true },
     insurancePortalEnabled: { type: Boolean, default: true },
     emergencyShutdownMode: { type: Boolean, default: false },
+    maintenanceMode: { type: Boolean, default: false },
+    maintenanceMessage: { type: String, default: "System is undergoing scheduled maintenance. Please try again later." },
     forceLogoutAllPartners: { type: Date, default: null }, // Partners with token issued before this date must re-login
     updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
   },
