@@ -48,7 +48,7 @@ async function migrateCompanyDrivers() {
       user.providerProfile.verificationDocs.companyVerification = {
         isCompanyDriver: user.isCompanyDriver || false,
         partnerId: user.partnerId || null,
-        status: "APPROVED", // Assume existing ones are approved
+        status: "VERIFIED", // Code verified, provider needs manual approval
         verifiedAt: user.updatedAt,
         verificationSource: user.verificationSource || "COMPANY"
       };

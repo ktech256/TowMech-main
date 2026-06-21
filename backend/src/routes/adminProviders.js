@@ -154,7 +154,7 @@ router.get(
       }
 
       const providers = await User.find(query)
-        .select("name email role countryCode providerProfile identificationType identificationNumber passportCountry verifiedCountry partnerId isCompanyDriver verificationSource ratingStats createdAt accountStatus")
+        .select("name email role countryCode providerProfile identificationType identificationNumber passportCountry verifiedCountry partnerId ratingStats createdAt accountStatus")
         .sort({ createdAt: -1 });
 
       return res.status(200).json({
@@ -204,7 +204,7 @@ router.get(
       }
 
       const providers = await User.find(query)
-        .select("name email role countryCode providerProfile identificationType identificationNumber passportCountry verifiedCountry partnerId isCompanyDriver verificationSource ratingStats createdAt accountStatus")
+        .select("name email role countryCode providerProfile identificationType identificationNumber passportCountry verifiedCountry partnerId ratingStats createdAt accountStatus")
         .sort({ createdAt: -1 });
 
       return res.status(200).json({
@@ -254,7 +254,7 @@ router.get(
       }
 
       const providers = await User.find(query)
-        .select("name email role countryCode providerProfile identificationType identificationNumber passportCountry verifiedCountry partnerId isCompanyDriver verificationSource ratingStats createdAt accountStatus")
+        .select("name email role countryCode providerProfile identificationType identificationNumber passportCountry verifiedCountry partnerId ratingStats createdAt accountStatus")
         .sort({ createdAt: -1 });
 
       return res.status(200).json({
@@ -291,7 +291,7 @@ router.get(
       console.log(`[VERIFICATION_TRACE] Admin fetching verification for provider: ${req.params.id}`);
 
       const provider = await User.findById(req.params.id).select(
-        "name firstName lastName email role countryCode providerProfile identificationType identificationNumber passportCountry verifiedCountry saIdNumber passportNumber partnerId isCompanyDriver verificationSource ratingStats accountStatus"
+        "name firstName lastName email role countryCode providerProfile identificationType identificationNumber passportCountry verifiedCountry saIdNumber passportNumber partnerId ratingStats accountStatus"
       ).populate("partnerId", "name type partnerCode");
 
       if (!provider) {

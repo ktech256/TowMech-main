@@ -982,13 +982,18 @@ router.post("/validate-company-code", auth, async (req, res) => {
     user.providerProfile.verificationDocs.companyVerification = {
       isCompanyDriver: true,
       partnerId: verificationCode.partnerId._id,
-      status: "APPROVED", // Auto-approved if code is valid
+      status: "VERIFIED", // Code itself is verified, NOT the provider
       verifiedAt: new Date(),
       partnerName: verificationCode.partnerId.name,
       partnerType: verificationCode.partnerId.type,
       partnerCode: verificationCode.code, // Store the actual verified code
       verificationSource: "COMPANY"
     };
+
+    // ✅ CRITICAL FIX: Ensure provider stays PENDING until manual admin approval
+    if (user.providerProfile.verificationStatus !== "APPROVED") {
+        user.providerProfile.verificationStatus = "PENDING";
+    }
 
     user.markModified("providerProfile.verificationDocs.companyVerification");
     await user.save();
