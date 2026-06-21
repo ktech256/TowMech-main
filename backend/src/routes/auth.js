@@ -877,6 +877,10 @@ router.post("/login", async (req, res) => {
       user.countryCode = requestCountryCode;
     }
 
+    user.lastLoginAt = new Date();
+    user.lastLoginIp = req.ip;
+    user.lastPlatform = req.headers["x-platform"] || "Android";
+
     let sessionId = null;
 
     if (isProviderRole(user.role)) {
@@ -973,6 +977,8 @@ router.post("/verify-otp", async (req, res) => {
 
     user.otpCode = null;
     user.otpExpiresAt = null;
+    user.phoneVerified = true;
+    user.phoneVerifiedAt = new Date();
 
     let sessionId = null;
 
@@ -994,6 +1000,10 @@ router.post("/verify-otp", async (req, res) => {
     }
 
     if (!user.countryCode) user.countryCode = requestCountryCode;
+
+    user.lastLoginAt = new Date();
+    user.lastLoginIp = req.ip;
+    user.lastPlatform = req.headers["x-platform"] || "Android";
 
     await user.save();
 
@@ -1265,6 +1275,10 @@ router.post("/reset-password", async (req, res) => {
     user.otpExpiresAt = null;
 
     if (!user.countryCode) user.countryCode = requestCountryCode;
+
+    user.lastLoginAt = new Date();
+    user.lastLoginIp = req.ip;
+    user.lastPlatform = req.headers["x-platform"] || "Android";
 
     await user.save();
 

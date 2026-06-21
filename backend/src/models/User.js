@@ -420,6 +420,9 @@ const userSchema = new mongoose.Schema(
     photoUrl: { type: String, default: null },
     password: { type: String, required: true },
 
+    phoneVerified: { type: Boolean, default: false },
+    phoneVerifiedAt: { type: Date, default: null },
+
     role: {
       type: String,
       enum: Object.values(USER_ROLES),
@@ -428,6 +431,10 @@ const userSchema = new mongoose.Schema(
 
     otpCode: { type: String, default: null },
     otpExpiresAt: { type: Date, default: null },
+
+    lastLoginAt: { type: Date, default: null },
+    lastLoginIp: { type: String, default: null },
+    lastPlatform: { type: String, default: null }, // Android / iOS / Web
 
     // ✅ NEW: Device Blocking & OTP tracking
     isDeviceBlocked: { type: Boolean, default: false },

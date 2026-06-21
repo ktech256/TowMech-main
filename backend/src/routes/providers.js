@@ -986,7 +986,7 @@ router.post("/validate-company-code", auth, async (req, res) => {
       verifiedAt: new Date(),
       partnerName: verificationCode.partnerId.name,
       partnerType: verificationCode.partnerId.type,
-      partnerCode: verificationCode.partnerId.partnerCode,
+      partnerCode: verificationCode.code, // Store the actual verified code
       verificationSource: "COMPANY"
     };
 
