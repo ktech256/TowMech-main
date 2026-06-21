@@ -17,12 +17,12 @@ const financialLogSchema = new mongoose.Schema(
           "EMAIL_SENT", "EMAIL_FAILED"
         ]
     },
-    entityType: { type: String, enum: ["INSURANCE", "PROVIDER", "PARTNER"], required: true },
-    entityId: { type: mongoose.Schema.Types.ObjectId, required: true }, // e.g. InsurancePartner ID or Payout ID
+    entityType: { type: String, enum: ["INSURANCE", "PROVIDER", "PARTNER", "FLEET", "CUSTOMER", "SYSTEM"], required: true },
+    entityId: { type: mongoose.Schema.Types.Mixed, required: false }, // Supports ObjectId or String (e.g. "SYSTEM")
 
     countryCode: { type: String, required: true, uppercase: true },
 
-    performedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+    performedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: false }, // Optional for SYSTEM actions
 
     details: { type: mongoose.Schema.Types.Mixed },
 

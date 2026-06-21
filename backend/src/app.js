@@ -80,6 +80,9 @@ import { runVerificationAudit } from "./utils/verificationAuditor.js";
 
 const app = express();
 
+// ✅ Required for Render load balancer to pass through HTTPS and IP
+app.set("trust proxy", 1);
+
 /**
  * ✅ Middleware
  * CORS allowlist
@@ -92,13 +95,29 @@ const allowedOrigins = [
   "https://staging.towmech.com",
   "https://towmech.com",
   "https://www.towmech.com",
+  "https://fleet.towmech.com",
+  "https://insurance.towmech.com",
+  "http://localhost:3000",
+  "http://localhost:3001",
+  "http://localhost:3002",
 ];
 
 app.use(
   cors({
     origin: (origin, callback) => {
+      // Allow requests with no origin (like mobile apps or curl)
       if (!origin) return callback(null, true);
-      if (allowedOrigins.includes(origin)) return callback(null, true);
+
+      if (allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+
+      // For development, allow any origin if requested
+      if (process.env.NODE_ENV !== "production") {
+        return callback(null, true);
+      }
+
+      console.warn(`⚠️ CORS Blocked for origin: ${origin}`);
       return callback(new Error(`CORS blocked for origin: ${origin}`), false);
     },
     credentials: true,
@@ -108,8 +127,9 @@ app.use(
       "Authorization",
       "X-COUNTRY-CODE",
       "x-country-code",
+      "X-Requested-With",
 
-      // ✅ language headers (Android can send any of these)
+      // ✅ language headers
       "X-LANGUAGE",
       "x-language",
       "Accept-Language",

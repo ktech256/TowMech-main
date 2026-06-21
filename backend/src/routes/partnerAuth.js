@@ -139,15 +139,18 @@ router.post("/activate/validate", async (req, res) => {
     const { token } = req.body;
     if (!token) return res.status(400).json({ message: "Token is required" });
 
+    const cleanToken = String(token).trim();
+
     // Find partner with this token (search both collections)
     const [partner, insPartner] = await Promise.all([
-      Partner.findOne({ activationToken: token, activationTokenExpiry: { $gt: new Date() } }),
-      InsurancePartner.findOne({ activationToken: token, activationTokenExpiry: { $gt: new Date() } })
+      Partner.findOne({ activationToken: cleanToken, activationTokenExpiry: { $gt: new Date() } }),
+      InsurancePartner.findOne({ activationToken: cleanToken, activationTokenExpiry: { $gt: new Date() } })
     ]);
 
     const targetPartner = partner || insPartner;
 
     if (!targetPartner) {
+      console.warn(`⚠️ Activation validation failed for token: ${cleanToken.substring(0, 10)}...`);
       return res.status(404).json({ message: "Invalid or expired activation link. Please contact administrator." });
     }
 
@@ -161,6 +164,7 @@ router.post("/activate/validate", async (req, res) => {
       }
     });
   } catch (err) {
+    console.error("🔥 Validation Error:", err.message);
     return res.status(500).json({ message: "Validation failed", error: err.message });
   }
 });
@@ -171,11 +175,14 @@ router.post("/activate/validate", async (req, res) => {
 router.post("/activate", async (req, res) => {
   try {
     const { token, password } = req.body;
+    if (!token || !password) return res.status(400).json({ message: "Token and password are required" });
+
+    const cleanToken = String(token).trim();
 
     // Find partner with this token (search both collections)
     const [partner, insPartner] = await Promise.all([
-      Partner.findOne({ activationToken: token, activationTokenExpiry: { $gt: new Date() } }),
-      InsurancePartner.findOne({ activationToken: token, activationTokenExpiry: { $gt: new Date() } })
+      Partner.findOne({ activationToken: cleanToken, activationTokenExpiry: { $gt: new Date() } }),
+      InsurancePartner.findOne({ activationToken: cleanToken, activationTokenExpiry: { $gt: new Date() } })
     ]);
 
     const targetPartner = partner || insPartner;
