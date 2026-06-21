@@ -67,6 +67,23 @@ const PartnerSchema = new mongoose.Schema(
       type: String,
       default: null,
     },
+    activationTokenExpiry: {
+      type: Date,
+      default: null,
+    },
+    emailVerified: {
+      type: Boolean,
+      default: false,
+    },
+    lastInvitationSent: {
+      type: Date,
+      default: null,
+    },
+    invitationStatus: {
+      type: String,
+      enum: ["Not Sent", "Sent", "Delivered", "Activated", "Expired"],
+      default: "Not Sent",
+    },
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",

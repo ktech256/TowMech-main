@@ -92,6 +92,39 @@ const InsurancePartnerSchema = new mongoose.Schema(
       canViewJobs: { type: Boolean, default: true },
     },
 
+    status: {
+      type: String,
+      enum: ["ACTIVE", "INACTIVE", "PENDING_ACTIVATION", "SUSPENDED"],
+      default: "PENDING_ACTIVATION",
+      index: true,
+    },
+
+    activationToken: {
+      type: String,
+      default: null,
+    },
+
+    activationTokenExpiry: {
+      type: Date,
+      default: null,
+    },
+
+    emailVerified: {
+      type: Boolean,
+      default: false,
+    },
+
+    lastInvitationSent: {
+      type: Date,
+      default: null,
+    },
+
+    invitationStatus: {
+      type: String,
+      enum: ["Not Sent", "Sent", "Delivered", "Activated", "Expired"],
+      default: "Not Sent",
+    },
+
     /**
      * Billing model:
      * - insurance jobs are NOT paid immediately by customer

@@ -9,6 +9,7 @@ import InsurancePartner from "../models/InsurancePartner.js";
 import GlobalPortalSettings from "../models/GlobalPortalSettings.js";
 import { sendEmail } from "../utils/sendEmail.js"; // Assuming this utility exists
 import { logAuditEvent } from "../utils/auditLogger.js";
+import { getOtpEmailTemplate } from "../services/PartnerEmailTemplateService.js";
 
 const router = express.Router();
 
@@ -58,16 +59,24 @@ router.post("/login", async (req, res) => {
        }
     }
 
-    // Generate Email OTP for login as requested
     const otp = crypto.randomInt(100000, 999999).toString();
     user.otpCode = otp;
     user.otpExpiresAt = new Date(Date.now() + 10 * 60 * 1000);
     await user.save();
 
+    const html = getOtpEmailTemplate({ otp });
+
     await sendEmail({
       to: user.email,
       subject: "TowMech Partner Login OTP",
-      text: `Your login OTP is: ${otp}. It expires in 10 minutes.`,
+      html
+    });
+
+    await logAuditEvent(req, {
+       action: "OTP_SENT",
+       entityType: "PARTNER",
+       entityId: user.partnerId,
+       details: { email: user.email }
     });
 
     return res.status(200).json({ message: "OTP sent to your email.", email: user.email });
@@ -95,6 +104,13 @@ router.post("/verify-otp", async (req, res) => {
     const token = generateToken(user._id, user.role, user.partnerId, user.partnerRole);
 
     await logAuditEvent(req, {
+       action: "OTP_VERIFIED",
+       entityType: "PARTNER",
+       entityId: user.partnerId,
+       details: { userId: user._id, email: user.email }
+    });
+
+    await logAuditEvent(req, {
        action: "PARTNER_LOGIN",
        entityType: "PARTNER",
        entityId: user.partnerId,
@@ -114,6 +130,77 @@ router.post("/verify-otp", async (req, res) => {
     });
   } catch (err) {
     return res.status(500).json({ message: "Verification failed", error: err.message });
+  }
+});
+
+/**
+ * ✅ Activate Partner (Password Creation)
+ */
+router.post("/activate", async (req, res) => {
+  try {
+    const { token, password } = req.body;
+
+    // Find partner with this token (search both collections)
+    const [partner, insPartner] = await Promise.all([
+      Partner.findOne({ activationToken: token, activationTokenExpiry: { $gt: new Date() } }),
+      InsurancePartner.findOne({ activationToken: token, activationTokenExpiry: { $gt: new Date() } })
+    ]);
+
+    const targetPartner = partner || insPartner;
+
+    if (!targetPartner) {
+      return res.status(404).json({ message: "Invalid or expired activation token." });
+    }
+
+    // Create the initial Partner Admin User if it doesn't exist
+    let user = await User.findOne({ email: targetPartner.contactEmail.toLowerCase() });
+
+    if (user) {
+       user.password = password;
+       user.partnerId = targetPartner._id;
+       user.role = USER_ROLES.PARTNER_ADMIN;
+       await user.save();
+    } else {
+       user = await User.create({
+         name: targetPartner.name,
+         firstName: targetPartner.name,
+         lastName: "Admin",
+         email: targetPartner.contactEmail,
+         password: password,
+         phone: targetPartner.contactPhone,
+         birthday: new Date(),
+         nationalityType: "SouthAfrican",
+         role: USER_ROLES.PARTNER_ADMIN,
+         partnerId: targetPartner._id,
+         partnerRole: "OWNER",
+         countryCode: targetPartner.countryCode || (Array.isArray(targetPartner.countryCodes) ? targetPartner.countryCodes[0] : "ZA")
+       });
+    }
+
+    targetPartner.status = "ACTIVE";
+    targetPartner.activationToken = null;
+    targetPartner.activationTokenExpiry = null;
+    targetPartner.emailVerified = true;
+    targetPartner.invitationStatus = "Activated";
+    await targetPartner.save();
+
+    await logAuditEvent(req, {
+       action: "ACTIVATION_COMPLETED",
+       entityType: "PARTNER",
+       entityId: targetPartner._id,
+       details: { userId: user._id, email: user.email }
+    });
+
+    await logAuditEvent(req, {
+       action: "PASSWORD_CREATED",
+       entityType: "PARTNER",
+       entityId: targetPartner._id,
+       details: { userId: user._id }
+    });
+
+    return res.status(200).json({ message: "Account activated successfully ✅", user: { email: user.email } });
+  } catch (err) {
+    return res.status(500).json({ message: "Activation failed", error: err.message });
   }
 });
 

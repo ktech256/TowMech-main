@@ -8,6 +8,7 @@ import InsuranceCode from "../models/InsuranceCode.js";
 import FinancialLog from "../models/FinancialLog.js";
 
 import { generateCodesForPartner, disableInsuranceCode } from "../services/insurance/codeService.js";
+import { sendPartnerInvitation } from "../services/PartnerInvitationService.js";
 
 // ✅ Invoice builder + PDF renderers
 import { buildInsuranceInvoice, buildCollectiveInsuranceReport } from "../services/insurance/invoiceService.js";
@@ -162,7 +163,10 @@ router.post("/partners", auth, requireAdmin, async (req, res) => {
       updatedBy: req.user?._id || null,
     });
 
-    return res.status(201).json({ message: "Insurance partner created ✅", partner });
+    // Invitation System: Send Email via Engine
+    await sendPartnerInvitation(req, partner);
+
+    return res.status(201).json({ message: "Insurance partner created and invitation sent ✅", partner });
   } catch (err) {
     return res.status(500).json({ message: "Create failed", ...errPayload(err) });
   }

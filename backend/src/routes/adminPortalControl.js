@@ -9,6 +9,7 @@ import GlobalPortalSettings from "../models/GlobalPortalSettings.js";
 import FinancialLog from "../models/FinancialLog.js";
 import User from "../models/User.js";
 import Job, { JOB_STATUSES } from "../models/Job.js";
+import { sendPartnerInvitation } from "../services/PartnerInvitationService.js";
 
 const router = express.Router();
 
@@ -74,9 +75,16 @@ router.get("/partners", auth, requireAdmin, async (req, res) => {
     let partners = [];
     if (type === "INSURANCE") {
        partners = await InsurancePartner.find(filter).sort({ createdAt: -1 });
-    } else {
-       if (type) filter.type = type;
+    } else if (type === "FLEET" || type === "MECHANIC") {
+       filter.type = type;
        partners = await Partner.find(filter).sort({ createdAt: -1 });
+    } else {
+       // Return both if no type specified
+       const [fleet, insurance] = await Promise.all([
+          Partner.find(filter).sort({ createdAt: -1 }),
+          InsurancePartner.find(filter).sort({ createdAt: -1 })
+       ]);
+       partners = [...fleet, ...insurance];
     }
 
     // Enhance with metrics
@@ -218,15 +226,26 @@ router.get("/partners/:id/details", auth, requireAdmin, async (req, res) => {
 router.post("/partners/:id/regenerate-token", auth, requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
-    const partner = await Partner.findById(id);
+    const { type } = req.body;
+
+    let partner;
+    if (type === "INSURANCE") {
+       partner = await InsurancePartner.findById(id);
+    } else {
+       partner = await Partner.findById(id);
+    }
+
     if (!partner) return res.status(404).json({ message: "Partner not found" });
 
-    const newToken = crypto.randomBytes(32).toString("hex");
-    partner.activationToken = newToken;
+    // Mark as pending and send invitation
     partner.status = "PENDING_ACTIVATION";
-    await partner.save();
+    const sent = await sendPartnerInvitation(req, partner);
 
-    return res.status(200).json({ message: "Activation token regenerated ✅", token: newToken });
+    if (sent) {
+       return res.status(200).json({ message: "Activation token regenerated and invitation resent ✅" });
+    } else {
+       return res.status(500).json({ message: "Failed to send invitation email" });
+    }
   } catch (err) {
     return res.status(500).json({ message: "Action failed", error: err.message });
   }
