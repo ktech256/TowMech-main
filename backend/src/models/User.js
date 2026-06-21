@@ -226,6 +226,13 @@ const verificationDocSchema = new mongoose.Schema({
   updateReason: { type: String, default: null },
   gracePeriodEnd: { type: Date, default: null },
 
+  // ✅ Phase 1: Smart ID Metadata
+  detectedCountry: { type: String, default: null },
+  ocrText: { type: String, default: null },
+  documentNumber: { type: String, default: null },
+  documentType: { type: String, default: null },
+  ocrConfidence: { type: Number, default: null },
+
   history: [{
     url: String,
     status: String,

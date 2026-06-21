@@ -91,7 +91,14 @@ router.patch(
           submittedAt: new Date(),
           updatedAt: new Date(),
           captureTimestamp: req.body[`${field}Timestamp`] || new Date(),
-          history: current?.history || []
+          history: current?.history || [],
+
+          // ✅ Phase 1: Smart ID Metadata (ID Document only for now)
+          detectedCountry: field === "idDocument" ? req.body.idDetectedCountry : undefined,
+          ocrText: field === "idDocument" ? req.body.idOcrText : undefined,
+          documentNumber: field === "idDocument" ? req.body.idDocumentNumber : undefined,
+          documentType: field === "idDocument" ? req.body.idDocumentType : undefined,
+          ocrConfidence: field === "idDocument" && req.body.idOcrConfidence ? parseFloat(req.body.idOcrConfidence) : undefined
         };
 
         user.set(`providerProfile.verificationDocs.${field}`, newDoc);
