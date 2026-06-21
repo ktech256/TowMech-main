@@ -132,6 +132,40 @@ router.post("/verify-otp", async (req, res) => {
 });
 
 /**
+ * ✅ Validate Activation Token
+ */
+router.post("/activate/validate", async (req, res) => {
+  try {
+    const { token } = req.body;
+    if (!token) return res.status(400).json({ message: "Token is required" });
+
+    // Find partner with this token (search both collections)
+    const [partner, insPartner] = await Promise.all([
+      Partner.findOne({ activationToken: token, activationTokenExpiry: { $gt: new Date() } }),
+      InsurancePartner.findOne({ activationToken: token, activationTokenExpiry: { $gt: new Date() } })
+    ]);
+
+    const targetPartner = partner || insPartner;
+
+    if (!targetPartner) {
+      return res.status(404).json({ message: "Invalid or expired activation link. Please contact administrator." });
+    }
+
+    return res.status(200).json({
+      ok: true,
+      partner: {
+        name: targetPartner.name,
+        email: targetPartner.contactEmail,
+        type: targetPartner.type || "INSURANCE",
+        partnerCode: targetPartner.partnerCode
+      }
+    });
+  } catch (err) {
+    return res.status(500).json({ message: "Validation failed", error: err.message });
+  }
+});
+
+/**
  * ✅ Activate Partner (Password Creation)
  */
 router.post("/activate", async (req, res) => {
