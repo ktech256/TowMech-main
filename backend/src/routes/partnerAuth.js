@@ -175,7 +175,11 @@ router.post("/activate/validate", async (req, res) => {
 router.post("/activate", async (req, res) => {
   try {
     const { token, password } = req.body;
-    if (!token || !password) return res.status(400).json({ message: "Token and password are required" });
+    console.log(`[DEBUG] Activation attempt started for token: ${token?.substring(0, 8)}...`);
+
+    if (!token || !password) {
+       return res.status(400).json({ message: "Token and password are required." });
+    }
 
     const cleanToken = String(token).trim();
 
@@ -188,40 +192,81 @@ router.post("/activate", async (req, res) => {
     const targetPartner = partner || insPartner;
 
     if (!targetPartner) {
+      console.log(`[DEBUG] No target partner found for token or token expired.`);
       return res.status(404).json({ message: "Invalid or expired activation token." });
     }
 
+    console.log(`[DEBUG] Found partner: ${targetPartner.name} (${targetPartner.contactEmail})`);
+
     // Create the initial Partner Admin User if it doesn't exist
-    let user = await User.findOne({ email: targetPartner.contactEmail.toLowerCase() });
+    // Try to find by email first, then by phone
+    // We use targetPartner.contactEmail as the primary anchor
+    let user = await User.findOne({
+      $or: [
+        { email: targetPartner.contactEmail.toLowerCase() },
+        { phone: targetPartner.contactPhone }
+      ]
+    });
 
     if (user) {
+       console.log(`[DEBUG] User already exists (${user.email}), updating role and linking partner.`);
        user.password = password;
        user.partnerId = targetPartner._id;
        user.role = USER_ROLES.PARTNER_ADMIN;
-       await user.save();
+       user.partnerRole = "OWNER";
+
+       // Ensure email is consistent if found by phone
+       if (user.email.toLowerCase() !== targetPartner.contactEmail.toLowerCase()) {
+          console.log(`[DEBUG] Updating user email from ${user.email} to ${targetPartner.contactEmail}`);
+          user.email = targetPartner.contactEmail.toLowerCase();
+       }
+
+       try {
+         await user.save();
+       } catch (saveErr) {
+         console.error(`[DEBUG] User update failed:`, saveErr.message);
+         return res.status(500).json({ message: "Failed to update existing user account.", error: saveErr.message });
+       }
     } else {
-       user = await User.create({
-         name: targetPartner.name,
-         firstName: targetPartner.name,
-         lastName: "Admin",
-         email: targetPartner.contactEmail,
-         password: password,
-         phone: targetPartner.contactPhone,
-         birthday: new Date(),
-         nationalityType: "SouthAfrican",
-         role: USER_ROLES.PARTNER_ADMIN,
-         partnerId: targetPartner._id,
-         partnerRole: "OWNER",
-         countryCode: targetPartner.countryCode || (Array.isArray(targetPartner.countryCodes) ? targetPartner.countryCodes[0] : "ZA")
-       });
+       console.log(`[DEBUG] Creating new user for partner admin.`);
+       try {
+         user = await User.create({
+           name: targetPartner.name,
+           firstName: targetPartner.name,
+           lastName: "Admin",
+           email: targetPartner.contactEmail,
+           password: password,
+           phone: targetPartner.contactPhone,
+           birthday: new Date(),
+           nationalityType: "SouthAfrican",
+           role: USER_ROLES.PARTNER_ADMIN,
+           partnerId: targetPartner._id,
+           partnerRole: "OWNER",
+           countryCode: targetPartner.countryCode || (Array.isArray(targetPartner.countryCodes) ? targetPartner.countryCodes[0] : "ZA")
+         });
+       } catch (userErr) {
+         console.error(`[DEBUG] User creation failed:`, userErr.message);
+         // If still duplicate phone error here, it means normalization might be different?
+         return res.status(500).json({ message: "User creation failed. Email or Phone might already be in use.", error: userErr.message });
+       }
     }
+
+    console.log(`[DEBUG] User ${user.email} saved successfully. Updating partner status.`);
 
     targetPartner.status = "ACTIVE";
     targetPartner.activationToken = null;
     targetPartner.activationTokenExpiry = null;
     targetPartner.emailVerified = true;
     targetPartner.invitationStatus = "Activated";
-    await targetPartner.save();
+
+    try {
+      await targetPartner.save();
+    } catch (partnerErr) {
+      console.error(`[DEBUG] Partner update failed:`, partnerErr.message);
+      return res.status(500).json({ message: "Partner update failed.", error: partnerErr.message });
+    }
+
+    console.log(`[DEBUG] Partner status updated to ACTIVE. Logging audit events.`);
 
     await logAuditEvent(req, {
        action: "ACTIVATION_COMPLETED",
@@ -237,8 +282,11 @@ router.post("/activate", async (req, res) => {
        details: { userId: user._id }
     });
 
+    console.log(`[DEBUG] Activation completed successfully for ${targetPartner.name}`);
+
     return res.status(200).json({ message: "Account activated successfully ✅", user: { email: user.email } });
   } catch (err) {
+    console.error(`[DEBUG] Global Activation error:`, err);
     return res.status(500).json({ message: "Activation failed", error: err.message });
   }
 });
