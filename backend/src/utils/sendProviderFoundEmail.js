@@ -1,23 +1,10 @@
-import nodemailer from "nodemailer";
+import { EmailService } from "../services/EmailService.js";
 
 /**
- * ✅ Sends Providers Found Email
- * @param {Object} args
- * args.to = recipient email
- * args.name = recipient name
- * args.preview = { currency, bookingFee, estimatedTotal }
- * args.providerCount = number of providers found
+ * ✅ Sends Providers Found Email (SendGrid Migration)
  */
 export const sendProvidersFoundEmail = async ({ to, name, preview, providerCount }) => {
   try {
-    const transporter = nodemailer.createTransport({
-      service: "gmail",
-      auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASS
-      }
-    });
-
     const currency = preview?.currency || "ZAR";
     const bookingFee = preview?.bookingFee || 0;
     const estimatedTotal = preview?.estimatedTotal || 0;
@@ -25,39 +12,28 @@ export const sendProvidersFoundEmail = async ({ to, name, preview, providerCount
     const subject = "✅ Providers Found Near You — Pay Booking Fee to Proceed";
 
     const html = `
-      <div style="font-family: Arial, sans-serif; padding: 20px;">
-        <h2 style="color: #1E2A5E;">TowMech Providers Found ✅</h2>
-
-        <p>Hello <b>${name}</b>,</p>
-
-        <p>Good news! We found <b>${providerCount}</b> providers near your location.</p>
-
+      <div style="font-family: Arial, sans-serif; padding: 20px; border: 1px solid #eee; border-radius: 10px;">
+        <h2 style="color: #FF8C00;">TowMech Providers Found ✅</h2>
+        <p>Hello <strong>${name}</strong>,</p>
+        <p>Good news! We found <strong>${providerCount}</strong> providers near your location.</p>
         <p>Please pay the booking fee to confirm your request and allow matching.</p>
-
-        <hr />
-
-        <h3>💰 Booking Summary</h3>
-        <p><b>Estimated Total:</b> ${currency} ${estimatedTotal}</p>
-        <p><b>Booking Fee Required:</b> ${currency} ${bookingFee}</p>
-
-        <hr />
-
-        <p style="font-size: 13px; color: gray;">
-          Thank you for using TowMech.<br/>
-          Killian Digital Solutions © ${new Date().getFullYear()}
-        </p>
+        <hr style="border: 0; border-top: 1px solid #eee; margin: 20px 0;">
+        <div style="background: #f9f9f9; padding: 15px; border-radius: 8px;">
+          <p style="margin: 5px 0;"><strong>Estimated Total:</strong> ${currency} ${estimatedTotal}</p>
+          <p style="margin: 5px 0;"><strong>Booking Fee Required:</strong> ${currency} ${bookingFee}</p>
+        </div>
+        <hr style="border: 0; border-top: 1px solid #eee; margin: 20px 0;">
+        <p style="font-size: 12px; color: #999; text-align: center;">&copy; ${new Date().getFullYear()} TowMech. All rights reserved.</p>
       </div>
     `;
 
-    const info = await transporter.sendMail({
-      from: `"TowMech" <${process.env.EMAIL_USER}>`,
+    return await EmailService.send(null, {
       to,
       subject,
-      html
+      html,
+      category: "provider_found"
     });
 
-    console.log("✅ Providers Found Email sent:", info.messageId);
-    return true;
   } catch (err) {
     console.error("❌ Providers Found Email failed:", err.message);
     return false;

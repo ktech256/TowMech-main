@@ -7,9 +7,8 @@ import User, { USER_ROLES } from "../models/User.js";
 import Partner from "../models/Partner.js";
 import InsurancePartner from "../models/InsurancePartner.js";
 import GlobalPortalSettings from "../models/GlobalPortalSettings.js";
-import { sendEmail } from "../utils/sendEmail.js"; // Assuming this utility exists
+import { EmailService } from "../services/EmailService.js";
 import { logAuditEvent } from "../utils/auditLogger.js";
-import { getOtpEmailTemplate } from "../services/PartnerEmailTemplateService.js";
 
 const router = express.Router();
 
@@ -64,20 +63,19 @@ router.post("/login", async (req, res) => {
     user.otpExpiresAt = new Date(Date.now() + 10 * 60 * 1000);
     await user.save();
 
-    const html = getOtpEmailTemplate({ otp });
-
-    await sendEmail({
+    const emailSent = await EmailService.sendOtp(req, {
       to: user.email,
-      subject: "TowMech Partner Login OTP",
-      html
+      otp
     });
 
-    await logAuditEvent(req, {
-       action: "OTP_SENT",
-       entityType: "PARTNER",
-       entityId: user.partnerId,
-       details: { email: user.email }
-    });
+    if (emailSent) {
+      await logAuditEvent(req, {
+         action: "OTP_SENT",
+         entityType: "PARTNER",
+         entityId: user.partnerId,
+         details: { email: user.email }
+      });
+    }
 
     return res.status(200).json({ message: "OTP sent to your email.", email: user.email });
   } catch (err) {

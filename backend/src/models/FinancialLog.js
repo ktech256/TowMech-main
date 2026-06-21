@@ -13,7 +13,8 @@ const financialLogSchema = new mongoose.Schema(
           "DRIVER_LINKED", "INSURANCE_CODE_VALIDATED",
           "PARTNER_LOGIN", "PARTNER_LOGOUT", "PORTAL_DISABLED", "PORTAL_ENABLED",
           "PARTNER_CREATED", "INVITATION_SENT", "INVITATION_FAILED",
-          "ACTIVATION_COMPLETED", "PASSWORD_CREATED", "OTP_SENT", "OTP_VERIFIED"
+          "ACTIVATION_COMPLETED", "PASSWORD_CREATED", "OTP_SENT", "OTP_VERIFIED",
+          "EMAIL_SENT", "EMAIL_FAILED"
         ]
     },
     entityType: { type: String, enum: ["INSURANCE", "PROVIDER", "PARTNER"], required: true },

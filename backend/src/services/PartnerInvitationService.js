@@ -1,6 +1,5 @@
 import crypto from "crypto";
-import { sendEmail } from "../utils/sendEmail.js";
-import { getInvitationEmailTemplate } from "./PartnerEmailTemplateService.js";
+import { EmailService } from "./EmailService.js";
 import { logAuditEvent } from "../utils/auditLogger.js";
 
 /**
@@ -22,18 +21,13 @@ export const sendPartnerInvitation = async (req, partner) => {
     const portalSubdomain = partner.type === "INSURANCE" ? "insurance" : "fleet";
     const activationLink = `https://${portalSubdomain}.towmech.com/activate?token=${activationToken}`;
 
-    const html = getInvitationEmailTemplate({
+    const emailSent = await EmailService.sendPartnerInvitation(req, {
+      to: partner.contactEmail,
       partnerName: partner.name,
       partnerType: partner.type,
       partnerCode: partner.partnerCode,
       activationLink,
       expiryHours
-    });
-
-    const emailSent = await sendEmail({
-      to: partner.contactEmail,
-      subject: "TowMech Partner Portal Invitation",
-      html
     });
 
     if (emailSent) {
@@ -59,11 +53,11 @@ export const sendPartnerInvitation = async (req, partner) => {
         entityId: partner._id,
         details: {
           recipient: partner.contactEmail,
-          reason: "SMTP Failure"
+          reason: "SendGrid Failure"
         }
       });
 
-      throw new Error("SMTP failed to send invitation");
+      throw new Error("SendGrid failed to send invitation");
     }
 
     return true;

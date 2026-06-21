@@ -10,6 +10,7 @@ import FinancialLog from "../models/FinancialLog.js";
 import User from "../models/User.js";
 import Job, { JOB_STATUSES } from "../models/Job.js";
 import { sendPartnerInvitation } from "../services/PartnerInvitationService.js";
+import { EmailService } from "../services/EmailService.js";
 
 const router = express.Router();
 
@@ -245,6 +246,41 @@ router.post("/partners/:id/regenerate-token", auth, requireAdmin, async (req, re
        return res.status(200).json({ message: "Activation token regenerated and invitation resent ✅" });
     } else {
        return res.status(500).json({ message: "Failed to send invitation email" });
+    }
+  } catch (err) {
+    return res.status(500).json({ message: "Action failed", error: err.message });
+  }
+});
+
+/**
+ * ✅ Test SendGrid Integration
+ * POST /api/admin/portal-control/test-email
+ */
+router.post("/test-email", auth, requireAdmin, async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ message: "Recipient email is required" });
+
+    const sent = await EmailService.send(req, {
+       to: email,
+       subject: "TowMech SendGrid Test Email",
+       html: `
+          <div style="font-family: sans-serif; padding: 20px; border: 1px solid #FF8C00; border-radius: 10px;">
+             <h2 style="color: #FF8C00;">SendGrid Integration Verified ✅</h2>
+             <p>This is a test email from the TowMech Portal Control Center.</p>
+             <p>Timestamp: <b>${new Date().toLocaleString()}</b></p>
+             <p>If you received this, the SendGrid Email Engine is fully operational.</p>
+             <hr style="border: 0; border-top: 1px solid #eee; margin: 20px 0;">
+             <p style="font-size: 12px; color: #999;">&copy; 2026 TowMech Single Control Plane.</p>
+          </div>
+       `,
+       category: "test"
+    });
+
+    if (sent) {
+       return res.status(200).json({ message: "Test email sent successfully via SendGrid! ✅" });
+    } else {
+       return res.status(500).json({ message: "Failed to send test email. Check server logs." });
     }
   } catch (err) {
     return res.status(500).json({ message: "Action failed", error: err.message });
