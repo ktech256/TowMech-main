@@ -162,7 +162,7 @@ router.get("/partners", auth, requireAdmin, async (req, res) => {
 router.patch("/partners/:id", auth, requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
-    const { type, name, partnerCode, contactEmail, contactPhone, status, isSuspended } = req.body;
+    const { type, name, partnerCode, contactEmail, contactPhone, status, isSuspended, notes } = req.body;
 
     let partner;
     if (type === "INSURANCE") {
@@ -188,6 +188,7 @@ router.patch("/partners/:id", auth, requireAdmin, async (req, res) => {
     if (contactPhone) partner.contactPhone = contactPhone;
     if (status) partner.status = status;
     if (typeof isSuspended === "boolean") partner.isSuspended = isSuspended;
+    if (typeof notes === "string") partner.notes = notes;
 
     try {
       await partner.save();
@@ -203,8 +204,8 @@ router.patch("/partners/:id", auth, requireAdmin, async (req, res) => {
        entityType: "PARTNER",
        entityId: partner._id,
        details: {
-          previous: { name: previousValue.name, partnerCode: previousValue.partnerCode, email: previousValue.contactEmail },
-          new: { name: partner.name, partnerCode: partner.partnerCode, email: partner.contactEmail }
+          previous: { name: previousValue.name, partnerCode: previousValue.partnerCode, email: previousValue.contactEmail, notes: previousValue.notes },
+          new: { name: partner.name, partnerCode: partner.partnerCode, email: partner.contactEmail, notes: partner.notes }
        }
     });
 
@@ -215,7 +216,7 @@ router.patch("/partners/:id", auth, requireAdmin, async (req, res) => {
 });
 
 /**
- * ✅ Get Partner Detailed Metrics (Drivers + Codes + Statements)
+ * ✅ Get Partner Detailed Metrics (Drivers + Codes + Statements + Analytics)
  * ENFORCES COUNTRY ISOLATION
  */
 router.get("/partners/:id/details", auth, requireAdmin, async (req, res) => {
@@ -225,9 +226,9 @@ router.get("/partners/:id/details", auth, requireAdmin, async (req, res) => {
 
     let partner;
     if (type === "INSURANCE") {
-       partner = await InsurancePartner.findById(id);
+       partner = await InsurancePartner.findById(id).populate("createdBy", "name email");
     } else {
-       partner = await Partner.findById(id);
+       partner = await Partner.findById(id).populate("createdBy", "name email");
     }
 
     if (!partner) return res.status(404).json({ message: "Partner not found" });
@@ -247,20 +248,59 @@ router.get("/partners/:id/details", auth, requireAdmin, async (req, res) => {
        verified: drivers.filter(d => d.providerProfile?.verificationStatus === "APPROVED").length,
        pending: drivers.filter(d => d.providerProfile?.verificationStatus === "PENDING").length,
        online: drivers.filter(d => d.providerProfile?.isOnline).length,
-       offline: drivers.filter(d => !d.providerProfile?.isOnline).length
+       offline: drivers.filter(d => !d.providerProfile?.isOnline).length,
+       busy: 0 // Will update below
     };
 
+    // Analytics Aggregation
+    const now = new Date();
+    const startOfDay = new Date(now.setHours(0,0,0,0));
+    const startOfWeek = new Date(new Date().setDate(now.getDate() - now.getDay()));
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+
+    const driverIds = drivers.map(d => d._id);
+    const jobFilter = {
+       $or: [
+          { assignedTo: { $in: driverIds } },
+          { "insurance.partnerId": id }
+       ]
+    };
+
+    const [activeJobs, completedToday, completedWeekly, completedMonthly, cancelledJobs] = await Promise.all([
+       Job.find({ ...jobFilter, status: { $in: [JOB_STATUSES.ASSIGNED, JOB_STATUSES.IN_PROGRESS] } }).populate("assignedTo", "name phone"),
+       Job.find({ ...jobFilter, status: JOB_STATUSES.COMPLETED, completedAt: { $gte: startOfDay } }),
+       Job.find({ ...jobFilter, status: JOB_STATUSES.COMPLETED, completedAt: { $gte: startOfWeek } }),
+       Job.find({ ...jobFilter, status: JOB_STATUSES.COMPLETED, completedAt: { $gte: startOfMonth } }),
+       Job.countDocuments({ ...jobFilter, status: JOB_STATUSES.CANCELLED })
+    ]);
+
+    driverStats.busy = activeJobs.filter(j => j.assignedTo).length;
+
+    const sumRev = (jobs) => jobs.reduce((acc, j) => acc + (j.pricing?.providerAmountDue || j.pricing?.estimatedTotal || 0), 0);
+
+    const analytics = {
+       todayRevenue: sumRev(completedToday),
+       weeklyRevenue: sumRev(completedWeekly),
+       monthlyRevenue: sumRev(completedMonthly),
+       completedCount: completedMonthly.length,
+       cancelledCount: cancelledJobs,
+       insuranceUsage: type === "INSURANCE" ? completedMonthly.length : 0
+    };
+
+    // Code Management
+    let codeDetails = [];
     let codeStats = {};
     if (type === "INSURANCE") {
-       const codes = await InsuranceCode.find({ partner: id });
+       const codes = await InsuranceCode.find({ partner: id }).sort({ createdAt: -1 }).limit(100);
        codeStats = {
           total: codes.length,
           active: codes.filter(c => c.isActive && c.expiresAt > new Date()).length,
           used: codes.reduce((acc, c) => acc + (c.usage?.usedCount || 0), 0),
           expired: codes.filter(c => c.expiresAt <= new Date()).length
        };
+       codeDetails = codes;
     } else {
-       const codes = await DriverVerificationCode.find({ partnerId: id });
+       const codes = await DriverVerificationCode.find({ partnerId: id }).populate("usedBy", "name phone").sort({ createdAt: -1 }).limit(100);
        codeStats = {
           total: codes.length,
           used: codes.filter(c => !!c.usedBy).length,
@@ -268,26 +308,92 @@ router.get("/partners/:id/details", auth, requireAdmin, async (req, res) => {
           expired: codes.filter(c => c.expiresAt <= new Date() && !c.usedBy).length,
           revoked: codes.filter(c => c.isRevoked).length
        };
+       codeDetails = codes;
     }
-
-    const activeJobs = await Job.find({
-       $or: [
-          { assignedTo: { $in: drivers.map(d => d._id) } },
-          { "insurance.partnerId": id }
-       ],
-       status: { $in: [JOB_STATUSES.ASSIGNED, JOB_STATUSES.IN_PROGRESS] }
-    }).populate("assignedTo", "name phone");
 
     return res.status(200).json({
        partner,
        driverStats,
        codeStats,
+       analytics,
        drivers,
-       activeJobs
+       activeJobs,
+       codes: codeDetails
     });
   } catch (err) {
     return res.status(500).json({ message: "Failed to fetch details", error: err.message });
   }
+});
+
+/**
+ * ✅ Get Partner Statements (Fleet or Insurance)
+ */
+router.get("/partners/:id/statements", auth, requireAdmin, async (req, res) => {
+   try {
+      const { id } = req.params;
+      const { type, from, to } = req.query;
+
+      if (!from || !to) return res.status(400).json({ message: "Date range required" });
+
+      let partner;
+      if (type === "INSURANCE") {
+         partner = await InsurancePartner.findById(id);
+      } else {
+         partner = await Partner.findById(id);
+      }
+
+      if (!partner) return res.status(404).json({ message: "Partner not found" });
+
+      // Isolation
+      if (type === "INSURANCE") {
+         if (!partner.countryCodes.includes(req.countryCode)) return res.status(403).json({ message: "Forbidden" });
+      } else {
+         if (partner.countryCode !== req.countryCode) return res.status(403).json({ message: "Forbidden" });
+      }
+
+      const driverIds = await User.find({ partnerId: id }).distinct("_id");
+      const filter = {
+         $or: [
+            { assignedTo: { $in: driverIds } },
+            { "insurance.partnerId": id }
+         ],
+         status: JOB_STATUSES.COMPLETED,
+         completedAt: { $gte: new Date(from), $lte: new Date(to) }
+      };
+
+      const jobs = await Job.find(filter).populate("assignedTo", "name phone").sort({ completedAt: -1 });
+      const totalRevenue = jobs.reduce((acc, j) => acc + (j.pricing?.providerAmountDue || j.pricing?.estimatedTotal || 0), 0);
+
+      return res.status(200).json({ jobs, totalRevenue });
+   } catch (err) {
+      return res.status(500).json({ message: "Failed to fetch statements", error: err.message });
+   }
+});
+
+/**
+ * ✅ Revoke/Deactivate Code
+ */
+router.patch("/partners/:id/codes/:codeId", auth, requireAdmin, async (req, res) => {
+   try {
+      const { id, codeId } = req.params;
+      const { type, action } = req.body;
+
+      if (type === "INSURANCE") {
+         const code = await InsuranceCode.findOne({ _id: codeId, partner: id });
+         if (!code) return res.status(404).json({ message: "Code not found" });
+         code.isActive = false;
+         await code.save();
+      } else {
+         const code = await DriverVerificationCode.findOne({ _id: codeId, partnerId: id });
+         if (!code) return res.status(404).json({ message: "Code not found" });
+         code.isRevoked = true;
+         await code.save();
+      }
+
+      return res.status(200).json({ message: "Code updated successfully ✅" });
+   } catch (err) {
+      return res.status(500).json({ message: "Action failed", error: err.message });
+   }
 });
 
 /**

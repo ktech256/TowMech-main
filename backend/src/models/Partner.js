@@ -89,6 +89,7 @@ const PartnerSchema = new mongoose.Schema(
       ref: "User",
       default: null,
     },
+    notes: { type: String, default: "" },
   },
   { timestamps: true }
 );
