@@ -11,6 +11,11 @@ import User from "../models/User.js";
 import Job, { JOB_STATUSES } from "../models/Job.js";
 import { sendPartnerInvitation } from "../services/PartnerInvitationService.js";
 import { EmailService } from "../services/EmailService.js";
+import InsuranceCode from "../models/InsuranceCode.js";
+import DriverVerificationCode from "../models/DriverVerificationCode.js";
+import { logAuditEvent } from "../utils/auditLogger.js";
+import { generateCodesForPartner } from "../services/insurance/codeService.js";
+import crypto from "crypto";
 
 const router = express.Router();
 
@@ -66,24 +71,30 @@ router.post("/force-logout", auth, requireAdmin, async (req, res) => {
 
 /**
  * ✅ List All Partners with Extended Details
+ * STRICT COUNTRY ISOLATION ENFORCED
  */
 router.get("/partners", auth, requireAdmin, async (req, res) => {
   try {
-    const { type, countryCode } = req.query;
-    const filter = {};
-    if (countryCode) filter.countryCode = countryCode;
+    const { type } = req.query;
+    const countryCode = req.countryCode; // STRICT ISOLATION from header via tenant middleware
+
+    const filter = {
+       $or: [
+          { countryCode: countryCode },
+          { countryCodes: countryCode }
+       ]
+    };
 
     let partners = [];
     if (type === "INSURANCE") {
-       partners = await InsurancePartner.find(filter).sort({ createdAt: -1 });
+       partners = await InsurancePartner.find({ countryCodes: countryCode }).sort({ createdAt: -1 });
     } else if (type === "FLEET" || type === "MECHANIC") {
-       filter.type = type;
-       partners = await Partner.find(filter).sort({ createdAt: -1 });
+       partners = await Partner.find({ countryCode: countryCode, type }).sort({ createdAt: -1 });
     } else {
        // Return both if no type specified
        const [fleet, insurance] = await Promise.all([
-          Partner.find(filter).sort({ createdAt: -1 }),
-          InsurancePartner.find(filter).sort({ createdAt: -1 })
+          Partner.find({ countryCode: countryCode, type: { $in: ["FLEET", "MECHANIC"] } }).sort({ createdAt: -1 }),
+          InsurancePartner.find({ countryCodes: countryCode }).sort({ createdAt: -1 })
        ]);
        partners = [...fleet, ...insurance];
     }
@@ -146,7 +157,195 @@ router.get("/partners", auth, requireAdmin, async (req, res) => {
 });
 
 /**
+ * ✅ Edit Partner Details
+ */
+router.patch("/partners/:id", auth, requireAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { type, name, partnerCode, contactEmail, contactPhone, status, isSuspended } = req.body;
+
+    let partner;
+    if (type === "INSURANCE") {
+      partner = await InsurancePartner.findById(id);
+    } else {
+      partner = await Partner.findById(id);
+    }
+
+    if (!partner) return res.status(404).json({ message: "Partner not found" });
+
+    // Isolation Check
+    if (type === "INSURANCE") {
+       if (!partner.countryCodes.includes(req.countryCode)) return res.status(403).json({ message: "Forbidden: Country Isolation Violation" });
+    } else {
+       if (partner.countryCode !== req.countryCode) return res.status(403).json({ message: "Forbidden: Country Isolation Violation" });
+    }
+
+    const previousValue = partner.toObject();
+
+    if (name) partner.name = name;
+    if (partnerCode) partner.partnerCode = partnerCode;
+    if (contactEmail) partner.contactEmail = contactEmail;
+    if (contactPhone) partner.contactPhone = contactPhone;
+    if (status) partner.status = status;
+    if (typeof isSuspended === "boolean") partner.isSuspended = isSuspended;
+
+    try {
+      await partner.save();
+    } catch (saveErr) {
+       if (saveErr.code === 11000) {
+          return res.status(409).json({ message: "Partner code or email already exists" });
+       }
+       throw saveErr;
+    }
+
+    await logAuditEvent(req, {
+       action: "PARTNER_EDITED",
+       entityType: "PARTNER",
+       entityId: partner._id,
+       details: {
+          previous: { name: previousValue.name, partnerCode: previousValue.partnerCode, email: previousValue.contactEmail },
+          new: { name: partner.name, partnerCode: partner.partnerCode, email: partner.contactEmail }
+       }
+    });
+
+    return res.status(200).json({ message: "Partner updated ✅", partner });
+  } catch (err) {
+    return res.status(500).json({ message: "Update failed", error: err.message });
+  }
+});
+
+/**
+ * ✅ Get Partner Detailed Metrics (Drivers + Codes + Statements)
+ * ENFORCES COUNTRY ISOLATION
+ */
+router.get("/partners/:id/details", auth, requireAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { type } = req.query;
+
+    let partner;
+    if (type === "INSURANCE") {
+       partner = await InsurancePartner.findById(id);
+    } else {
+       partner = await Partner.findById(id);
+    }
+
+    if (!partner) return res.status(404).json({ message: "Partner not found" });
+
+    // Isolation Check
+    if (type === "INSURANCE") {
+       if (!partner.countryCodes.includes(req.countryCode)) return res.status(403).json({ message: "Forbidden: Country Isolation Violation" });
+    } else {
+       if (partner.countryCode !== req.countryCode) return res.status(403).json({ message: "Forbidden: Country Isolation Violation" });
+    }
+
+    const drivers = await User.find({ partnerId: id }).select("name phone role providerProfile.location providerProfile.isOnline providerProfile.verificationStatus");
+
+    // Driver Status Breakdown
+    const driverStats = {
+       total: drivers.length,
+       verified: drivers.filter(d => d.providerProfile?.verificationStatus === "APPROVED").length,
+       pending: drivers.filter(d => d.providerProfile?.verificationStatus === "PENDING").length,
+       online: drivers.filter(d => d.providerProfile?.isOnline).length,
+       offline: drivers.filter(d => !d.providerProfile?.isOnline).length
+    };
+
+    let codeStats = {};
+    if (type === "INSURANCE") {
+       const codes = await InsuranceCode.find({ partner: id });
+       codeStats = {
+          total: codes.length,
+          active: codes.filter(c => c.isActive && c.expiresAt > new Date()).length,
+          used: codes.reduce((acc, c) => acc + (c.usage?.usedCount || 0), 0),
+          expired: codes.filter(c => c.expiresAt <= new Date()).length
+       };
+    } else {
+       const codes = await DriverVerificationCode.find({ partnerId: id });
+       codeStats = {
+          total: codes.length,
+          used: codes.filter(c => !!c.usedBy).length,
+          unused: codes.filter(c => !c.usedBy && !c.isRevoked && c.expiresAt > new Date()).length,
+          expired: codes.filter(c => c.expiresAt <= new Date() && !c.usedBy).length,
+          revoked: codes.filter(c => c.isRevoked).length
+       };
+    }
+
+    const activeJobs = await Job.find({
+       $or: [
+          { assignedTo: { $in: drivers.map(d => d._id) } },
+          { "insurance.partnerId": id }
+       ],
+       status: { $in: [JOB_STATUSES.ASSIGNED, JOB_STATUSES.IN_PROGRESS] }
+    }).populate("assignedTo", "name phone");
+
+    return res.status(200).json({
+       partner,
+       driverStats,
+       codeStats,
+       drivers,
+       activeJobs
+    });
+  } catch (err) {
+    return res.status(500).json({ message: "Failed to fetch details", error: err.message });
+  }
+});
+
+/**
+ * ✅ Generate Codes for Partner (Fleet or Insurance)
+ */
+router.post("/partners/:id/codes", auth, requireAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { type, count = 1, expiresInDays = 7 } = req.body;
+
+    let partner;
+    if (type === "INSURANCE") {
+       partner = await InsurancePartner.findById(id);
+    } else {
+       partner = await Partner.findById(id);
+    }
+
+    if (!partner) return res.status(404).json({ message: "Partner not found" });
+
+    // Isolation Check
+    if (type === "INSURANCE") {
+       if (!partner.countryCodes.includes(req.countryCode)) return res.status(403).json({ message: "Forbidden" });
+    } else {
+       if (partner.countryCode !== req.countryCode) return res.status(403).json({ message: "Forbidden" });
+    }
+
+    const generated = [];
+    if (type === "INSURANCE") {
+       const result = await generateCodesForPartner({
+          partnerId: id,
+          count: Number(count),
+          expiresInDays: Number(expiresInDays),
+          countryCode: req.countryCode,
+          createdBy: req.user._id
+       });
+       return res.status(201).json({ message: "Insurance codes generated ✅", ...result });
+    } else {
+       for (let i = 0; i < count; i++) {
+          const code = `ADM-DRV-${crypto.randomBytes(3).toString("hex").toUpperCase()}`;
+          const expiresAt = new Date(Date.now() + expiresInDays * 24 * 60 * 60 * 1000);
+          const doc = await DriverVerificationCode.create({
+            code,
+            partnerId: id,
+            expiresAt,
+            createdBy: req.user._id
+          });
+          generated.push(doc);
+       }
+       return res.status(201).json({ message: "Driver verification codes generated ✅", codes: generated });
+    }
+  } catch (err) {
+    return res.status(500).json({ message: "Generation failed", error: err.message });
+  }
+});
+
+/**
  * ✅ Activate/Suspend Partner
+ * LEGACY ROUTE - PROXY TO PATCH
  */
 router.patch("/partners/:id/status", auth, requireAdmin, async (req, res) => {
   try {
@@ -165,7 +364,14 @@ router.patch("/partners/:id/status", auth, requireAdmin, async (req, res) => {
     if (status) partner.status = status;
     if (typeof isSuspended === "boolean") partner.isSuspended = isSuspended;
 
-    await partner.save();
+    try {
+      await partner.save();
+    } catch (saveErr) {
+       if (saveErr.code === 11000) {
+          return res.status(409).json({ message: "Partner code or email already exists" });
+       }
+       throw saveErr;
+    }
     return res.status(200).json({ message: "Partner status updated ✅", partner });
   } catch (err) {
     return res.status(500).json({ message: "Update failed", error: err.message });
@@ -190,34 +396,6 @@ router.get("/audit-logs", auth, requireAdmin, async (req, res) => {
     return res.status(200).json({ logs });
   } catch (err) {
     return res.status(500).json({ message: "Failed to fetch logs", error: err.message });
-  }
-});
-
-/**
- * ✅ Get Partner Detailed Metrics (Drivers + Live Map)
- */
-router.get("/partners/:id/details", auth, requireAdmin, async (req, res) => {
-  try {
-    const { id } = req.params;
-    const partner = await Partner.findById(id);
-    if (!partner) return res.status(404).json({ message: "Partner not found" });
-
-    const drivers = await User.find({ partnerId: id }).select("name phone providerProfile.location providerProfile.isOnline");
-    const activeJobs = await Job.find({
-       $or: [
-          { assignedTo: { $in: drivers.map(d => d._id) } },
-          { "insurance.partnerId": id }
-       ],
-       status: { $in: [JOB_STATUSES.ASSIGNED, JOB_STATUSES.IN_PROGRESS] }
-    });
-
-    return res.status(200).json({
-       partner,
-       drivers,
-       activeJobs
-    });
-  } catch (err) {
-    return res.status(500).json({ message: "Failed to fetch details", error: err.message });
   }
 });
 

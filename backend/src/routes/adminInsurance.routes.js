@@ -136,9 +136,10 @@ router.post("/partners", auth, requireAdmin, async (req, res) => {
       phone,
       logoUrl,
       description,
-      countryCodes = ["ZA"],
       isActive = true,
     } = req.body || {};
+
+    const countryCode = req.countryCode; // Enforce workspace
 
     if (!name || !partnerCode) {
       return res.status(400).json({ message: "name and partnerCode are required" });
@@ -155,9 +156,7 @@ router.post("/partners", auth, requireAdmin, async (req, res) => {
       phone: phone ? String(phone).trim() : null,
       logoUrl: logoUrl ? String(logoUrl).trim() : null,
       description: description ? String(description).trim() : null,
-      countryCodes: Array.isArray(countryCodes)
-        ? countryCodes.map((c) => String(c).trim().toUpperCase())
-        : ["ZA"],
+      countryCodes: [countryCode],
       isActive: Boolean(isActive),
       createdBy: req.user?._id || null,
       updatedBy: req.user?._id || null,
@@ -210,11 +209,11 @@ router.patch("/partners/:id", auth, requireAdmin, async (req, res) => {
 // GET /api/admin/insurance/codes
 router.get("/codes", auth, requireAdmin, async (req, res) => {
   try {
-    const { partnerId, countryCode, isActive, used } = req.query || {};
-    const filter = {};
+    const { partnerId, isActive, used } = req.query || {};
+    const countryCode = req.countryCode; // STRICT ISOLATION
+    const filter = { countryCode };
 
     if (partnerId) filter.partner = partnerId;
-    if (countryCode) filter.countryCode = String(countryCode).trim().toUpperCase();
     if (typeof isActive !== "undefined") filter.isActive = String(isActive) === "true";
 
     if (typeof used !== "undefined") {

@@ -21,13 +21,13 @@ const requireAdmin = async (req, res, next) => {
 
 /**
  * ✅ List Partners
+ * ENFORCES COUNTRY ISOLATION
  */
 router.get("/", auth, requireAdmin, async (req, res) => {
   try {
-    const { type, countryCode } = req.query;
-    const filter = {};
+    const { type } = req.query;
+    const filter = { countryCode: req.countryCode };
     if (type) filter.type = type;
-    if (countryCode) filter.countryCode = countryCode;
 
     const partners = await Partner.find(filter).sort({ createdAt: -1 });
     return res.status(200).json({ partners });
@@ -38,10 +38,12 @@ router.get("/", auth, requireAdmin, async (req, res) => {
 
 /**
  * ✅ Create Partner (Fleet / Mechanic)
+ * ENFORCES COUNTRY ISOLATION
  */
 router.post("/", auth, requireAdmin, async (req, res) => {
   try {
-    const { name, type, partnerCode, contactEmail, contactPhone, country, countryCode, workspace } = req.body;
+    const { name, type, partnerCode, contactEmail, contactPhone, country, workspace } = req.body;
+    const countryCode = req.countryCode; // Enforce workspace
 
     if (!name || !type || !partnerCode || !contactEmail) {
       return res.status(400).json({ message: "Missing required fields" });
