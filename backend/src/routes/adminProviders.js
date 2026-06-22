@@ -841,6 +841,67 @@ router.patch(
 );
 
 /**
+ * ✅ Admin overrides OCR Intelligence results
+ * PATCH /api/admin/providers/providers/:id/documents/idDocument/ocr-override
+ */
+router.patch(
+    "/providers/:id/documents/idDocument/ocr-override",
+    auth,
+    authorizeRoles(USER_ROLES.ADMIN, USER_ROLES.SUPER_ADMIN),
+    async (req, res) => {
+        try {
+            if (blockRestrictedAdmins(req, res)) return;
+            if (!requirePermission(req, res, "canVerifyProviders")) return;
+
+            const { detectedCountry, documentType, documentNumber, reason } = req.body;
+            const provider = await User.findById(req.params.id);
+            if (!provider) return res.status(404).json({ message: "Provider not found" });
+
+            if (!provider.providerProfile?.verificationDocs?.idDocument) {
+                return res.status(400).json({ message: "ID Document not found" });
+            }
+
+            const idDoc = provider.providerProfile.verificationDocs.idDocument;
+
+            // Log the override (Preserve original data for audit)
+            idDoc.ocrOverride = {
+                originalData: {
+                    detectedCountry: idDoc.detectedCountry,
+                    documentType: idDoc.documentType,
+                    documentNumber: idDoc.documentNumber
+                },
+                overriddenBy: req.user._id,
+                overriddenByName: req.user.name,
+                overriddenAt: new Date(),
+                reason: reason || "Admin manual correction"
+            };
+
+            // Update display fields to overridden values
+            if (detectedCountry) idDoc.detectedCountry = detectedCountry;
+            if (documentType) idDoc.documentType = documentType;
+            if (documentNumber) idDoc.documentNumber = documentNumber;
+
+            idDoc.mismatchWarning = false; // Clear warning if admin manually fixed it
+
+            // Sync with profile identification if appropriate
+            if (idDoc.documentType === "ID") provider.identificationType = "SA_ID"; // default if ID
+            if (idDoc.documentType === "PASSPORT") provider.identificationType = "PASSPORT";
+            if (idDoc.documentNumber) provider.identificationNumber = idDoc.documentNumber;
+
+            provider.markModified("providerProfile.verificationDocs.idDocument");
+            await provider.save();
+
+            return res.status(200).json({
+                message: "OCR Intelligence overridden successfully ✅",
+                verificationDocs: provider.providerProfile.verificationDocs
+            });
+        } catch (err) {
+            return res.status(500).json({ message: "Override failed", error: err.message });
+        }
+    }
+);
+
+/**
  * ✅ Admin views a provider's Financial Scorecard (Phase 5)
  * GET /api/admin/providers/providers/:id/financials
  */

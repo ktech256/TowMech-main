@@ -4,6 +4,7 @@ import auth from "../middleware/auth.js";
 import User, { USER_ROLES } from "../models/User.js";
 import { uploadToFirebase } from "../utils/uploadToFirebase.js";
 import { verifyFaces } from "../utils/faceVerification.js";
+import { analyzeOcrIntelligence } from "../utils/ocrDetection.js";
 
 const router = express.Router();
 
@@ -101,6 +102,29 @@ router.patch(
           documentType: field === "idDocument" ? req.body.idDocumentType : undefined,
           ocrConfidence: field === "idDocument" && req.body.idOcrConfidence ? parseFloat(req.body.idOcrConfidence) : undefined
         };
+
+        if (field === "idDocument") {
+            const intelligence = analyzeOcrIntelligence(newDoc.ocrText || "");
+            newDoc.detectedCountry = intelligence.detectedCountry || newDoc.detectedCountry;
+            newDoc.countryConfidence = intelligence.countryConfidence;
+            newDoc.documentType = intelligence.documentType || newDoc.documentType;
+            newDoc.documentNumber = intelligence.documentNumber || newDoc.documentNumber;
+            newDoc.ocrWarning = intelligence.ocrWarning;
+            newDoc.detectedAt = intelligence.detectedAt;
+
+            // Conflict Detection
+            if (intelligence.detectedCountry && user.country &&
+                intelligence.detectedCountry.toLowerCase() !== user.country.toLowerCase() &&
+                intelligence.countryCode !== user.countryCode) {
+                newDoc.mismatchWarning = true;
+            }
+
+            // Auto Country Sync
+            if (intelligence.countryConfidence >= 90 && !user.verifiedCountry) {
+                user.verifiedCountry = intelligence.detectedCountry;
+                // user.countryCode = intelligence.countryCode; // Avoid forced sync of workspace for now, just verify
+            }
+        }
 
         user.set(`providerProfile.verificationDocs.${field}`, newDoc);
 

@@ -228,10 +228,27 @@ const verificationDocSchema = new mongoose.Schema({
 
   // ✅ Phase 1: Smart ID Metadata
   detectedCountry: { type: String, default: null },
+  countryConfidence: { type: Number, default: 0 },
   ocrText: { type: String, default: null },
   documentNumber: { type: String, default: null },
   documentType: { type: String, default: null },
   ocrConfidence: { type: Number, default: null },
+  detectedAt: { type: Date, default: null },
+  ocrWarning: { type: String, default: null },
+  mismatchWarning: { type: Boolean, default: false },
+
+  // ✅ Admin Intelligence Overrides
+  ocrOverride: {
+    originalData: {
+        detectedCountry: String,
+        documentType: String,
+        documentNumber: String
+    },
+    overriddenBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+    overriddenByName: String,
+    overriddenAt: Date,
+    reason: String
+  },
 
   history: [{
     url: String,
