@@ -293,13 +293,16 @@ const providerProfileSchema = new mongoose.Schema(
       vehicleLicenseDisc: { type: verificationDocSchema, default: () => ({}) },
 
       /**
-       * ✅ NEW: Face Matching Intelligence (Phase 2)
+       * ✅ NEW: Face Matching Intelligence (Phase 2B)
+       * Upgraded to True Biometric Verification using Vertex AI
        */
       faceMatching: {
-        score: { type: Number, default: 0 },
+        score: { type: Number, default: 0 }, // Overall weighted score
+        similarityScore: { type: Number, default: 0 }, // Biometric similarity (0-100)
         status: { type: String, enum: ["NOT_CHECKED", "MATCHED", "REVIEW_REQUIRED", "NO_MATCH"], default: "NOT_CHECKED" },
         verifiedAt: { type: Date, default: null },
         provider: { type: String, default: "Google Vertex AI" },
+        model: { type: String, default: "multimodalembedding@001" },
         details: { type: Object, default: null }
       },
 

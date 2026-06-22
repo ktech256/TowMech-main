@@ -8,6 +8,7 @@
     "dev": "nodemon src/server.js"
   },
   "dependencies": {
+    "@google-cloud/aiplatform": "^6.8.1",
     "@google-cloud/vision": "^5.3.7",
     "@sendgrid/mail": "^8.1.6",
     "axios": "^1.13.2",
