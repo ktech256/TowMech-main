@@ -6,6 +6,7 @@ import User, { USER_ROLES } from "../models/User.js";
 import Job, { JOB_STATUSES } from "../models/Job.js";
 import Notification from "../models/Notification.js";
 import { sendPushToUser } from "../utils/sendPush.js";
+import { verifyFaces } from "../utils/faceVerification.js";
 
 const router = express.Router();
 
@@ -798,6 +799,43 @@ router.patch(
       });
     } catch (err) {
       return res.status(500).json({ message: "Update failed", error: err.message });
+    }
+  }
+);
+
+/**
+ * ✅ Phase 2: Manually Trigger Face Matching
+ * PATCH /api/admin/providers/providers/:id/face-match
+ */
+router.patch(
+  "/providers/:id/face-match",
+  auth,
+  authorizeRoles(USER_ROLES.ADMIN, USER_ROLES.SUPER_ADMIN),
+  async (req, res) => {
+    try {
+      if (blockRestrictedAdmins(req, res)) return;
+      if (!requirePermission(req, res, "canVerifyProviders")) return;
+
+      const provider = await User.findById(req.params.id);
+      if (!provider) return res.status(404).json({ message: "Provider not found" });
+
+      const idUrl = provider.providerProfile?.verificationDocs?.idDocument?.url;
+      const selfieUrl = provider.providerProfile?.verificationDocs?.selfie?.url;
+
+      if (!idUrl || !selfieUrl) {
+        return res.status(400).json({ message: "ID Document and Selfie are required for matching ❌" });
+      }
+
+      const result = await verifyFaces(provider, idUrl, selfieUrl);
+      await provider.save();
+
+      return res.status(200).json({
+        message: "Face matching intelligence updated ✅",
+        faceMatching: result,
+        verificationDocs: provider.providerProfile.verificationDocs
+      });
+    } catch (err) {
+      return res.status(500).json({ message: "Face matching failed", error: err.message });
     }
   }
 );

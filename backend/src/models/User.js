@@ -293,6 +293,17 @@ const providerProfileSchema = new mongoose.Schema(
       vehicleLicenseDisc: { type: verificationDocSchema, default: () => ({}) },
 
       /**
+       * ✅ NEW: Face Matching Intelligence (Phase 2)
+       */
+      faceMatching: {
+        score: { type: Number, default: 0 },
+        status: { type: String, enum: ["NOT_CHECKED", "MATCHED", "REVIEW_REQUIRED", "NO_MATCH"], default: "NOT_CHECKED" },
+        verifiedAt: { type: Date, default: null },
+        provider: { type: String, default: "Google Vertex AI" },
+        details: { type: Object, default: null }
+      },
+
+      /**
        * ✅ NEW: Company Verification State (Phase 11)
        * Restructured from User Profile to Verification state
        */

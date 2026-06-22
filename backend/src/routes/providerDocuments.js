@@ -3,6 +3,7 @@ import multer from "multer";
 import auth from "../middleware/auth.js";
 import User, { USER_ROLES } from "../models/User.js";
 import { uploadToFirebase } from "../utils/uploadToFirebase.js";
+import { verifyFaces } from "../utils/faceVerification.js";
 
 const router = express.Router();
 
@@ -138,6 +139,17 @@ router.patch(
       // ✅ set overall verification status to PENDING if it was NOT_SUBMITTED or REJECTED
       if (user.providerProfile.verificationStatus !== "APPROVED") {
         user.providerProfile.verificationStatus = "PENDING";
+      }
+
+      // ✅ Phase 2: Face Matching Intelligence
+      // Trigger if both ID and Selfie are present (even if only one was just updated)
+      const idUrl = user.providerProfile.verificationDocs.idDocument?.url;
+      const selfieUrl = user.providerProfile.verificationDocs.selfie?.url;
+
+      if (idUrl && selfieUrl) {
+          // Fire and forget (or await if we want to include result in response)
+          // We'll await to ensure the user gets immediate feedback in the response
+          await verifyFaces(user, idUrl, selfieUrl);
       }
 
       await user.save();
