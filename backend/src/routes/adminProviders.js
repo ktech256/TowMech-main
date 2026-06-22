@@ -6,7 +6,7 @@ import User, { USER_ROLES } from "../models/User.js";
 import Job, { JOB_STATUSES } from "../models/Job.js";
 import Notification from "../models/Notification.js";
 import { sendPushToUser } from "../utils/sendPush.js";
-import { verifyFaces } from "../utils/faceVerification.js";
+import { verifyFaces, updateBiometricTemplate } from "../utils/faceVerification.js";
 import { logAuditEvent } from "../utils/auditLogger.js";
 
 const router = express.Router();
@@ -389,6 +389,12 @@ router.patch(
           provider.verifiedCountry = provider.passportCountry;
       }
 
+      // ✅ Phase 3: Primary Biometric Template Generation
+      if (!provider.providerProfile.biometricTemplate?.vector) {
+          console.log(`[VERIFICATION_TRACE] Generating biometric template for ${req.params.id} on approval...`);
+          await updateBiometricTemplate(provider);
+      }
+
       await provider.save();
       await provider.populate("providerProfile.verifiedBy", "name email role");
 
@@ -503,9 +509,11 @@ router.patch(
       provider.providerProfile.verificationDocs[field].updatedAt = new Date();
       provider.providerProfile.verificationDocs[field].reason = null;
 
-      // If it's a selfie, update the profile photo
+      // If it's a selfie, update the profile photo and regenerate biometric template
       if (field === "selfie") {
         provider.photoUrl = provider.providerProfile.verificationDocs[field].url;
+        console.log(`[VERIFICATION_TRACE] Re-generating biometric template for ${id} due to new selfie approval...`);
+        await updateBiometricTemplate(provider);
       }
 
       provider.markModified(`providerProfile.verificationDocs.${field}`);
@@ -652,6 +660,14 @@ router.patch(
           provider.verifiedCountry = "South Africa";
       } else if (provider.identificationType === "PASSPORT") {
           provider.verifiedCountry = provider.passportCountry;
+      }
+
+      // ✅ Phase 3: Primary Biometric Template Generation
+      // On final approval, we generate the primary reference template from the verified selfie.
+      // This ensures all future face checks are against a high-quality TowMech-captured image.
+      if (!provider.providerProfile.biometricTemplate?.vector) {
+          console.log(`[VERIFICATION_TRACE] Generating biometric template for ${id} on final approval...`);
+          await updateBiometricTemplate(provider);
       }
 
       await provider.save();
@@ -996,6 +1012,57 @@ router.patch(
             return res.status(200).json({ message: `Face verification forced for all providers in ${workspaceCountryCode} ✅` });
         } catch (err) {
             return res.status(500).json({ message: "Bulk force failed", error: err.message });
+        }
+    }
+);
+
+/**
+ * ✅ Phase 3: Bulk Generate Biometric Templates for existing approved providers
+ * PATCH /api/admin/providers/bulk/generate-biometric-templates
+ *
+ * Migration utility for Phase 3 deployment.
+ */
+router.patch(
+    "/bulk/generate-biometric-templates",
+    auth,
+    authorizeRoles(USER_ROLES.SUPER_ADMIN), // Restricted to SuperAdmin only
+    async (req, res) => {
+        try {
+            if (blockRestrictedAdmins(req, res)) return;
+
+            const workspaceCountryCode = resolveCountryCode(req);
+
+            const providers = await User.find({
+                countryCode: workspaceCountryCode,
+                role: { $in: [USER_ROLES.TOW_TRUCK, USER_ROLES.MECHANIC] },
+                "providerProfile.verificationStatus": "APPROVED",
+                "providerProfile.biometricTemplate.vector": null,
+                "providerProfile.verificationDocs.selfie.url": { $ne: null }
+            }).limit(50); // limit to prevent timeouts
+
+            console.log(`[BIOMETRIC_MIGRATION] Starting migration for ${providers.length} providers in ${workspaceCountryCode}`);
+
+            let successCount = 0;
+            let failCount = 0;
+
+            for (const provider of providers) {
+                const result = await updateBiometricTemplate(provider);
+                if (result) {
+                    await provider.save();
+                    successCount++;
+                } else {
+                    failCount++;
+                }
+            }
+
+            return res.status(200).json({
+                message: `Biometric template migration completed for ${workspaceCountryCode}`,
+                processed: providers.length,
+                success: successCount,
+                failed: failCount
+            });
+        } catch (err) {
+            return res.status(500).json({ message: "Bulk migration failed", error: err.message });
         }
     }
 );

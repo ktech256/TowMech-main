@@ -37,7 +37,7 @@ function cosineSimilarity(vecA, vecB) {
 /**
  * Helper: Get Image Embedding from Vertex AI
  */
-async function getImageEmbedding(imageUrl) {
+export async function getImageEmbedding(imageUrl) {
     const projectId = process.env.GOOGLE_PROJECT_ID || process.env.FIREBASE_PROJECT_ID;
     const location = 'us-central1';
     const model = 'multimodalembedding@001';
@@ -65,6 +65,30 @@ async function getImageEmbedding(imageUrl) {
     // Response structure varies by model version; multimodalembedding@001 returns imageEmbedding
     const embedding = predictionResponse.predictions[0].structValue.fields.imageEmbedding.listValue.values.map(v => v.numberValue);
     return embedding;
+}
+
+/**
+ * ✅ Phase 3: Update Biometric Template from Verified Selfie
+ */
+export async function updateBiometricTemplate(user) {
+    try {
+        const selfieUrl = user.providerProfile.verificationDocs.selfie?.url;
+        if (!selfieUrl) return null;
+
+        console.log(`[BIOMETRIC] Generating primary template from verified selfie for: ${user._id}`);
+        const embedding = await getImageEmbedding(selfieUrl);
+
+        user.providerProfile.biometricTemplate = {
+            vector: embedding,
+            generatedAt: new Date(),
+            version: "1.0"
+        };
+        user.markModified("providerProfile.biometricTemplate");
+        return embedding;
+    } catch (err) {
+        console.error(`[BIOMETRIC] Failed to update template:`, err.message);
+        return null;
+    }
 }
 
 export async function verifyFaces(user, idUrl, selfieUrl) {
@@ -120,6 +144,16 @@ export async function verifyFaces(user, idUrl, selfieUrl) {
         if (similarityScore >= 95) status = "MATCHED";
         else if (similarityScore >= 80) status = "REVIEW_REQUIRED";
 
+        // ✅ STORE THE SELFIE EMBEDDING AS THE PRIMARY TEMPLATE IMMEDIATELY ON MATCH
+        if (status === "MATCHED" || status === "REVIEW_REQUIRED") {
+            user.providerProfile.biometricTemplate = {
+                vector: selfieEmbedding,
+                generatedAt: new Date(),
+                version: "1.0"
+            };
+            user.markModified("providerProfile.biometricTemplate");
+        }
+
         const faceMatchingData = {
             score: Math.min(100, finalScore),
             similarityScore: similarityScore,
@@ -159,26 +193,35 @@ export async function verifyFaces(user, idUrl, selfieUrl) {
 
 /**
  * ✅ Phase 3: Perform Daily Face Check-In
- * Compares live selfie against verified ID template.
+ * Compares live selfie against PRIMARY BIOMETRIC TEMPLATE (Verified Selfie).
+ * If template missing (legacy), falls back to generating from verification selfie URL.
  */
 export async function performFaceCheck(user, liveSelfieUrl) {
     try {
-        const idUrl = user.providerProfile.verificationDocs.idDocument?.url;
-        if (!idUrl || !liveSelfieUrl) {
-            console.log(`[FACE_CHECK] Missing ID or Live Selfie for user ${user._id}`);
-            return null;
+        let referenceEmbedding = user.providerProfile.biometricTemplate?.vector;
+
+        // Fallback: If no template stored, generate from verified onboarding selfie URL
+        if (!referenceEmbedding || !Array.isArray(referenceEmbedding)) {
+            const selfieUrl = user.providerProfile.verificationDocs.selfie?.url;
+            if (!selfieUrl) {
+                console.log(`[FACE_CHECK] Missing PRIMARY TEMPLATE or ONBOARDING SELFIE for user ${user._id}`);
+                return { status: "ERROR", message: "Verification template missing" };
+            }
+            console.log(`[FACE_CHECK] Legacy provider: Generating reference embedding from verified selfie URL...`);
+            referenceEmbedding = await updateBiometricTemplate(user);
         }
 
-        console.log(`[FACE_CHECK] Processing face check for user: ${user._id}`);
+        if (!referenceEmbedding) {
+            return { status: "ERROR", message: "Reference template generation failed" };
+        }
 
-        // 1. Re-generate embedding from verified ID + generate from live selfie
-        const [idEmbedding, liveEmbedding] = await Promise.all([
-            getImageEmbedding(idUrl),
-            getImageEmbedding(liveSelfieUrl)
-        ]);
+        console.log(`[FACE_CHECK] Processing face check against verified selfie template for: ${user._id}`);
+
+        // Generate embedding from live selfie
+        const liveEmbedding = await getImageEmbedding(liveSelfieUrl);
 
         // 2. Similarity
-        const similarity = cosineSimilarity(idEmbedding, liveEmbedding);
+        const similarity = cosineSimilarity(referenceEmbedding, liveEmbedding);
         const similarityScore = Math.round(similarity * 100);
 
         // 3. Status Rules

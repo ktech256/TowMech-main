@@ -353,6 +353,17 @@ const providerProfileSchema = new mongoose.Schema(
       default: null,
     },
 
+    /**
+     * ✅ Phase 3: Biometric Identity Template
+     * Primary reference vector for all future face checks.
+     * Generated from the verified onboarding selfie.
+     */
+    biometricTemplate: {
+      vector: { type: [Number], default: null }, // 1408-dimensional vector
+      generatedAt: { type: Date, default: null },
+      version: { type: String, default: "1.0" }
+    },
+
     // ✅ session enforcement (single device login)
     sessionId: { type: String, default: null },
     sessionIssuedAt: { type: Date, default: null },
