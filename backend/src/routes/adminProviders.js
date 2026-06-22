@@ -16,10 +16,14 @@ const router = express.Router();
  */
 async function notifyProvider(userId, title, body, type = "VERIFICATION") {
   try {
-    await sendPushToUser({ userId, title, body, data: { type } });
-    await Notification.create({ userId, title, body, type });
+    console.log(`[FORCE_VERIFY_START] Attempting push dispatch to ${userId} with type ${type}`);
+    const pushRes = await sendPushToUser({ userId, title, body, data: { type, open: type } });
+    console.log(`[FORCE_VERIFY_PUSH_SENT] FCM Response:`, pushRes);
+
+    await Notification.create({ userId, title, body, type, data: { type, open: type } });
+    console.log(`[FORCE_VERIFY_NOTIFICATION_CREATED] DB record saved for ${userId}`);
   } catch (err) {
-    console.error(`[ADMIN] Notify error for ${userId}:`, err.message);
+    console.error(`[FORCE_VERIFY_NOTIFICATION_FAILED] Error for ${userId}:`, err.message);
   }
 }
 
@@ -926,10 +930,14 @@ router.patch(
             const provider = await User.findById(req.params.id);
             if (!provider) return res.status(404).json({ message: "Provider not found" });
 
+            console.log(`[FORCE_VERIFY_DB_START] Provider: ${provider._id} | isRequired before: ${provider.lastFaceCheck?.isRequired}`);
+
             if (!provider.lastFaceCheck) provider.lastFaceCheck = {};
             provider.lastFaceCheck.isRequired = true;
             provider.markModified("lastFaceCheck");
             await provider.save();
+
+            console.log(`[FORCE_VERIFY_DB_UPDATED] isRequired after: ${provider.lastFaceCheck.isRequired}`);
 
             await logAuditEvent(req, {
                 action: "FORCED_CHECK",
@@ -948,6 +956,7 @@ router.patch(
 
             return res.status(200).json({ message: "Face verification forced successfully ✅" });
         } catch (err) {
+            console.error(`[FORCE_VERIFY_FAILED] error:`, err.message);
             return res.status(500).json({ message: "Failed to force verification", error: err.message });
         }
     }

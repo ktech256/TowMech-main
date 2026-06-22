@@ -12,7 +12,7 @@ const notificationSchema = new mongoose.Schema(
     body: { type: String, required: true },
     type: {
       type: String,
-      enum: ["GENERAL", "VERIFICATION", "EXPIRY", "JOB_UPDATE", "PAYMENT"],
+      enum: ["GENERAL", "VERIFICATION", "EXPIRY", "JOB_UPDATE", "PAYMENT", "SECURITY"],
       default: "GENERAL"
     },
     data: { type: Map, of: String },

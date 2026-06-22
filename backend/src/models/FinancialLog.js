@@ -14,10 +14,10 @@ const financialLogSchema = new mongoose.Schema(
           "PARTNER_LOGIN", "PARTNER_LOGOUT", "PORTAL_DISABLED", "PORTAL_ENABLED",
           "PARTNER_CREATED", "INVITATION_SENT", "INVITATION_FAILED",
           "ACTIVATION_COMPLETED", "PASSWORD_CREATED", "OTP_SENT", "OTP_VERIFIED",
-          "EMAIL_SENT", "EMAIL_FAILED"
+          "EMAIL_SENT", "EMAIL_FAILED", "FORCED_CHECK", "BULK_FORCED_CHECK"
         ]
     },
-    entityType: { type: String, enum: ["INSURANCE", "PROVIDER", "PARTNER", "FLEET", "CUSTOMER", "SYSTEM"], required: true },
+    entityType: { type: String, enum: ["INSURANCE", "PROVIDER", "PARTNER", "FLEET", "CUSTOMER", "SYSTEM", "USER", "COUNTRY"], required: true },
     entityId: { type: mongoose.Schema.Types.Mixed, required: false }, // Supports ObjectId or String (e.g. "SYSTEM")
 
     countryCode: { type: String, required: true, uppercase: true },
