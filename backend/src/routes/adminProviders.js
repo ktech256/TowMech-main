@@ -7,6 +7,7 @@ import Job, { JOB_STATUSES } from "../models/Job.js";
 import Notification from "../models/Notification.js";
 import { sendPushToUser } from "../utils/sendPush.js";
 import { verifyFaces } from "../utils/faceVerification.js";
+import { logAuditEvent } from "../utils/auditLogger.js";
 
 const router = express.Router();
 
