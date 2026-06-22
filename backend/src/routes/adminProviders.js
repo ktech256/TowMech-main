@@ -902,6 +902,87 @@ router.patch(
 );
 
 /**
+ * ✅ Phase 3: Admin forces face verification for a provider
+ * PATCH /api/admin/providers/providers/:id/force-face-check
+ */
+router.patch(
+    "/providers/:id/force-face-check",
+    auth,
+    authorizeRoles(USER_ROLES.ADMIN, USER_ROLES.SUPER_ADMIN),
+    async (req, res) => {
+        try {
+            if (blockRestrictedAdmins(req, res)) return;
+            if (!requirePermission(req, res, "canVerifyProviders")) return;
+
+            const provider = await User.findById(req.params.id);
+            if (!provider) return res.status(404).json({ message: "Provider not found" });
+
+            if (!provider.lastFaceCheck) provider.lastFaceCheck = {};
+            provider.lastFaceCheck.isRequired = true;
+            provider.markModified("lastFaceCheck");
+            await provider.save();
+
+            await logAuditEvent(req, {
+                action: "FORCED_CHECK",
+                entityType: "USER",
+                entityId: provider._id,
+                details: { adminName: req.user.name }
+            });
+
+            // Send push notification
+            await notifyProvider(
+                provider._id,
+                "Identity Verification Required ⚠️",
+                "An admin has requested an immediate identity verification. Please complete a face scan.",
+                "SECURITY"
+            );
+
+            return res.status(200).json({ message: "Face verification forced successfully ✅" });
+        } catch (err) {
+            return res.status(500).json({ message: "Failed to force verification", error: err.message });
+        }
+    }
+);
+
+/**
+ * ✅ Phase 3: Admin forces face verification for ALL providers in a country
+ * PATCH /api/admin/providers/bulk/force-face-check
+ */
+router.patch(
+    "/bulk/force-face-check",
+    auth,
+    authorizeRoles(USER_ROLES.ADMIN, USER_ROLES.SUPER_ADMIN),
+    async (req, res) => {
+        try {
+            if (blockRestrictedAdmins(req, res)) return;
+            if (!requirePermission(req, res, "canVerifyProviders")) return;
+
+            const workspaceCountryCode = resolveCountryCode(req);
+            if (!enforceWorkspaceAccess(req, res, workspaceCountryCode)) return;
+
+            await User.updateMany(
+                {
+                    countryCode: workspaceCountryCode,
+                    role: { $in: [USER_ROLES.TOW_TRUCK, USER_ROLES.MECHANIC] }
+                },
+                { $set: { "lastFaceCheck.isRequired": true } }
+            );
+
+            await logAuditEvent(req, {
+                action: "BULK_FORCED_CHECK",
+                entityType: "COUNTRY",
+                entityId: workspaceCountryCode,
+                details: { adminName: req.user.name }
+            });
+
+            return res.status(200).json({ message: `Face verification forced for all providers in ${workspaceCountryCode} ✅` });
+        } catch (err) {
+            return res.status(500).json({ message: "Bulk force failed", error: err.message });
+        }
+    }
+);
+
+/**
  * ✅ Admin views a provider's Financial Scorecard (Phase 5)
  * GET /api/admin/providers/providers/:id/financials
  */

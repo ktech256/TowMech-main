@@ -46,6 +46,14 @@ const CountryServiceConfigSchema = new mongoose.Schema(
       fuelDeliveryEnabled: { type: Boolean, default: false },
       lockoutEnabled: { type: Boolean, default: false },
 
+      // ✅ Phase 3: Face Check-In Verification
+      faceCheckInEnabled: { type: Boolean, default: false },
+      faceCheckRandomEnabled: { type: Boolean, default: false },
+      faceCheckScheduledEnabled: { type: Boolean, default: false },
+      faceCheckFrequencyHours: { type: Number, default: 24 },
+      faceCheckActiveJobEnabled: { type: Boolean, default: false },
+      faceCheckActiveJobProbability: { type: Number, default: 5 }, // % chance
+
       // legacy alias
       supportEnabled: { type: Boolean, default: true },
     },

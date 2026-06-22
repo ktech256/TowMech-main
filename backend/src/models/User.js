@@ -358,6 +358,18 @@ const providerProfileSchema = new mongoose.Schema(
     sessionIssuedAt: { type: Date, default: null },
 
     /**
+     * ✅ Phase 3: Daily Face Check-In (Daily Verification)
+     */
+    lastFaceCheck: {
+      status: { type: String, enum: ["NOT_CHECKED", "MATCHED", "REVIEW_REQUIRED", "NO_MATCH"], default: "NOT_CHECKED" },
+      score: { type: Number, default: 0 },
+      verifiedAt: { type: Date, default: null },
+      deviceId: { type: String, default: null },
+      isRequired: { type: Boolean, default: false }, // If true, provider must verify next time they go online
+      failedAttempts: { type: Number, default: 0 }
+    },
+
+    /**
      * ✅ TowMech Global: provider can be restricted to specific countries
      */
     allowedCountries: { type: [String], default: [] },

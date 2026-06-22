@@ -156,3 +156,57 @@ export async function verifyFaces(user, idUrl, selfieUrl) {
         return errorData;
     }
 }
+
+/**
+ * ✅ Phase 3: Perform Daily Face Check-In
+ * Compares live selfie against verified ID template.
+ */
+export async function performFaceCheck(user, liveSelfieUrl) {
+    try {
+        const idUrl = user.providerProfile.verificationDocs.idDocument?.url;
+        if (!idUrl || !liveSelfieUrl) {
+            console.log(`[FACE_CHECK] Missing ID or Live Selfie for user ${user._id}`);
+            return null;
+        }
+
+        console.log(`[FACE_CHECK] Processing face check for user: ${user._id}`);
+
+        // 1. Re-generate embedding from verified ID + generate from live selfie
+        const [idEmbedding, liveEmbedding] = await Promise.all([
+            getImageEmbedding(idUrl),
+            getImageEmbedding(liveSelfieUrl)
+        ]);
+
+        // 2. Similarity
+        const similarity = cosineSimilarity(idEmbedding, liveEmbedding);
+        const similarityScore = Math.round(similarity * 100);
+
+        // 3. Status Rules
+        let status = "NO_MATCH";
+        if (similarityScore >= 95) status = "MATCHED";
+        else if (similarityScore >= 80) status = "REVIEW_REQUIRED";
+
+        const result = {
+            status,
+            score: similarityScore,
+            verifiedAt: new Date(),
+            deviceId: user.lastPlatform || "Android", // Simplified
+        };
+
+        // 4. Update user record
+        user.lastFaceCheck = {
+            ...result,
+            isRequired: false,
+            failedAttempts: status === "NO_MATCH" ? (user.lastFaceCheck?.failedAttempts || 0) + 1 : 0
+        };
+
+        user.markModified("lastFaceCheck");
+        await user.save();
+
+        console.log(`[FACE_CHECK] Result for ${user._id}: ${status} (${similarityScore}%)`);
+        return result;
+    } catch (err) {
+        console.error(`[FACE_CHECK] ERROR:`, err.message);
+        return { status: "ERROR", score: 0, error: err.message };
+    }
+}
