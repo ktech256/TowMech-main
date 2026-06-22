@@ -200,6 +200,7 @@ function buildPhoneCandidates(phone, dialingCode = null) {
 
 /**
  * ✅ STATIC OTP (Play Store review / internal testing)
+ * Whitelist: 0919999000 - 0919999099
  */
 const STATIC_TEST_OTP = "123456";
 const STATIC_TEST_PHONES_LOCAL = new Set([
@@ -229,7 +230,18 @@ function toLocalZaPhone(phone) {
 
 function isStaticOtpTestPhone(phone) {
   const local = toLocalZaPhone(phone);
-  return !!local && STATIC_TEST_PHONES_LOCAL.has(local);
+  if (!local) return false;
+
+  if (STATIC_TEST_PHONES_LOCAL.has(local)) return true;
+
+  /**
+   * ✅ NEW: Whitelist range 0919999000 - 0919999099 (100 numbers)
+   */
+  if (/^09199990\d{2}$/.test(local)) {
+    return true;
+  }
+
+  return false;
 }
 
 /**
