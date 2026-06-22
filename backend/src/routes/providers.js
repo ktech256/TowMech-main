@@ -206,9 +206,11 @@ router.get("/me", auth, async (req, res) => {
       return res.status(403).json({ message: "Only providers can view this profile" });
     }
 
-    const user = await User.findById(req.user._id).select(
-      "name firstName lastName email phone birthday nationalityType saIdNumber passportNumber country role providerProfile ratingStats createdAt updatedAt"
-    );
+    const user = await User.findById(req.user._id)
+      .select(
+        "name firstName lastName email phone birthday nationalityType saIdNumber passportNumber country role providerProfile ratingStats createdAt updatedAt"
+      )
+      .populate("providerProfile.verifiedBy", "name email role");
 
     if (!user) return res.status(404).json({ message: "User not found" });
 
@@ -294,9 +296,9 @@ router.patch("/me", auth, async (req, res) => {
 
     await user.save();
 
-    const fresh = await User.findById(user._id).select(
-      "name email phone role providerProfile ratingStats createdAt updatedAt"
-    );
+    const fresh = await User.findById(user._id)
+      .select("name email phone role providerProfile ratingStats createdAt updatedAt")
+      .populate("providerProfile.verifiedBy", "name email role");
 
     return res.status(200).json({ user: fresh });
   } catch (err) {
@@ -402,6 +404,7 @@ router.patch("/me/status", auth, async (req, res) => {
       const faceEnabled = config?.services?.faceCheckInEnabled || false;
       const scheduledEnabled = config?.services?.faceCheckScheduledEnabled || false;
       const frequencyHours = config?.services?.faceCheckFrequencyHours || 24;
+      const randomEnabled = config?.services?.faceCheckRandomEnabled || false;
 
       let faceCheckRequired = false;
       let reason = "";
@@ -420,10 +423,20 @@ router.patch("/me/status", auth, async (req, res) => {
               reason = "Initial verification required";
           } else {
               const hoursSinceLast = (new Date() - new Date(lastVerifiedAt)) / (1000 * 60 * 60);
-              // Simplified: using exact frequency, requirement mentioned randomized windows but let's stick to base first
-              if (hoursSinceLast >= frequencyHours) {
+
+              // ✅ Requirement: Randomized Windows
+              // If randomEnabled, we apply a +/- 10% variance to the frequency
+              let effectiveFrequency = frequencyHours;
+              if (randomEnabled) {
+                  // deterministic random based on user ID so it doesn't flip-flop every request
+                  const seed = parseInt(user._id.toString().slice(-4), 16);
+                  const variance = (seed % 20) - 10; // -10% to +10%
+                  effectiveFrequency = frequencyHours * (1 + (variance / 100));
+              }
+
+              if (hoursSinceLast >= effectiveFrequency) {
                   faceCheckRequired = true;
-                  reason = `Periodic verification required (${Math.floor(hoursSinceLast)}h since last)`;
+                  reason = `Periodic verification required (${Math.floor(hoursSinceLast)}h elapsed, window: ${effectiveFrequency.toFixed(1)}h)`;
               }
           }
       }
@@ -556,6 +569,7 @@ router.patch("/me/status", auth, async (req, res) => {
     }
 
     await user.save();
+    await user.populate("providerProfile.verifiedBy", "name email role");
 
     return res.status(200).json({
       message: "Provider status updated ✅",
@@ -858,6 +872,30 @@ router.get("/jobs/assigned", auth, async (req, res) => {
       return res.status(403).json({ message: "Only providers can view assigned jobs" });
     }
 
+    const user = await User.findById(req.user._id);
+    const config = await CountryServiceConfig.findOne({ countryCode: user.countryCode || "ZA" });
+
+    // ✅ Phase 3: Active Job Random Verification Probability
+    if (config?.services?.faceCheckInEnabled && config?.services?.faceCheckActiveJobEnabled) {
+        const probability = config.services.faceCheckActiveJobProbability || 5;
+
+        // Randomly decide if we should trigger a check now
+        // We only trigger if they don't already have one pending and it's been at least 1 hour since last match
+        const hoursSinceLast = (new Date() - new Date(user.lastFaceCheck?.verifiedAt || 0)) / (1000 * 60 * 60);
+
+        if (!user.lastFaceCheck?.isRequired && hoursSinceLast > 1) {
+            const roll = Math.random() * 100;
+            if (roll < probability) {
+                console.log(`[FACE_CHECK] Random active job check triggered for ${user._id}`);
+                user.lastFaceCheck.isRequired = true;
+                user.markModified("lastFaceCheck");
+                await user.save();
+
+                // Note: We don't block THIS response, but the next action they take will see isRequired=true
+            }
+        }
+    }
+
     const jobs = await Job.find({
       assignedTo: req.user._id,
       status: { $in: [JOB_STATUSES.ASSIGNED, JOB_STATUSES.IN_PROGRESS] },
@@ -865,7 +903,7 @@ router.get("/jobs/assigned", auth, async (req, res) => {
       .sort({ updatedAt: -1 })
       .limit(20);
 
-    return res.status(200).json({ jobs });
+    return res.status(200).json({ jobs, lastFaceCheck: user.lastFaceCheck });
   } catch (err) {
     return res.status(500).json({ message: "Could not fetch assigned jobs", error: err.message });
   }

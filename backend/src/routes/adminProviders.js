@@ -156,6 +156,7 @@ router.get(
 
       const providers = await User.find(query)
         .select("name email role countryCode providerProfile identificationType identificationNumber passportCountry verifiedCountry partnerId ratingStats createdAt accountStatus")
+        .populate("providerProfile.verifiedBy", "name email role")
         .sort({ createdAt: -1 });
 
       return res.status(200).json({
@@ -206,6 +207,7 @@ router.get(
 
       const providers = await User.find(query)
         .select("name email role countryCode providerProfile identificationType identificationNumber passportCountry verifiedCountry partnerId ratingStats createdAt accountStatus")
+        .populate("providerProfile.verifiedBy", "name email role")
         .sort({ createdAt: -1 });
 
       return res.status(200).json({
@@ -256,6 +258,7 @@ router.get(
 
       const providers = await User.find(query)
         .select("name email role countryCode providerProfile identificationType identificationNumber passportCountry verifiedCountry partnerId ratingStats createdAt accountStatus")
+        .populate("providerProfile.verifiedBy", "name email role")
         .sort({ createdAt: -1 });
 
       return res.status(200).json({
@@ -291,9 +294,12 @@ router.get(
 
       console.log(`[VERIFICATION_TRACE] Admin fetching verification for provider: ${req.params.id}`);
 
-      const provider = await User.findById(req.params.id).select(
-        "name firstName lastName email role countryCode providerProfile identificationType identificationNumber passportCountry verifiedCountry saIdNumber passportNumber partnerId ratingStats accountStatus"
-      ).populate("partnerId", "name type partnerCode");
+      const provider = await User.findById(req.params.id)
+        .select(
+          "name firstName lastName email role countryCode providerProfile identificationType identificationNumber passportCountry verifiedCountry saIdNumber passportNumber partnerId ratingStats accountStatus"
+        )
+        .populate("partnerId", "name type partnerCode")
+        .populate("providerProfile.verifiedBy", "name email role");
 
       if (!provider) {
         console.error(`[VERIFICATION_TRACE] Provider not found: ${req.params.id}`);
@@ -379,6 +385,7 @@ router.patch(
       }
 
       await provider.save();
+      await provider.populate("providerProfile.verifiedBy", "name email role");
 
       return res.status(200).json({
         message: "Provider approved successfully ✅",
@@ -643,6 +650,7 @@ router.patch(
       }
 
       await provider.save();
+      await provider.populate("providerProfile.verifiedBy", "name email role");
       console.log(`[VERIFICATION_TRACE] Final approve SUCCESS for ${id}`);
 
       // Send Notification

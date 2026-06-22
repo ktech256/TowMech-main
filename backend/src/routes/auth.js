@@ -913,6 +913,7 @@ router.post("/login", async (req, res) => {
     }
 
     await user.save();
+    await user.populate("providerProfile.verifiedBy", "name email role");
 
     const token = generateToken(user._id, user.role, sessionId);
 
@@ -1018,6 +1019,7 @@ router.post("/verify-otp", async (req, res) => {
     user.lastPlatform = req.headers["x-platform"] || "Android";
 
     await user.save();
+    await user.populate("providerProfile.verifiedBy", "name email role");
 
     const token = generateToken(user._id, user.role, sessionId);
 

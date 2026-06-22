@@ -183,7 +183,9 @@ router.patch(
         message: "Documents uploaded successfully ✅",
         verificationStatus: user.providerProfile.verificationStatus,
         verificationDocs: user.providerProfile.verificationDocs,
-        user: await User.findById(user._id).select("name email phone role providerProfile createdAt updatedAt")
+        user: await User.findById(user._id)
+          .select("name email phone role providerProfile createdAt updatedAt")
+          .populate("providerProfile.verifiedBy", "name email role")
       });
     } catch (err) {
       console.error(`[VERIFICATION_TRACE] ERROR: ${err.message}`, err);
