@@ -74,6 +74,7 @@ import partnerAuthRoutes from "./routes/partnerAuth.js";
 import fleetPortalRoutes from "./routes/fleetPortal.js";
 import insurancePortalRoutes from "./routes/insurancePortal.js";
 import adminPortalControlRoutes from "./routes/adminPortalControl.js";
+import systemRoutes from "./routes/system.js";
 
 // ✅ Verification Auditor (Phase 7)
 import { runVerificationAudit } from "./utils/verificationAuditor.js";
@@ -241,6 +242,11 @@ app.use("/api/pricing-config", pricingConfigRoutes);
  * ✅ SUPPORT
  */
 app.use("/api/support", supportRoutes);
+
+/**
+ * ✅ SYSTEM DIAGNOSTICS
+ */
+app.use("/api/system", systemRoutes);
 
 /**
  * ✅ ADMIN ROUTES (EXISTING)

@@ -316,7 +316,11 @@ const providerProfileSchema = new mongoose.Schema(
       faceMatching: {
         score: { type: Number, default: 0 }, // Overall weighted score
         similarityScore: { type: Number, default: 0 }, // Biometric similarity (0-100)
-        status: { type: String, enum: ["NOT_CHECKED", "MATCHED", "REVIEW_REQUIRED", "NO_MATCH"], default: "NOT_CHECKED" },
+        status: {
+          type: String,
+          enum: ["NOT_CHECKED", "MATCHED", "REVIEW_REQUIRED", "NO_MATCH", "VERTEX_AUTH_ERROR", "VERTEX_API_ERROR"],
+          default: "NOT_CHECKED"
+        },
         verifiedAt: { type: Date, default: null },
         provider: { type: String, default: "Google Vertex AI" },
         model: { type: String, default: "multimodalembedding@001" },
@@ -361,7 +365,8 @@ const providerProfileSchema = new mongoose.Schema(
     biometricTemplate: {
       vector: { type: [Number], default: null }, // 1408-dimensional vector
       generatedAt: { type: Date, default: null },
-      version: { type: String, default: "1.0" }
+      version: { type: String, default: "1.0" },
+      sourceImage: { type: String, default: null } // URL of the selfie used
     },
 
     // ✅ session enforcement (single device login)
@@ -372,7 +377,11 @@ const providerProfileSchema = new mongoose.Schema(
      * ✅ Phase 3: Daily Face Check-In (Daily Verification)
      */
     lastFaceCheck: {
-      status: { type: String, enum: ["NOT_CHECKED", "MATCHED", "REVIEW_REQUIRED", "NO_MATCH"], default: "NOT_CHECKED" },
+      status: {
+        type: String,
+        enum: ["NOT_CHECKED", "MATCHED", "REVIEW_REQUIRED", "NO_MATCH", "VERTEX_AUTH_ERROR", "VERTEX_API_ERROR", "TEMPLATE_MISSING"],
+        default: "NOT_CHECKED"
+      },
       score: { type: Number, default: 0 },
       verifiedAt: { type: Date, default: null },
       deviceId: { type: String, default: null },

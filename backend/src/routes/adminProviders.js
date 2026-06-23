@@ -1068,6 +1068,42 @@ router.patch(
 );
 
 /**
+ * ✅ Phase 3: Forensic Biometric Audit
+ * GET /api/admin/providers/providers/:id/biometric-audit
+ */
+router.get(
+    "/providers/:id/biometric-audit",
+    auth,
+    authorizeRoles(USER_ROLES.SUPER_ADMIN),
+    async (req, res) => {
+        try {
+            const provider = await User.findById(req.params.id);
+            if (!provider) return res.status(404).json({ message: "Provider not found" });
+
+            const template = provider.providerProfile?.biometricTemplate || {};
+            const selfie = provider.providerProfile?.verificationDocs?.selfie || {};
+
+            return res.status(200).json({
+                providerId: provider._id,
+                name: provider.name,
+                verificationStatus: provider.providerProfile?.verificationStatus,
+                biometricTemplate: {
+                    exists: !!template.vector,
+                    length: template.vector ? template.vector.length : 0,
+                    generatedAt: template.generatedAt,
+                    version: template.version,
+                    source: selfie.url || "N/A"
+                },
+                lastFaceCheck: provider.lastFaceCheck,
+                selfieUrl: selfie.url
+            });
+        } catch (err) {
+            return res.status(500).json({ message: "Audit failed", error: err.message });
+        }
+    }
+);
+
+/**
  * ✅ Admin views a provider's Financial Scorecard (Phase 5)
  * GET /api/admin/providers/providers/:id/financials
  */

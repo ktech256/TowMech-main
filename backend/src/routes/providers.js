@@ -620,7 +620,7 @@ router.post("/me/face-check", auth, upload.single("selfie"), async (req, res) =>
         details: { score: result.score }
       });
       return res.status(200).json({ message: "Manual Review Required ⚠️", result });
-    } else {
+    } else if (result.status === "IDENTITY_MISMATCH") {
       await logAuditEvent(req, {
         action: "FACE_CHECK_FAILED",
         entityType: "USER",
@@ -628,6 +628,19 @@ router.post("/me/face-check", auth, upload.single("selfie"), async (req, res) =>
         details: { score: result.score }
       });
       return res.status(403).json({ message: "Identity Mismatch ❌", result });
+    } else {
+      // System errors (Vertex AI down, Auth failure, Template missing)
+      console.warn(`[FACE_CHECK] System Error for ${user._id}: ${result.status} - ${result.error || result.message}`);
+
+      const userFriendlyMessage = result.status === "TEMPLATE_MISSING"
+        ? "Verification template missing. Please contact support."
+        : "Biometric verification temporarily unavailable ⚠️";
+
+      return res.status(503).json({
+        message: userFriendlyMessage,
+        result,
+        status: result.status
+      });
     }
   } catch (err) {
     console.error(`[FACE_CHECK] FATAL ERROR:`, err.message);

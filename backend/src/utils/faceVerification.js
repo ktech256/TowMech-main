@@ -1,6 +1,6 @@
 // backend/src/utils/faceVerification.js
 import vision from '@google-cloud/vision';
-import { PredictionServiceClient } from '@google-cloud/aiplatform';
+import { PredictionServiceClient, helpers } from '@google-cloud/aiplatform';
 import axios from 'axios';
 
 /**
@@ -14,10 +14,62 @@ import axios from 'axios';
  * 4. Apply threshold-based decision rules.
  */
 
-const visionClient = new vision.ImageAnnotatorClient();
-const vertexClient = new PredictionServiceClient({
-    apiEndpoint: 'us-central1-aiplatform.googleapis.com',
-});
+/**
+ * ✅ Fix: Initialize Vision client with explicit credentials from .env
+ */
+function getVisionClient() {
+    const projectId = process.env.GOOGLE_PROJECT_ID || process.env.FIREBASE_PROJECT_ID;
+    const clientEmail = process.env.GOOGLE_CLIENT_EMAIL || process.env.FIREBASE_CLIENT_EMAIL;
+    const privateKey = (process.env.GOOGLE_PRIVATE_KEY || process.env.FIREBASE_PRIVATE_KEY)?.replace(/\\n/g, '\n');
+
+    console.log(`[VISION] Init: projectId=${projectId}, hasEmail=${!!clientEmail}, hasKey=${!!privateKey}`);
+
+    if (clientEmail && privateKey) {
+        console.log("[VISION] Using explicit credentials from environment.");
+        return new vision.ImageAnnotatorClient({
+            credentials: {
+                client_email: clientEmail,
+                private_key: privateKey,
+            },
+            projectId,
+        });
+    }
+    console.warn("[VISION] No explicit credentials found. Falling back to ADC.");
+    return new vision.ImageAnnotatorClient();
+}
+
+const visionClient = getVisionClient();
+
+/**
+ * ✅ Fix: Initialize Vertex AI client with explicit credentials from .env
+ */
+function getVertexClient() {
+    const projectId = process.env.GOOGLE_PROJECT_ID || process.env.FIREBASE_PROJECT_ID;
+    const clientEmail = process.env.GOOGLE_CLIENT_EMAIL || process.env.FIREBASE_CLIENT_EMAIL;
+    const privateKey = (process.env.GOOGLE_PRIVATE_KEY || process.env.FIREBASE_PRIVATE_KEY)?.replace(/\\n/g, '\n');
+
+    console.log(`[VERTEX_AI] Init: projectId=${projectId}, hasEmail=${!!clientEmail}, hasKey=${!!privateKey}`);
+
+    if (clientEmail && privateKey) {
+        console.log("[VERTEX_AI] Using explicit credentials from environment.");
+        return new PredictionServiceClient({
+            apiEndpoint: 'us-central1-aiplatform.googleapis.com',
+            credentials: {
+                client_email: clientEmail,
+                private_key: privateKey,
+            },
+            projectId,
+        });
+    }
+
+    console.warn("[VERTEX_AI] No explicit credentials found. GOOGLE_APPLICATION_CREDENTIALS=" + process.env.GOOGLE_APPLICATION_CREDENTIALS);
+    console.warn("[VERTEX_AI] Falling back to Application Default Credentials (ADC).");
+    return new PredictionServiceClient({
+        apiEndpoint: 'us-central1-aiplatform.googleapis.com',
+    });
+}
+
+const vertexClient = getVertexClient();
 
 /**
  * Helper: Calculate Cosine Similarity between two vectors
@@ -47,13 +99,13 @@ export async function getImageEmbedding(imageUrl) {
     const response = await axios.get(imageUrl, { responseType: 'arraybuffer' });
     const base64Image = Buffer.from(response.data).toString('base64');
 
-    const instance = {
+    const instance = helpers.toValue({
         image: {
             bytesBase64Encoded: base64Image,
         },
-    };
+    });
     const instances = [instance];
-    const parameters = {};
+    const parameters = helpers.toValue({});
 
     const [predictionResponse] = await vertexClient.predict({
         endpoint,
@@ -81,7 +133,8 @@ export async function updateBiometricTemplate(user) {
         user.providerProfile.biometricTemplate = {
             vector: embedding,
             generatedAt: new Date(),
-            version: "1.0"
+            version: "1.0",
+            sourceImage: selfieUrl
         };
         user.markModified("providerProfile.biometricTemplate");
         return embedding;
@@ -176,11 +229,14 @@ export async function verifyFaces(user, idUrl, selfieUrl) {
         return faceMatchingData;
     } catch (err) {
         console.error(`[BIOMETRIC] ERROR:`, err.message);
+        const errorType = (err.message.includes("credentials") || err.message.includes("PERMISSION_DENIED"))
+            ? "VERTEX_AUTH_ERROR"
+            : "VERTEX_API_ERROR";
 
         // On error, do not match.
         const errorData = {
             score: 0,
-            status: "NOT_CHECKED",
+            status: errorType,
             verifiedAt: new Date(),
             provider: "Google Vertex AI (Error)",
             details: { error: err.message }
@@ -198,36 +254,47 @@ export async function verifyFaces(user, idUrl, selfieUrl) {
  */
 export async function performFaceCheck(user, liveSelfieUrl) {
     try {
+        console.log(`[FACECHECK_STARTED] User: ${user._id}`);
         let referenceEmbedding = user.providerProfile.biometricTemplate?.vector;
 
         // Fallback: If no template stored, generate from verified onboarding selfie URL
         if (!referenceEmbedding || !Array.isArray(referenceEmbedding)) {
             const selfieUrl = user.providerProfile.verificationDocs.selfie?.url;
+            console.log(`[FACE_CHECK] Biometric template missing. Template Source URL: ${selfieUrl}`);
             if (!selfieUrl) {
                 console.log(`[FACE_CHECK] Missing PRIMARY TEMPLATE or ONBOARDING SELFIE for user ${user._id}`);
-                return { status: "ERROR", message: "Verification template missing" };
+                return { status: "TEMPLATE_MISSING", message: "Verification template missing" };
             }
             console.log(`[FACE_CHECK] Legacy provider: Generating reference embedding from verified selfie URL...`);
             referenceEmbedding = await updateBiometricTemplate(user);
         }
 
-        if (!referenceEmbedding) {
-            return { status: "ERROR", message: "Reference template generation failed" };
+        if (referenceEmbedding) {
+            console.log(`[BIOMETRIC_TEMPLATE_FOUND] Length: ${referenceEmbedding.length}`);
+        } else {
+            console.log(`[FACE_CHECK] Reference template generation failed for user: ${user._id}`);
+            return { status: "VERTEX_AUTH_ERROR", message: "Reference template generation failed" };
         }
 
-        console.log(`[FACE_CHECK] Processing face check against verified selfie template for: ${user._id}`);
+        console.log(`[LIVE_FACE_CAPTURED] URL: ${liveSelfieUrl}`);
 
         // Generate embedding from live selfie
+        console.log(`[VERTEX_REQUEST_SENT] Generating live embedding...`);
         const liveEmbedding = await getImageEmbedding(liveSelfieUrl);
+        console.log(`[VERTEX_RESPONSE_RECEIVED] Live embedding length: ${liveEmbedding.length}`);
 
         // 2. Similarity
         const similarity = cosineSimilarity(referenceEmbedding, liveEmbedding);
         const similarityScore = Math.round(similarity * 100);
+        console.log(`[COSINE_SIMILARITY_RAW] ${similarity.toFixed(4)}`);
+        console.log(`[FINAL_SCORE] ${similarityScore}`);
 
         // 3. Status Rules
-        let status = "NO_MATCH";
+        let status = "IDENTITY_MISMATCH";
         if (similarityScore >= 95) status = "MATCHED";
         else if (similarityScore >= 80) status = "REVIEW_REQUIRED";
+
+        console.log(`[FINAL_STATUS] ${status}`);
 
         const result = {
             status,
@@ -240,7 +307,7 @@ export async function performFaceCheck(user, liveSelfieUrl) {
         user.lastFaceCheck = {
             ...result,
             isRequired: false,
-            failedAttempts: status === "NO_MATCH" ? (user.lastFaceCheck?.failedAttempts || 0) + 1 : 0
+            failedAttempts: status === "IDENTITY_MISMATCH" ? (user.lastFaceCheck?.failedAttempts || 0) + 1 : (user.lastFaceCheck?.failedAttempts || 0)
         };
 
         user.markModified("lastFaceCheck");
@@ -250,6 +317,9 @@ export async function performFaceCheck(user, liveSelfieUrl) {
         return result;
     } catch (err) {
         console.error(`[FACE_CHECK] ERROR:`, err.message);
-        return { status: "ERROR", score: 0, error: err.message };
+        const errorType = (err.message.includes("credentials") || err.message.includes("PERMISSION_DENIED"))
+            ? "VERTEX_AUTH_ERROR"
+            : "VERTEX_API_ERROR";
+        return { status: errorType, score: 0, error: err.message };
     }
 }
