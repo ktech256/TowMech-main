@@ -2,16 +2,15 @@
 import vision from '@google-cloud/vision';
 import { PredictionServiceClient, helpers } from '@google-cloud/aiplatform';
 import axios from 'axios';
+import sharp from 'sharp';
 
 /**
- * ✅ Phase 2B: TRUE Biometric Identity Verification (ID ↔ Selfie)
- * Upgraded from simple Face Detection to Biometric Embedding Comparison using Google Vertex AI.
+ * ✅ Phase 3: Field-Optimized Biometric Hardening
  *
- * Logic:
- * 1. Confirm face presence in both images (Cloud Vision).
- * 2. Generate facial embeddings for both images (Vertex AI Multimodal Embedding).
- * 3. Calculate Cosine Similarity between vectors.
- * 4. Apply threshold-based decision rules.
+ * Major Improvements:
+ * 1. Face Cropping: Isolated facial features from background/clothing.
+ * 2. Field-Ready Thresholds: Realistic margins for outdoor/low-light usage.
+ * 3. Granular Statuses: MATCHED_WITH_WARNING and REVIEW_REQUIRED.
  */
 
 /**
@@ -31,10 +30,7 @@ function getVisionClient() {
         privateKey = privateKey.replace(/\\n/g, '\n');
     }
 
-    console.log(`[VISION] Init: projectId=${projectId}, hasEmail=${!!clientEmail}, hasKey=${!!privateKey}`);
-
     if (clientEmail && privateKey) {
-        console.log("[VISION] Using explicit credentials from environment.");
         return new vision.ImageAnnotatorClient({
             credentials: {
                 client_email: clientEmail,
@@ -43,7 +39,6 @@ function getVisionClient() {
             projectId,
         });
     }
-    console.warn("[VISION] No explicit credentials found. Falling back to ADC.");
     return new vision.ImageAnnotatorClient();
 }
 
@@ -61,17 +56,12 @@ function getVertexClient() {
 
     if (privateKey) {
         privateKey = privateKey.trim();
-        // Remove surrounding quotes if they exist (common issue in Render env vars)
         if (privateKey.startsWith('"') && privateKey.endsWith('"')) privateKey = privateKey.slice(1, -1);
         if (privateKey.startsWith("'") && privateKey.endsWith("'")) privateKey = privateKey.slice(1, -1);
-        // Replace literal \n with actual newlines
         privateKey = privateKey.replace(/\\n/g, '\n');
     }
 
-    console.log(`[VERTEX_AI] Init: projectId=${projectId}, hasEmail=${!!clientEmail}, hasKey=${!!privateKey}`);
-
     if (clientEmail && privateKey) {
-        console.log("[VERTEX_AI] Using explicit credentials from environment.");
         return new PredictionServiceClient({
             apiEndpoint: 'us-central1-aiplatform.googleapis.com',
             credentials: {
@@ -82,8 +72,6 @@ function getVertexClient() {
         });
     }
 
-    console.warn("[VERTEX_AI] No explicit credentials found. GOOGLE_APPLICATION_CREDENTIALS=" + process.env.GOOGLE_APPLICATION_CREDENTIALS);
-    console.warn("[VERTEX_AI] Falling back to Application Default Credentials (ADC).");
     return new PredictionServiceClient({
         apiEndpoint: 'us-central1-aiplatform.googleapis.com',
     });
@@ -107,17 +95,86 @@ function cosineSimilarity(vecA, vecB) {
 }
 
 /**
- * Helper: Get Image Embedding from Vertex AI
+ * Helper: Detect and Crop Face from an image source (URL or Buffer)
  */
-export async function getImageEmbedding(imageUrl) {
+async function detectAndCropFace(source) {
+    try {
+        let inputBuffer;
+        if (Buffer.isBuffer(source)) {
+            inputBuffer = source;
+        } else {
+            const response = await axios.get(source, { responseType: 'arraybuffer' });
+            inputBuffer = Buffer.from(response.data);
+        }
+
+        // 1. Detect face using Cloud Vision
+        const [detection] = await visionClient.faceDetection(inputBuffer);
+        const faces = detection.faceAnnotations;
+
+        if (!faces || faces.length === 0) {
+            console.warn("[BIOMETRIC_HARDENING] FACE_NOT_DETECTED for cropping.");
+            return { buffer: inputBuffer, detected: false };
+        }
+
+        // 2. Calculate bounding box
+        const vertices = faces[0].boundingPoly.vertices;
+        const xCoords = vertices.map(v => v.x || 0);
+        const yCoords = vertices.map(v => v.y || 0);
+
+        const minX = Math.max(0, Math.min(...xCoords));
+        const minY = Math.max(0, Math.min(...yCoords));
+        const maxX = Math.max(0, Math.max(...xCoords));
+        const maxY = Math.max(0, Math.max(...yCoords));
+
+        let width = maxX - minX;
+        let height = maxY - minY;
+
+        // Add 25% safety padding around the face
+        const paddingX = Math.round(width * 0.25);
+        const paddingY = Math.round(height * 0.25);
+
+        const metadata = await sharp(inputBuffer).metadata();
+
+        const extractRegion = {
+            left: Math.max(0, minX - paddingX),
+            top: Math.max(0, minY - paddingY),
+            width: Math.min(width + (paddingX * 2), metadata.width - Math.max(0, minX - paddingX)),
+            height: Math.min(height + (paddingY * 2), metadata.height - Math.max(0, minY - paddingY))
+        };
+
+        // 3. Crop face region
+        const croppedBuffer = await sharp(inputBuffer)
+            .extract(extractRegion)
+            .toBuffer();
+
+        console.log(`[FACE_DETECTED] Face identified in source.`);
+        console.log(`[FACE_CROPPED] Region extracted for isolation.`);
+        console.log(`[CROPPED_IMAGE_DIMENSIONS] ${extractRegion.width}x${extractRegion.height}`);
+
+        return { buffer: croppedBuffer, detected: true, region: extractRegion };
+    } catch (err) {
+        console.error("[BIOMETRIC_HARDENING] Cropping failed:", err.message);
+        return { buffer: Buffer.isBuffer(source) ? source : null, detected: false };
+    }
+}
+
+/**
+ * Helper: Get Image Embedding from Vertex AI
+ * Accepts URL or Buffer.
+ */
+export async function getImageEmbedding(source) {
     const projectId = process.env.GOOGLE_PROJECT_ID || process.env.FIREBASE_PROJECT_ID;
     const location = 'us-central1';
     const model = 'multimodalembedding@001';
     const endpoint = `projects/${projectId}/locations/${location}/publishers/google/models/${model}`;
 
-    // Download image and convert to base64
-    const response = await axios.get(imageUrl, { responseType: 'arraybuffer' });
-    const base64Image = Buffer.from(response.data).toString('base64');
+    let base64Image;
+    if (Buffer.isBuffer(source)) {
+        base64Image = source.toString('base64');
+    } else {
+        const response = await axios.get(source, { responseType: 'arraybuffer' });
+        base64Image = Buffer.from(response.data).toString('base64');
+    }
 
     const instance = helpers.toValue({
         image: {
@@ -133,37 +190,14 @@ export async function getImageEmbedding(imageUrl) {
         parameters,
     });
 
-    // Extract image embedding from response
-    // Response structure varies by model version; multimodalembedding@001 returns imageEmbedding
     const embedding = predictionResponse.predictions[0].structValue.fields.imageEmbedding.listValue.values.map(v => v.numberValue);
+    console.log(`[EMBEDDING_GENERATED] Vector dimensions: ${embedding.length}`);
     return embedding;
 }
 
 /**
- * ✅ Phase 3: Update Biometric Template from Verified Selfie
+ * ✅ Phase 3: Updated Identity Verification with Cropping and Field Thresholds
  */
-export async function updateBiometricTemplate(user) {
-    try {
-        const selfieUrl = user.providerProfile.verificationDocs.selfie?.url;
-        if (!selfieUrl) return null;
-
-        console.log(`[BIOMETRIC] Generating primary template from verified selfie for: ${user._id}`);
-        const embedding = await getImageEmbedding(selfieUrl);
-
-        user.providerProfile.biometricTemplate = {
-            vector: embedding,
-            generatedAt: new Date(),
-            version: "1.0",
-            sourceImage: selfieUrl
-        };
-        user.markModified("providerProfile.biometricTemplate");
-        return embedding;
-    } catch (err) {
-        console.error(`[BIOMETRIC] Failed to update template:`, err.message);
-        return null;
-    }
-}
-
 export async function verifyFaces(user, idUrl, selfieUrl) {
     try {
         if (!idUrl || !selfieUrl) {
@@ -171,92 +205,82 @@ export async function verifyFaces(user, idUrl, selfieUrl) {
             return null;
         }
 
-        console.log(`[BIOMETRIC] Starting True Identity Verification for user: ${user._id}`);
+        console.log(`[BIOMETRIC] Starting HARDENED Identity Verification for user: ${user._id}`);
 
-        // 1. Verify face presence using Cloud Vision (Safety Check)
-        const [idDetect, selfieDetect] = await Promise.all([
-            visionClient.faceDetection(idUrl),
-            visionClient.faceDetection(selfieUrl)
+        // 1. Detect and Crop Faces (Isolating facial features)
+        const [idResult, selfieResult] = await Promise.all([
+            detectAndCropFace(idUrl),
+            detectAndCropFace(selfieUrl)
         ]);
 
-        const idFaces = idDetect[0].faceAnnotations || [];
-        const selfieFaces = selfieDetect[0].faceAnnotations || [];
-
-        if (idFaces.length === 0 || selfieFaces.length === 0) {
-            console.warn(`[BIOMETRIC] Face detection failed. ID faces: ${idFaces.length}, Selfie faces: ${selfieFaces.length}`);
+        if (!idResult.detected || !selfieResult.detected) {
+            console.warn(`[BIOMETRIC] Face isolation failed. ID detected: ${idResult.detected}, Selfie detected: ${selfieResult.detected}`);
             const failureData = {
                 score: 0,
                 similarityScore: 0,
-                status: "NO_MATCH",
+                status: "IDENTITY_MISMATCH",
                 verifiedAt: new Date(),
-                provider: "Google Cloud Vision + Vertex AI",
-                details: { error: "No face detected in one or both images." }
+                provider: "Google Vertex AI + Sharp Face Isolation",
+                details: { error: "Face could not be isolated in one or both images." }
             };
             user.providerProfile.verificationDocs.faceMatching = failureData;
             user.markModified("providerProfile.verificationDocs.faceMatching");
             return failureData;
         }
 
-        // 2. Generate Biometric Embeddings using Vertex AI
-        console.log(`[BIOMETRIC] Generating embeddings...`);
+        // 2. Generate Biometric Embeddings from CROPPED images
+        console.log(`[BIOMETRIC] Generating embeddings from cropped regions...`);
         const [idEmbedding, selfieEmbedding] = await Promise.all([
-            getImageEmbedding(idUrl),
-            getImageEmbedding(selfieUrl)
+            getImageEmbedding(idResult.buffer),
+            getImageEmbedding(selfieResult.buffer)
         ]);
 
         // 3. Calculate Similarity
         const similarity = cosineSimilarity(idEmbedding, selfieEmbedding);
         const similarityScore = Math.round(similarity * 100);
 
-        // 4. Weigh with detection confidence for final score
-        const detectionConfidence = (idFaces[0].detectionConfidence + selfieFaces[0].detectionConfidence) / 2;
-        const finalScore = Math.round((similarityScore * 0.8) + (detectionConfidence * 20));
+        // 4. Decision Thresholds (Phase 3 Optimized)
+        let status = "IDENTITY_MISMATCH";
+        if (similarityScore >= 90) status = "MATCHED";
+        else if (similarityScore >= 75) status = "MATCHED_WITH_WARNING";
+        else if (similarityScore >= 60) status = "REVIEW_REQUIRED";
 
-        // 5. Apply Business Rules
-        let status = "NO_MATCH";
-        if (similarityScore >= 95) status = "MATCHED";
-        else if (similarityScore >= 80) status = "REVIEW_REQUIRED";
-
-        // ✅ STORE THE SELFIE EMBEDDING AS THE PRIMARY TEMPLATE IMMEDIATELY ON MATCH
-        if (status === "MATCHED" || status === "REVIEW_REQUIRED") {
+        // ✅ Store Selfie as Primary Template on Match
+        if (status === "MATCHED" || status === "MATCHED_WITH_WARNING") {
             user.providerProfile.biometricTemplate = {
                 vector: selfieEmbedding,
                 generatedAt: new Date(),
-                version: "1.0"
+                version: "1.1", // Upgraded to cropped version
+                sourceImage: selfieUrl
             };
             user.markModified("providerProfile.biometricTemplate");
         }
 
         const faceMatchingData = {
-            score: Math.min(100, finalScore),
+            score: similarityScore,
             similarityScore: similarityScore,
             status,
             verifiedAt: new Date(),
-            provider: "Google Vertex AI",
+            provider: "Google Vertex AI + Sharp Face Isolation",
             model: "multimodalembedding@001",
             details: {
                 algorithm: "Cosine Similarity",
                 vectorSize: idEmbedding.length,
-                visionConfidence: detectionConfidence,
-                rawSimilarity: similarity
+                rawSimilarity: similarity,
+                croppingActive: true
             }
         };
 
         user.providerProfile.verificationDocs.faceMatching = faceMatchingData;
         user.markModified("providerProfile.verificationDocs.faceMatching");
 
-        console.log(`[BIOMETRIC] Result for ${user._id}: ${status} (Similarity: ${similarityScore}%)`);
+        console.log(`[BIOMETRIC] Hardened Result for ${user._id}: ${status} (Similarity: ${similarityScore}%)`);
         return faceMatchingData;
     } catch (err) {
         console.error(`[BIOMETRIC] ERROR:`, err.message);
-        const errorType = (err.message.includes("credentials") || err.message.includes("PERMISSION_DENIED"))
-            ? "VERTEX_AUTH_ERROR"
-            : "VERTEX_API_ERROR";
-
-        // On error, do not match.
         const errorData = {
             score: 0,
-            status: errorType,
+            status: "VERTEX_API_ERROR",
             verifiedAt: new Date(),
             provider: "Google Vertex AI (Error)",
             details: { error: err.message }
@@ -268,40 +292,36 @@ export async function verifyFaces(user, idUrl, selfieUrl) {
 }
 
 /**
- * ✅ Phase 3: Perform Daily Face Check-In
- * Compares live selfie against PRIMARY BIOMETRIC TEMPLATE (Verified Selfie).
- * If template missing (legacy), falls back to generating from verification selfie URL.
+ * ✅ Phase 3: Updated Face Check-In with Cropping and Field Thresholds
  */
 export async function performFaceCheck(user, liveSelfieUrl) {
     try {
         console.log(`[FACECHECK_STARTED] User: ${user._id}`);
+
         let referenceEmbedding = user.providerProfile.biometricTemplate?.vector;
 
-        // Fallback: If no template stored, generate from verified onboarding selfie URL
+        // Auto-Migration/Fallback: Use onboarding selfie if template missing
         if (!referenceEmbedding || !Array.isArray(referenceEmbedding)) {
             const selfieUrl = user.providerProfile.verificationDocs.selfie?.url;
-            console.log(`[FACE_CHECK] Biometric template missing. Template Source URL: ${selfieUrl}`);
-            if (!selfieUrl) {
-                console.log(`[FACE_CHECK] Missing PRIMARY TEMPLATE or ONBOARDING SELFIE for user ${user._id}`);
-                return { status: "TEMPLATE_MISSING", message: "Verification template missing" };
-            }
-            console.log(`[FACE_CHECK] Legacy provider: Generating reference embedding from verified selfie URL...`);
-            referenceEmbedding = await updateBiometricTemplate(user);
+            if (!selfieUrl) return { status: "TEMPLATE_MISSING", message: "Verification template missing" };
+
+            console.log(`[FACE_CHECK] Legacy provider: Generating reference embedding from verified selfie...`);
+            const cropResult = await detectAndCropFace(selfieUrl);
+            referenceEmbedding = await getImageEmbedding(cropResult.buffer);
+
+            // Save migrated template
+            user.providerProfile.biometricTemplate = {
+                vector: referenceEmbedding,
+                generatedAt: new Date(),
+                version: "1.1",
+                sourceImage: selfieUrl
+            };
+            user.markModified("providerProfile.biometricTemplate");
         }
 
-        if (referenceEmbedding) {
-            console.log(`[BIOMETRIC_TEMPLATE_FOUND] Length: ${referenceEmbedding.length}`);
-        } else {
-            console.log(`[FACE_CHECK] Reference template generation failed for user: ${user._id}`);
-            return { status: "VERTEX_AUTH_ERROR", message: "Reference template generation failed" };
-        }
-
-        console.log(`[LIVE_FACE_CAPTURED] URL: ${liveSelfieUrl}`);
-
-        // Generate embedding from live selfie
-        console.log(`[VERTEX_REQUEST_SENT] Generating live embedding...`);
-        const liveEmbedding = await getImageEmbedding(liveSelfieUrl);
-        console.log(`[VERTEX_RESPONSE_RECEIVED] Live embedding length: ${liveEmbedding.length}`);
+        // 1. Detect and Crop LIVE face
+        const liveResult = await detectAndCropFace(liveSelfieUrl);
+        const liveEmbedding = await getImageEmbedding(liveResult.buffer);
 
         // 2. Similarity
         const similarity = cosineSimilarity(referenceEmbedding, liveEmbedding);
@@ -309,10 +329,11 @@ export async function performFaceCheck(user, liveSelfieUrl) {
         console.log(`[COSINE_SIMILARITY_RAW] ${similarity.toFixed(4)}`);
         console.log(`[FINAL_SCORE] ${similarityScore}`);
 
-        // 3. Status Rules
+        // 3. Decision Thresholds (Phase 3 Optimized)
         let status = "IDENTITY_MISMATCH";
-        if (similarityScore >= 95) status = "MATCHED";
-        else if (similarityScore >= 80) status = "REVIEW_REQUIRED";
+        if (similarityScore >= 90) status = "MATCHED";
+        else if (similarityScore >= 75) status = "MATCHED_WITH_WARNING";
+        else if (similarityScore >= 60) status = "REVIEW_REQUIRED";
 
         console.log(`[FINAL_STATUS] ${status}`);
 
@@ -320,10 +341,11 @@ export async function performFaceCheck(user, liveSelfieUrl) {
             status,
             score: similarityScore,
             verifiedAt: new Date(),
-            deviceId: user.lastPlatform || "Android", // Simplified
+            deviceId: user.lastPlatform || "Android",
         };
 
         // 4. Update user record
+        // Only block and increment failures on IDENTITY_MISMATCH
         user.lastFaceCheck = {
             ...result,
             isRequired: false,
@@ -333,13 +355,35 @@ export async function performFaceCheck(user, liveSelfieUrl) {
         user.markModified("lastFaceCheck");
         await user.save();
 
-        console.log(`[FACE_CHECK] Result for ${user._id}: ${status} (${similarityScore}%)`);
         return result;
     } catch (err) {
         console.error(`[FACE_CHECK] ERROR:`, err.message);
-        const errorType = (err.message.includes("credentials") || err.message.includes("PERMISSION_DENIED"))
-            ? "VERTEX_AUTH_ERROR"
-            : "VERTEX_API_ERROR";
-        return { status: errorType, score: 0, error: err.message };
+        return { status: "VERTEX_API_ERROR", score: 0, error: err.message };
+    }
+}
+
+/**
+ * ✅ Phase 3: Update Biometric Template from Verified Selfie
+ */
+export async function updateBiometricTemplate(user) {
+    try {
+        const selfieUrl = user.providerProfile.verificationDocs.selfie?.url;
+        if (!selfieUrl) return null;
+
+        console.log(`[BIOMETRIC] Generating primary template from verified selfie for: ${user._id}`);
+        const cropResult = await detectAndCropFace(selfieUrl);
+        const embedding = await getImageEmbedding(cropResult.buffer);
+
+        user.providerProfile.biometricTemplate = {
+            vector: embedding,
+            generatedAt: new Date(),
+            version: "1.1",
+            sourceImage: selfieUrl
+        };
+        user.markModified("providerProfile.biometricTemplate");
+        return embedding;
+    } catch (err) {
+        console.error(`[BIOMETRIC] Failed to update template:`, err.message);
+        return null;
     }
 }

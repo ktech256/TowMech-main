@@ -858,6 +858,19 @@ router.patch(
       const result = await verifyFaces(provider, idUrl, selfieUrl);
       await provider.save();
 
+      // Log the result
+      let action = "FACE_CHECK_REVIEW";
+      if (result.status === "MATCHED") action = "FACE_CHECK_MATCHED";
+      else if (result.status === "MATCHED_WITH_WARNING") action = "FACE_CHECK_WARNING";
+      else if (result.status === "IDENTITY_MISMATCH") action = "FACE_CHECK_FAILED";
+
+      await logAuditEvent(req, {
+        action,
+        entityType: "USER",
+        entityId: provider._id,
+        details: { score: result.score, manualTrigger: true }
+      });
+
       return res.status(200).json({
         message: "Face matching intelligence updated ✅",
         faceMatching: result,

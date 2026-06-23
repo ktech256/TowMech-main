@@ -318,7 +318,7 @@ const providerProfileSchema = new mongoose.Schema(
         similarityScore: { type: Number, default: 0 }, // Biometric similarity (0-100)
         status: {
           type: String,
-          enum: ["NOT_CHECKED", "MATCHED", "REVIEW_REQUIRED", "NO_MATCH", "VERTEX_AUTH_ERROR", "VERTEX_API_ERROR"],
+          enum: ["NOT_CHECKED", "MATCHED", "MATCHED_WITH_WARNING", "REVIEW_REQUIRED", "IDENTITY_MISMATCH", "VERTEX_AUTH_ERROR", "VERTEX_API_ERROR"],
           default: "NOT_CHECKED"
         },
         verifiedAt: { type: Date, default: null },
@@ -379,7 +379,7 @@ const providerProfileSchema = new mongoose.Schema(
     lastFaceCheck: {
       status: {
         type: String,
-        enum: ["NOT_CHECKED", "MATCHED", "REVIEW_REQUIRED", "NO_MATCH", "VERTEX_AUTH_ERROR", "VERTEX_API_ERROR", "TEMPLATE_MISSING"],
+        enum: ["NOT_CHECKED", "MATCHED", "MATCHED_WITH_WARNING", "REVIEW_REQUIRED", "IDENTITY_MISMATCH", "VERTEX_AUTH_ERROR", "VERTEX_API_ERROR", "TEMPLATE_MISSING"],
         default: "NOT_CHECKED"
       },
       score: { type: Number, default: 0 },

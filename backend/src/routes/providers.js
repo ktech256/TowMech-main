@@ -606,12 +606,20 @@ router.post("/me/face-check", auth, upload.single("selfie"), async (req, res) =>
 
     if (result.status === "MATCHED") {
       await logAuditEvent(req, {
-        action: "FACE_CHECK_PASSED",
+        action: "FACE_CHECK_MATCHED",
         entityType: "USER",
         entityId: user._id,
         details: { score: result.score }
       });
       return res.status(200).json({ message: "Identity Verified ✅", result });
+    } else if (result.status === "MATCHED_WITH_WARNING") {
+      await logAuditEvent(req, {
+        action: "FACE_CHECK_WARNING",
+        entityType: "USER",
+        entityId: user._id,
+        details: { score: result.score }
+      });
+      return res.status(200).json({ message: "Identity Verified (Warning) ⚠️", result });
     } else if (result.status === "REVIEW_REQUIRED") {
       await logAuditEvent(req, {
         action: "FACE_CHECK_REVIEW",
