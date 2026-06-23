@@ -115,4 +115,66 @@ router.get("/vertex-health", async (req, res) => {
     return res.status(diagnostic.embeddingTest ? 200 : 500).json(diagnostic);
 });
 
+router.get("/vertex-auth-test", async (req, res) => {
+    const rawKey = process.env.GOOGLE_PRIVATE_KEY || process.env.FIREBASE_PRIVATE_KEY;
+    const projectId = process.env.GOOGLE_PROJECT_ID || process.env.FIREBASE_PROJECT_ID;
+    const clientEmail = process.env.GOOGLE_CLIENT_EMAIL || process.env.FIREBASE_CLIENT_EMAIL;
+
+    const diagnostic = {
+        hasProjectId: !!projectId,
+        hasClientEmail: !!clientEmail,
+        hasPrivateKey: !!rawKey,
+        beginMarkerPresent: false,
+        endMarkerPresent: false,
+        newlineConversionApplied: false,
+        wrappedInQuotes: false,
+        authClientCreated: false,
+        keyLength: rawKey ? rawKey.length : 0,
+        error: null
+    };
+
+    if (rawKey) {
+        diagnostic.wrappedInQuotes = rawKey.trim().startsWith('"') || rawKey.trim().startsWith("'");
+
+        let cleanedKey = rawKey.trim();
+        if (cleanedKey.startsWith('"') && cleanedKey.endsWith('"')) cleanedKey = cleanedKey.slice(1, -1);
+        if (cleanedKey.startsWith("'") && cleanedKey.endsWith("'")) cleanedKey = cleanedKey.slice(1, -1);
+
+        cleanedKey = cleanedKey.replace(/\\n/g, '\n');
+
+        diagnostic.beginMarkerPresent = cleanedKey.includes("-----BEGIN PRIVATE KEY-----");
+        diagnostic.endMarkerPresent = cleanedKey.includes("-----END PRIVATE KEY-----");
+        diagnostic.newlineConversionApplied = cleanedKey.includes('\n');
+
+        try {
+            const client = new PredictionServiceClient({
+                apiEndpoint: 'us-central1-aiplatform.googleapis.com',
+                credentials: {
+                    client_email: clientEmail,
+                    private_key: cleanedKey,
+                },
+                projectId: projectId,
+            });
+
+            // Trigger actual auth check
+            await client.getProjectId();
+
+            diagnostic.authClientCreated = true;
+            diagnostic.credentialObjectRedacted = {
+                projectId: projectId,
+                clientEmail: clientEmail,
+                privateKeyLength: cleanedKey.length
+            };
+
+        } catch (e) {
+            diagnostic.authClientCreated = false;
+            diagnostic.error = e.message;
+        }
+    } else {
+        diagnostic.error = "No private key found in environment variables.";
+    }
+
+    return res.status(diagnostic.authClientCreated ? 200 : 500).json(diagnostic);
+});
+
 export default router;

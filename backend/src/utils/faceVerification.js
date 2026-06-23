@@ -20,7 +20,16 @@ import axios from 'axios';
 function getVisionClient() {
     const projectId = process.env.GOOGLE_PROJECT_ID || process.env.FIREBASE_PROJECT_ID;
     const clientEmail = process.env.GOOGLE_CLIENT_EMAIL || process.env.FIREBASE_CLIENT_EMAIL;
-    const privateKey = (process.env.GOOGLE_PRIVATE_KEY || process.env.FIREBASE_PRIVATE_KEY)?.replace(/\\n/g, '\n');
+    const rawKey = process.env.GOOGLE_PRIVATE_KEY || process.env.FIREBASE_PRIVATE_KEY;
+
+    let privateKey = rawKey;
+
+    if (privateKey) {
+        privateKey = privateKey.trim();
+        if (privateKey.startsWith('"') && privateKey.endsWith('"')) privateKey = privateKey.slice(1, -1);
+        if (privateKey.startsWith("'") && privateKey.endsWith("'")) privateKey = privateKey.slice(1, -1);
+        privateKey = privateKey.replace(/\\n/g, '\n');
+    }
 
     console.log(`[VISION] Init: projectId=${projectId}, hasEmail=${!!clientEmail}, hasKey=${!!privateKey}`);
 
@@ -46,7 +55,18 @@ const visionClient = getVisionClient();
 function getVertexClient() {
     const projectId = process.env.GOOGLE_PROJECT_ID || process.env.FIREBASE_PROJECT_ID;
     const clientEmail = process.env.GOOGLE_CLIENT_EMAIL || process.env.FIREBASE_CLIENT_EMAIL;
-    const privateKey = (process.env.GOOGLE_PRIVATE_KEY || process.env.FIREBASE_PRIVATE_KEY)?.replace(/\\n/g, '\n');
+    const rawKey = process.env.GOOGLE_PRIVATE_KEY || process.env.FIREBASE_PRIVATE_KEY;
+
+    let privateKey = rawKey;
+
+    if (privateKey) {
+        privateKey = privateKey.trim();
+        // Remove surrounding quotes if they exist (common issue in Render env vars)
+        if (privateKey.startsWith('"') && privateKey.endsWith('"')) privateKey = privateKey.slice(1, -1);
+        if (privateKey.startsWith("'") && privateKey.endsWith("'")) privateKey = privateKey.slice(1, -1);
+        // Replace literal \n with actual newlines
+        privateKey = privateKey.replace(/\\n/g, '\n');
+    }
 
     console.log(`[VERTEX_AI] Init: projectId=${projectId}, hasEmail=${!!clientEmail}, hasKey=${!!privateKey}`);
 
