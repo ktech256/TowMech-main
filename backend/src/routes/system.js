@@ -121,60 +121,81 @@ router.get("/vertex-auth-test", async (req, res) => {
     const clientEmail = process.env.GOOGLE_CLIENT_EMAIL || process.env.FIREBASE_CLIENT_EMAIL;
 
     const diagnostic = {
+        projectId: projectId || "MISSING",
         hasProjectId: !!projectId,
         hasClientEmail: !!clientEmail,
         hasPrivateKey: !!rawKey,
-        beginMarkerPresent: false,
-        endMarkerPresent: false,
-        newlineConversionApplied: false,
-        wrappedInQuotes: false,
-        authClientCreated: false,
         keyLength: rawKey ? rawKey.length : 0,
-        error: null
+        beginMarkerPresent: rawKey ? rawKey.includes("-----BEGIN PRIVATE KEY-----") : false,
+        endMarkerPresent: rawKey ? rawKey.includes("-----END PRIVATE KEY-----") : false,
+        containsLiteralNewline: rawKey ? rawKey.includes('\\n') : false,
+        containsActualLineBreak: rawKey ? rawKey.includes('\n') : false,
+        first30Chars: rawKey ? rawKey.substring(0, 30) : "N/A",
+        last30Chars: rawKey ? rawKey.substring(rawKey.length - 30) : "N/A",
+        authClientCreated: false,
+        projectLookupSuccess: false,
+        error: null,
+        stack: null
     };
 
-    if (rawKey) {
-        diagnostic.wrappedInQuotes = rawKey.trim().startsWith('"') || rawKey.trim().startsWith("'");
+    if (!rawKey) {
+        diagnostic.error = "No private key found in environment variables (GOOGLE_PRIVATE_KEY or FIREBASE_PRIVATE_KEY).";
+        return res.status(500).json(diagnostic);
+    }
 
+    try {
+        // Step 1: Normalize key (same logic as in faceVerification.js)
         let cleanedKey = rawKey.trim();
         if (cleanedKey.startsWith('"') && cleanedKey.endsWith('"')) cleanedKey = cleanedKey.slice(1, -1);
         if (cleanedKey.startsWith("'") && cleanedKey.endsWith("'")) cleanedKey = cleanedKey.slice(1, -1);
-
         cleanedKey = cleanedKey.replace(/\\n/g, '\n');
 
-        diagnostic.beginMarkerPresent = cleanedKey.includes("-----BEGIN PRIVATE KEY-----");
-        diagnostic.endMarkerPresent = cleanedKey.includes("-----END PRIVATE KEY-----");
-        diagnostic.newlineConversionApplied = cleanedKey.includes('\n');
+        diagnostic.processedKeyLength = cleanedKey.length;
+        diagnostic.processedBeginMarkerPresent = cleanedKey.includes("-----BEGIN PRIVATE KEY-----");
+        diagnostic.processedEndMarkerPresent = cleanedKey.includes("-----END PRIVATE KEY-----");
+        diagnostic.processedActualLineBreakPresent = cleanedKey.includes('\n');
 
+        // Step 2: Attempt Client Creation
+        const client = new PredictionServiceClient({
+            apiEndpoint: 'us-central1-aiplatform.googleapis.com',
+            credentials: {
+                client_email: clientEmail,
+                private_key: cleanedKey,
+            },
+            projectId: projectId,
+        });
+        diagnostic.authClientCreated = true;
+
+        // Step 3: Attempt Project Lookup (Auth Verification)
         try {
-            const client = new PredictionServiceClient({
-                apiEndpoint: 'us-central1-aiplatform.googleapis.com',
-                credentials: {
-                    client_email: clientEmail,
-                    private_key: cleanedKey,
-                },
-                projectId: projectId,
-            });
-
-            // Trigger actual auth check
-            await client.getProjectId();
-
-            diagnostic.authClientCreated = true;
-            diagnostic.credentialObjectRedacted = {
-                projectId: projectId,
-                clientEmail: clientEmail,
-                privateKeyLength: cleanedKey.length
-            };
-
+            const resolvedProjectId = await client.getProjectId();
+            diagnostic.projectLookupSuccess = true;
+            diagnostic.resolvedProjectId = resolvedProjectId;
         } catch (e) {
-            diagnostic.authClientCreated = false;
-            diagnostic.error = e.message;
+            diagnostic.projectLookupSuccess = false;
+            diagnostic.error = "getProjectId failed: " + e.message;
+            diagnostic.stack = e.stack;
         }
-    } else {
-        diagnostic.error = "No private key found in environment variables.";
+
+        // Step 4: Attempt Auth Client (Internal check)
+        try {
+            await client.auth.getClient();
+            diagnostic.authGetClientSuccess = true;
+        } catch (e) {
+            diagnostic.authGetClientSuccess = false;
+            if (!diagnostic.error) {
+                diagnostic.error = "auth.getClient failed: " + e.message;
+                diagnostic.stack = e.stack;
+            }
+        }
+
+    } catch (err) {
+        diagnostic.authClientCreated = false;
+        diagnostic.error = err.message;
+        diagnostic.stack = err.stack;
     }
 
-    return res.status(diagnostic.authClientCreated ? 200 : 500).json(diagnostic);
+    return res.status(diagnostic.projectLookupSuccess ? 200 : 500).json(diagnostic);
 });
 
 export default router;
